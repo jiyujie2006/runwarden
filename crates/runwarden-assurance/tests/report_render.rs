@@ -19,7 +19,7 @@ fn report_render_outputs_markdown_json_html_and_sarif_for_cited_claims() {
     let trace_events = vec![trace("obs_1")];
     let report = ReportDraft::new(vec![ReportClaim::new(
         "finding-1",
-        "Shell access was denied",
+        "Evidence inspection completed",
         ["obs_1"],
     )]);
 
@@ -30,7 +30,7 @@ fn report_render_outputs_markdown_json_html_and_sarif_for_cited_claims() {
     let sarif = render_report(&report, &trace_events, RenderFormat::Sarif).expect("sarif render");
 
     assert_eq!(markdown.extension, "md");
-    assert!(markdown.contents.contains("Shell access was denied"));
+    assert!(markdown.contents.contains("Evidence inspection completed"));
     assert!(markdown.contents.contains("obs_1"));
     assert_eq!(json.extension, "json");
     assert!(json.contents.contains("\"finding-1\""));

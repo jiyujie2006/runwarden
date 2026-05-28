@@ -769,6 +769,7 @@ fn run() -> anyhow::Result<()> {
                     }),
                 });
                 if let Some(call) = provider_call.as_mut() {
+                    bind_cli_file_digests(call)?;
                     attach_matching_approval(call)?;
                     let mut enforcer = KernelEnforcer::new(
                         full_provider_registry(),
@@ -812,6 +813,9 @@ fn run() -> anyhow::Result<()> {
                             &enforcer.approval_binding_for_call(call),
                         )?;
                     }
+                }
+                if let Some(call) = provider_call.as_ref() {
+                    verify_cli_file_digests(call)?;
                 }
                 let execution_root = resolve_cli_execution_root(session_manifest.as_ref(), root);
                 let result = if provider.starts_with("external.") {
@@ -1361,6 +1365,82 @@ fn provider_call_from_cli(input: CliProviderCallInput<'_>) -> ProviderCall {
     }
 }
 
+fn bind_cli_file_digests(call: &mut ProviderCall) -> anyhow::Result<()> {
+    let Some(arguments) = call.arguments.as_object_mut() else {
+        return Ok(());
+    };
+    for field in ["input_path", "trace_path", "report_path"] {
+        let Some(path) = arguments.get(field).and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let digest = digest_file(Path::new(path))?;
+        arguments.insert(format!("{field}_sha256"), serde_json::Value::String(digest));
+    }
+    if call.provider.starts_with("external.mcp.")
+        && let Some(input_path) = arguments
+            .get("input_path")
+            .and_then(serde_json::Value::as_str)
+    {
+        let request_body = fs::read_to_string(input_path)?;
+        let request: ExternalMcpAdapterRequest = serde_json::from_str(&request_body)?;
+        if let Some(manifest_path) = request.manifest_path {
+            let digest = digest_file(&manifest_path)?;
+            arguments.insert(
+                "manifest_path_sha256".to_string(),
+                serde_json::Value::String(digest),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn verify_cli_file_digests(call: &ProviderCall) -> anyhow::Result<()> {
+    let Some(arguments) = call.arguments.as_object() else {
+        return Ok(());
+    };
+    for field in ["input_path", "trace_path", "report_path"] {
+        let Some(path) = arguments.get(field).and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let digest_key = format!("{field}_sha256");
+        let Some(expected) = arguments
+            .get(&digest_key)
+            .and_then(serde_json::Value::as_str)
+        else {
+            continue;
+        };
+        let actual = digest_file(Path::new(path))?;
+        if actual != expected {
+            anyhow::bail!("{field} changed after approval binding");
+        }
+    }
+    if call.provider.starts_with("external.mcp.")
+        && let Some(expected) = arguments
+            .get("manifest_path_sha256")
+            .and_then(serde_json::Value::as_str)
+    {
+        let input_path = arguments
+            .get("input_path")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("external MCP input path is required"))?;
+        let request_body = fs::read_to_string(input_path)?;
+        let request: ExternalMcpAdapterRequest = serde_json::from_str(&request_body)?;
+        let manifest_path = request
+            .manifest_path
+            .ok_or_else(|| anyhow::anyhow!("external MCP manifest path is required"))?;
+        let actual = digest_file(&manifest_path)?;
+        if actual != expected {
+            anyhow::bail!("external MCP manifest changed after approval binding");
+        }
+    }
+    Ok(())
+}
+
+fn digest_file(path: &Path) -> anyhow::Result<String> {
+    let bytes = fs::read(path)?;
+    Ok(hex_sha256(&bytes))
+}
+
 fn default_cli_provider_policy(
     provider: &str,
     input: Option<&PathBuf>,
@@ -1715,13 +1795,17 @@ fn evaluate_scenario_corpora(root: &Path) -> anyhow::Result<serde_json::Value> {
         let case = if missing.is_empty() {
             let obs_refs = read_obs_refs(&scenario_path.join("expected/obs-refs.json"))?;
             let report = read_report(&scenario_path.join("expected/report.json"))?;
+            let denials = read_json_array(&scenario_path.join("expected/denials.json"))?;
             let mut store = InMemoryTraceStore::default();
             for obs_ref in &obs_refs {
                 store.append_signed(
                     obs_ref.clone(),
                     "scenario_golden".to_string(),
                     Some("runwarden.eval.scenarios".to_string()),
-                    json!({ "scenario": scenario }),
+                    json!({
+                        "scenario": scenario,
+                        "decision": if denials.is_empty() { "completed" } else { "denied" }
+                    }),
                 );
             }
             let trace_events = store.query(TraceQuery {
@@ -1751,7 +1835,6 @@ fn evaluate_scenario_corpora(root: &Path) -> anyhow::Result<serde_json::Value> {
                         .and_then(serde_json::Value::as_f64)
                         .unwrap_or(1.0);
 
-            let denials = read_json_array(&scenario_path.join("expected/denials.json"))?;
             let provider_calls =
                 read_json_array(&scenario_path.join("expected/provider-calls.json"))?;
             let artifact_failures = scenario_expected_artifact_failures(&denials, &provider_calls);
@@ -2157,6 +2240,7 @@ fn write_ui_launch_bundle(
 }
 
 fn reviewer_console_html(bind: &str, port: u16) -> String {
+    let escaped_bind = escape_html_text(bind);
     r##"<!doctype html>
 <html lang="en">
 <head>
@@ -2244,8 +2328,23 @@ fn reviewer_console_html(bind: &str, port: u16) -> String {
 </body>
 </html>
 "##
-    .replace("__BIND__", bind)
+    .replace("__BIND__", &escaped_bind)
     .replace("__PORT__", &port.to_string())
+}
+
+fn escape_html_text(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&#39;"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
 }
 
 fn resolve_launch_token(configured: Option<String>) -> (String, bool) {

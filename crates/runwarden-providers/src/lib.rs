@@ -779,6 +779,7 @@ pub mod evidence {
         ExtensionDenied,
         SymlinkEscape,
         RootEscape,
+        NonRegularFile,
         ReadFailed,
     }
 
@@ -848,6 +849,15 @@ pub mod evidence {
                 EvidenceViolationKind::SymlinkEscape,
                 relative_path,
                 "symlinked evidence files are rejected before reading",
+            ));
+            return;
+        }
+
+        if !metadata.file_type().is_file() {
+            result.violations.push(violation(
+                EvidenceViolationKind::NonRegularFile,
+                relative_path,
+                "non-regular evidence files are rejected before reading",
             ));
             return;
         }
@@ -950,7 +960,9 @@ pub mod evidence {
 pub mod external {
     use std::collections::BTreeMap;
     use std::io::{Read, Write};
-    use std::net::{TcpStream, ToSocketAddrs};
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, ToSocketAddrs};
+    #[cfg(unix)]
+    use std::os::unix::process::CommandExt;
     use std::path::{Path, PathBuf};
     use std::process::{Command, ExitStatus, Stdio};
     use std::sync::{
@@ -1097,6 +1109,14 @@ pub mod external {
                 "stdio MCP adapter command is not allowlisted by the provider manifest",
             );
         }
+        if command_is_shell_capable(command) || request.args.iter().any(|arg| arg == "-c") {
+            return adapter_denial(
+                &manifest.provider_id,
+                transport,
+                "provider_not_allowed",
+                "stdio MCP adapter command cannot be a shell-capable interpreter",
+            );
+        }
         if stdio_requires_unsupported_egress_controls(manifest) {
             return adapter_denial(
                 &manifest.provider_id,
@@ -1111,10 +1131,17 @@ pub mod external {
             .clone()
             .or_else(|| manifest.working_root.as_ref().map(PathBuf::from))
             .unwrap_or_else(|| PathBuf::from("."));
-        let root = runtime_root
+        let Some(root) = runtime_root
             .map(Path::to_path_buf)
             .or_else(|| manifest.working_root.as_ref().map(PathBuf::from))
-            .unwrap_or_else(|| cwd.clone());
+        else {
+            return adapter_denial(
+                &manifest.provider_id,
+                transport,
+                "root_escape",
+                "stdio MCP adapter execution requires a trusted runtime root",
+            );
+        };
         let policy = ProviderRuntimePolicy::locked_to_root(root);
         let mut runtime_request = ProviderRuntimeRequest::new(command).cwd(cwd);
         for arg in &request.args {
@@ -1147,16 +1174,17 @@ pub mod external {
 
         let body = jsonrpc_request(manifest, request);
         let frame = content_length_frame(&body);
-        let mut child = match Command::new(&prepared.executable)
+        let mut command = Command::new(&prepared.executable);
+        command
             .args(&prepared.args)
             .current_dir(&prepared.cwd)
             .env_clear()
             .envs(&prepared.env)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-        {
+            .stderr(Stdio::piped());
+        configure_process_group(&mut command);
+        let mut child = match command.spawn() {
             Ok(child) => child,
             Err(err) => {
                 return adapter_failure(
@@ -1196,6 +1224,7 @@ pub mod external {
             prepared.timeout_ms,
             prepared.stdout_limit_bytes,
             prepared.stderr_limit_bytes,
+            prepared.kill_process_tree_on_timeout,
         ) {
             Ok(output) => json!({
                 "provider": manifest.provider_id,
@@ -1278,6 +1307,14 @@ pub mod external {
         ) {
             Ok(response) => response,
             Err(reason) => {
+                if reason.starts_with("MCP adapter URL resolved") {
+                    return adapter_denial(
+                        &manifest.provider_id,
+                        transport,
+                        "egress_denied",
+                        reason,
+                    );
+                }
                 return adapter_failure(&manifest.provider_id, transport, reason, true);
             }
         };
@@ -1336,6 +1373,14 @@ pub mod external {
         ) {
             Ok(response) => response,
             Err(reason) => {
+                if reason.starts_with("MCP adapter URL resolved") {
+                    return adapter_denial(
+                        &manifest.provider_id,
+                        transport,
+                        "egress_denied",
+                        reason,
+                    );
+                }
                 return adapter_failure(&manifest.provider_id, transport, reason, true);
             }
         };
@@ -1457,6 +1502,27 @@ pub mod external {
         allowlist.iter().any(|allowed| allowed == command)
     }
 
+    fn command_is_shell_capable(command: &str) -> bool {
+        let name = Path::new(command)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(command)
+            .to_ascii_lowercase();
+        matches!(
+            name.as_str(),
+            "sh" | "bash"
+                | "dash"
+                | "zsh"
+                | "fish"
+                | "cmd"
+                | "cmd.exe"
+                | "powershell"
+                | "powershell.exe"
+                | "pwsh"
+                | "pwsh.exe"
+        )
+    }
+
     fn jsonrpc_request(manifest: &ProviderManifest, request: &ExternalMcpAdapterRequest) -> Value {
         if !request.request.is_null() {
             return request.request.clone();
@@ -1490,6 +1556,7 @@ pub mod external {
         timeout_ms: u64,
         stdout_limit: usize,
         stderr_limit: usize,
+        kill_process_tree: bool,
     ) -> Result<StdioOutput, String> {
         let stdout = child
             .stdout
@@ -1505,7 +1572,7 @@ pub mod external {
         let deadline = Instant::now() + Duration::from_millis(timeout_ms);
         let status = loop {
             if output_exceeded.load(Ordering::SeqCst) {
-                let _ = child.kill();
+                terminate_child(child, kill_process_tree);
                 let _ = child.wait();
                 return Err("stdio MCP adapter exceeded output limit".to_string());
             }
@@ -1516,7 +1583,7 @@ pub mod external {
                 break status;
             }
             if Instant::now() >= deadline {
-                let _ = child.kill();
+                terminate_child(child, kill_process_tree);
                 let _ = child.wait();
                 return Err("stdio MCP adapter timed out".to_string());
             }
@@ -1537,6 +1604,32 @@ pub mod external {
             stdout,
             stderr,
         })
+    }
+
+    fn configure_process_group(command: &mut Command) {
+        #[cfg(unix)]
+        {
+            command.process_group(0);
+        }
+    }
+
+    fn terminate_child(child: &mut std::process::Child, kill_process_tree: bool) {
+        #[cfg(unix)]
+        if kill_process_tree {
+            let pid = child.id() as i32;
+            unsafe {
+                let _ = kill(-pid, SIGKILL);
+            }
+        }
+        let _ = child.kill();
+    }
+
+    #[cfg(unix)]
+    const SIGKILL: i32 = 9;
+
+    #[cfg(unix)]
+    unsafe extern "C" {
+        fn kill(pid: i32, sig: i32) -> i32;
     }
 
     fn read_limited_pipe<R: Read + Send + 'static>(
@@ -1613,6 +1706,7 @@ pub mod external {
 
     struct ParsedHttpUrl {
         origin: String,
+        host: String,
         host_header: String,
         socket_addr: String,
         path_and_query: String,
@@ -1647,6 +1741,7 @@ pub mod external {
         };
         Ok(ParsedHttpUrl {
             origin: format!("http://{host_header}"),
+            host: host.clone(),
             socket_addr: format!("{host}:{port}"),
             host_header,
             path_and_query: safe_http_path_and_query(path_and_query)?,
@@ -1754,6 +1849,10 @@ pub mod external {
             .socket_addr
             .to_socket_addrs()
             .map_err(|err| format!("failed to resolve MCP adapter URL: {err}"))?
+            .collect::<Vec<_>>();
+        reject_private_resolved_addrs(&parsed.host, &socket_addr)?;
+        let socket_addr = socket_addr
+            .into_iter()
             .next()
             .ok_or_else(|| "failed to resolve MCP adapter URL".to_string())?;
         let mut stream = TcpStream::connect_timeout(&socket_addr, timeout)
@@ -1783,6 +1882,44 @@ pub mod external {
             response.extend_from_slice(&buffer[..read]);
         }
         parse_http_response(&response)
+    }
+
+    fn reject_private_resolved_addrs(host: &str, addrs: &[SocketAddr]) -> Result<(), String> {
+        if host.parse::<IpAddr>().is_ok() {
+            return Ok(());
+        }
+        if addrs.iter().any(|addr| is_private_or_local_ip(addr.ip())) {
+            return Err("MCP adapter URL resolved to a private or local address".to_string());
+        }
+        Ok(())
+    }
+
+    fn is_private_or_local_ip(ip: IpAddr) -> bool {
+        match ip {
+            IpAddr::V4(addr) => is_private_or_local_ipv4(addr),
+            IpAddr::V6(addr) => {
+                if let Some(mapped) = addr.to_ipv4_mapped() {
+                    return is_private_or_local_ipv4(mapped);
+                }
+                addr.is_loopback()
+                    || addr.is_unspecified()
+                    || addr.is_unique_local()
+                    || addr.is_unicast_link_local()
+            }
+        }
+    }
+
+    fn is_private_or_local_ipv4(addr: Ipv4Addr) -> bool {
+        addr.is_private()
+            || addr.is_loopback()
+            || addr.is_link_local()
+            || addr.is_unspecified()
+            || is_carrier_grade_nat(addr)
+    }
+
+    fn is_carrier_grade_nat(addr: Ipv4Addr) -> bool {
+        let octets = addr.octets();
+        octets[0] == 100 && (64..=127).contains(&octets[1])
     }
 
     fn parse_http_response(response: &[u8]) -> Result<HttpResponse, String> {

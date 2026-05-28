@@ -85,7 +85,13 @@ pub struct KernelPolicy {
     pub require_active_assessment: bool,
     pub active_assessment: bool,
     pub require_authz: bool,
-    authz: BTreeMap<String, AuthzState>,
+    authz: BTreeMap<String, AuthzGrant>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AuthzGrant {
+    state: AuthzState,
+    actor_id: Option<String>,
 }
 
 impl Default for KernelPolicy {
@@ -123,7 +129,23 @@ impl KernelPolicy {
     }
 
     pub fn add_authz(&mut self, authz_id: impl Into<String>, state: AuthzState) {
-        self.authz.insert(authz_id.into(), state);
+        self.authz.insert(
+            authz_id.into(),
+            AuthzGrant {
+                state,
+                actor_id: None,
+            },
+        );
+    }
+
+    pub fn add_authz_for_actor(
+        &mut self,
+        authz_id: impl Into<String>,
+        state: AuthzState,
+        actor_id: Option<String>,
+    ) {
+        self.authz
+            .insert(authz_id.into(), AuthzGrant { state, actor_id });
     }
 
     fn provider_allowed(&self, provider_id: &str) -> bool {
@@ -340,7 +362,20 @@ impl KernelEnforcer {
         };
 
         match self.policy.authz.get(authz_id) {
-            Some(AuthzState::Active) => None,
+            Some(AuthzGrant {
+                state: AuthzState::Active,
+                actor_id,
+            }) => {
+                if actor_id.is_some() && call.actor_id.as_ref() != actor_id.as_ref() {
+                    return Some(deny(
+                        call,
+                        "authz",
+                        ErrorKind::AuthzInvalid,
+                        "authz id is not bound to this actor",
+                    ));
+                }
+                None
+            }
             Some(_) | None => Some(deny(
                 call,
                 "authz",

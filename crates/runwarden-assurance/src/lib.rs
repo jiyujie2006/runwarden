@@ -186,7 +186,8 @@ pub mod artifact {
 
         match fs::read(&artifact_path) {
             Ok(bytes) => {
-                if entry.sha256.as_deref() != Some(hex_sha256(&bytes).as_str()) {
+                let artifact_sha = hex_sha256(&bytes);
+                if entry.sha256.as_deref() != Some(artifact_sha.as_str()) {
                     findings.push(artifact_error(
                         ArtifactErrorKind::ArtifactHashMismatch,
                         entry.relative_path.clone(),
@@ -194,6 +195,7 @@ pub mod artifact {
                         false,
                     ));
                 }
+                verify_redaction_sidecar(artifact_root, entry, artifact_sha.as_str(), findings);
             }
             Err(err) => findings.push(artifact_error(
                 ArtifactErrorKind::ReadFailed,
@@ -202,7 +204,14 @@ pub mod artifact {
                 false,
             )),
         }
+    }
 
+    fn verify_redaction_sidecar(
+        artifact_root: &Path,
+        entry: &ArtifactManifestEntry,
+        artifact_sha: &str,
+        findings: &mut Vec<ArtifactError>,
+    ) {
         let Some(sidecar_relative_path) = &entry.redaction_sidecar_path else {
             findings.push(artifact_error(
                 ArtifactErrorKind::RedactionSidecarMissing,
@@ -237,6 +246,23 @@ pub mod artifact {
                         "redaction sidecar sha256 does not match manifest",
                         false,
                     ));
+                }
+                match serde_json::from_slice::<RedactionSidecar>(&bytes) {
+                    Ok(sidecar)
+                        if sidecar.artifact_id == entry.artifact_id
+                            && sidecar.redacted_sha256 == artifact_sha => {}
+                    Ok(_) => findings.push(artifact_error(
+                        ArtifactErrorKind::RedactionSidecarMismatch,
+                        sidecar_relative_path.clone(),
+                        "redaction sidecar does not match artifact metadata",
+                        false,
+                    )),
+                    Err(err) => findings.push(artifact_error(
+                        ArtifactErrorKind::RedactionSidecarMismatch,
+                        sidecar_relative_path.clone(),
+                        format!("redaction sidecar JSON is invalid: {err}"),
+                        false,
+                    )),
                 }
             }
             Err(err) => findings.push(artifact_error(
@@ -425,6 +451,7 @@ pub mod report {
     pub enum ReportLintErrorKind {
         UncitedClaim,
         UnknownObservation,
+        UnsupportedObservation,
         TraceTampered,
     }
 
@@ -475,6 +502,10 @@ pub mod report {
             .iter()
             .map(|event| event.obs_id.clone())
             .collect();
+        let trace_by_obs: std::collections::BTreeMap<_, _> = trace_events
+            .iter()
+            .map(|event| (event.obs_id.as_str(), event))
+            .collect();
 
         for claim in &report.claims {
             if claim.obs_refs.is_empty() {
@@ -495,6 +526,17 @@ pub mod report {
                         obs_ref: Some(obs_ref.clone()),
                         message: "report claim cites an unknown obs_* reference".to_string(),
                     });
+                    continue;
+                }
+                if let Some(event) = trace_by_obs.get(obs_ref.as_str())
+                    && !observation_supports_claim(claim, event)
+                {
+                    errors.push(ReportLintError {
+                        kind: ReportLintErrorKind::UnsupportedObservation,
+                        claim_id: claim.id.clone(),
+                        obs_ref: Some(obs_ref.clone()),
+                        message: "report claim cites an observation that does not support the claim semantics".to_string(),
+                    });
                 }
             }
         }
@@ -503,6 +545,29 @@ pub mod report {
             ok: errors.is_empty(),
             errors,
         }
+    }
+
+    fn observation_supports_claim(claim: &ReportClaim, event: &TraceEvent) -> bool {
+        let text = claim.text.to_ascii_lowercase();
+        if text.contains("denied") || text.contains("blocked") || text.contains("rejected") {
+            return event.event_type.contains("denied")
+                || event.event_type.contains("blocked")
+                || event.event_type.contains("rejected")
+                || event
+                    .payload
+                    .get("decision")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|decision| matches!(decision, "denied" | "blocked" | "rejected"));
+        }
+        if text.contains("completed") {
+            return event.event_type.contains("completed")
+                || event
+                    .payload
+                    .get("decision")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|decision| matches!(decision, "allowed" | "completed"));
+        }
+        true
     }
 
     fn verify_trace_hash_chain(
@@ -1128,6 +1193,21 @@ pub mod cert {
                 findings.push(format!(
                     "raw or downstream MCP server exposed: {name} ({command})"
                 ));
+                continue;
+            }
+            let has_args = server
+                .get("args")
+                .and_then(Value::as_array)
+                .is_some_and(|args| !args.is_empty());
+            let has_env = server
+                .get("env")
+                .and_then(Value::as_object)
+                .is_some_and(|env| !env.is_empty());
+            if has_args || has_env || server.get("cwd").is_some() || server.get("url").is_some() {
+                findings.push(
+                    "runwarden MCP server must not define args or env/cwd/url overrides"
+                        .to_string(),
+                );
             }
         }
 
@@ -1177,14 +1257,14 @@ pub mod cert {
     fn release_artifact_check(root: &Path) -> CertCheck {
         let body =
             fs::read_to_string(root.join(".github/workflows/release.yml")).unwrap_or_default();
-        let passed = body.contains("matrix:")
-            && body.contains("cargo build --workspace --release")
-            && body.contains("tags:")
-            && body.contains("scripts/release_gate_local.sh")
-            && body.contains("scripts/generate_artifacts.sh")
-            && body.contains("scripts/artifact_leak_scan.sh")
-            && body.contains("actions/upload-artifact")
-            && body.contains("softprops/action-gh-release");
+        let passed = active_yaml_contains(&body, "matrix:")
+            && active_yaml_contains(&body, "cargo build --workspace --release")
+            && active_yaml_contains(&body, "tags:")
+            && active_yaml_contains(&body, "scripts/release_gate_local.sh")
+            && active_yaml_contains(&body, "scripts/generate_artifacts.sh")
+            && active_yaml_contains(&body, "scripts/artifact_leak_scan.sh")
+            && active_yaml_contains(&body, "actions/upload-artifact")
+            && active_yaml_contains(&body, "softprops/action-gh-release");
         check(
             "release_artifact_contract",
             passed,
@@ -1194,10 +1274,10 @@ pub mod cert {
 
     fn ci_tiered_gates_check(root: &Path) -> CertCheck {
         let body = fs::read_to_string(root.join(".github/workflows/ci.yml")).unwrap_or_default();
-        let passed = body.contains("pull_request:")
-            && body.contains("schedule:")
-            && body.contains("scripts/pr_fast_gate.sh")
-            && body.contains("scripts/nightly_full_gate.sh");
+        let passed = active_yaml_contains(&body, "pull_request:")
+            && active_yaml_contains(&body, "schedule:")
+            && active_yaml_contains(&body, "scripts/pr_fast_gate.sh")
+            && active_yaml_contains(&body, "scripts/nightly_full_gate.sh");
         check(
             "ci_tiered_gates",
             passed,
@@ -1208,7 +1288,12 @@ pub mod cert {
     fn required_paths(root: &Path, id: &str, paths: &[&str]) -> CertCheck {
         let missing: Vec<_> = paths
             .iter()
-            .filter(|path| !root.join(path).exists())
+            .filter(|path| {
+                root.join(path)
+                    .symlink_metadata()
+                    .map(|metadata| !metadata.file_type().is_file())
+                    .unwrap_or(true)
+            })
             .copied()
             .collect();
         check(
@@ -1228,6 +1313,13 @@ pub mod cert {
             passed,
             message: message.into(),
         }
+    }
+
+    fn active_yaml_contains(body: &str, needle: &str) -> bool {
+        body.lines().any(|line| {
+            let trimmed = line.trim_start();
+            !trimmed.starts_with('#') && trimmed.contains(needle)
+        })
     }
 }
 

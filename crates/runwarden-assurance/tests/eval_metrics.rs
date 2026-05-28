@@ -20,7 +20,7 @@ fn trace_events(obs_ids: &[&str]) -> Vec<TraceEvent> {
 fn eval_passes_when_report_cites_all_expected_trace_events() {
     let trace_events = trace_events(&["obs_1", "obs_2"]);
     let report = ReportDraft::new(vec![
-        ReportClaim::new("finding-1", "Policy denied raw shell", ["obs_1"]),
+        ReportClaim::new("finding-1", "Evidence inspection completed", ["obs_1"]),
         ReportClaim::new("finding-2", "Trace verified", ["obs_2"]),
     ]);
 

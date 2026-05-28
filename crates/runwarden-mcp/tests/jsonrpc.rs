@@ -61,6 +61,19 @@ fn stdio_payload_rejects_short_content_length_frame() {
 }
 
 #[test]
+fn stdio_payload_rejects_oversized_content_length_before_allocation() {
+    let response = handle_stdio_payload("Content-Length: 1048577\r\n\r\n{}");
+
+    assert!(response.is_err());
+    assert!(
+        response
+            .expect_err("oversized frame should fail")
+            .to_string()
+            .contains("exceeds")
+    );
+}
+
+#[test]
 fn jsonrpc_notification_without_id_does_not_emit_response() {
     let notification = r#"{"jsonrpc":"2.0","method":"initialized","params":{}}"#;
     let framed = format!(

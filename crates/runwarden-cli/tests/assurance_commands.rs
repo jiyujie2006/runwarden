@@ -57,7 +57,7 @@ fn eval_all_command_fails_when_expected_obs_is_missing_from_report() {
     fs::write(&trace_path, trace_json()).expect("trace");
     fs::write(
         &report_path,
-        r#"{"claims":[{"id":"finding-1","text":"Shell denied","obs_refs":["obs_1"]}]}"#,
+        r#"{"claims":[{"id":"finding-1","text":"Evidence inspection completed","obs_refs":["obs_1"]}]}"#,
     )
     .expect("report");
 
@@ -127,7 +127,7 @@ fn report_render_command_outputs_sarif_for_cited_report() {
     fs::write(&trace_path, trace_json()).expect("trace");
     fs::write(
         &report_path,
-        r#"{"claims":[{"id":"finding-1","text":"Shell denied","obs_refs":["obs_1"]}]}"#,
+        r#"{"claims":[{"id":"finding-1","text":"Evidence inspection completed","obs_refs":["obs_1"]}]}"#,
     )
     .expect("report");
 

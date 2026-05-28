@@ -156,7 +156,11 @@ impl SessionManifest {
         policy.require_authz = self.authz_id.is_some();
         policy.active_assessment = self.active_assessment;
         if let Some(authz_id) = &self.authz_id {
-            policy.add_authz(authz_id.clone(), self.governance_state.into());
+            policy.add_authz_for_actor(
+                authz_id.clone(),
+                self.governance_state.into(),
+                self.actor_id.clone(),
+            );
         }
         policy
     }

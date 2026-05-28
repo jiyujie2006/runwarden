@@ -69,6 +69,15 @@ describe("RunwardenClient", () => {
     });
   });
 
+  it("rejects launch tokens for non-local base URLs by default", () => {
+    expect(
+      () =>
+        new RunwardenClient("https://evil.example/", {
+          launchToken: "launch-secret"
+        })
+    ).toThrow("launchToken may only be used with local Runwarden API origins");
+  });
+
   it("sends an Origin header for Node and agent fetch clients", async () => {
     const calls: Array<{ url: string; init: FetchInit | undefined }> = [];
     const client = new RunwardenClient("http://127.0.0.1:8088/", {
