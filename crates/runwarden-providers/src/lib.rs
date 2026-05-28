@@ -953,8 +953,13 @@ pub mod external {
     use std::io::{Read, Write};
     use std::net::{TcpStream, ToSocketAddrs};
     use std::path::{Path, PathBuf};
-    use std::process::{Command, Stdio};
-    use std::time::Duration;
+    use std::process::{Command, ExitStatus, Stdio};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     use runwarden_kernel::{
         ProviderClass, ProviderContract, ProviderKind, ProviderManifest, ProviderRisk,
@@ -1171,7 +1176,12 @@ pub mod external {
             }
         }
 
-        match child.wait_with_output() {
+        match wait_with_limited_output(
+            &mut child,
+            prepared.timeout_ms,
+            prepared.stdout_limit_bytes,
+            prepared.stderr_limit_bytes,
+        ) {
             Ok(output) => json!({
                 "provider": manifest.provider_id,
                 "transport": transport,
@@ -1397,13 +1407,7 @@ pub mod external {
     }
 
     fn command_is_allowlisted(command: &str, allowlist: &[String]) -> bool {
-        let executable_name = Path::new(command)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or(command);
-        allowlist
-            .iter()
-            .any(|allowed| allowed == command || allowed == executable_name)
+        allowlist.iter().any(|allowed| allowed == command)
     }
 
     fn jsonrpc_request(manifest: &ProviderManifest, request: &ExternalMcpAdapterRequest) -> Value {
@@ -1426,6 +1430,93 @@ pub mod external {
     fn bounded_utf8(bytes: &[u8], limit: usize) -> String {
         let end = bytes.len().min(limit);
         String::from_utf8_lossy(&bytes[..end]).into_owned()
+    }
+
+    struct StdioOutput {
+        status: ExitStatus,
+        stdout: Vec<u8>,
+        stderr: Vec<u8>,
+    }
+
+    fn wait_with_limited_output(
+        child: &mut std::process::Child,
+        timeout_ms: u64,
+        stdout_limit: usize,
+        stderr_limit: usize,
+    ) -> Result<StdioOutput, String> {
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "failed to open adapter stdout".to_string())?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| "failed to open adapter stderr".to_string())?;
+        let output_exceeded = Arc::new(AtomicBool::new(false));
+        let stdout_handle = read_limited_pipe(stdout, stdout_limit, output_exceeded.clone());
+        let stderr_handle = read_limited_pipe(stderr, stderr_limit, output_exceeded.clone());
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+        let status = loop {
+            if output_exceeded.load(Ordering::SeqCst) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("stdio MCP adapter exceeded output limit".to_string());
+            }
+            if let Some(status) = child
+                .try_wait()
+                .map_err(|err| format!("failed to poll stdio MCP adapter: {err}"))?
+            {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("stdio MCP adapter timed out".to_string());
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+
+        let stdout = stdout_handle
+            .join()
+            .map_err(|_| "failed to join stdout reader".to_string())?;
+        let stderr = stderr_handle
+            .join()
+            .map_err(|_| "failed to join stderr reader".to_string())?;
+        if output_exceeded.load(Ordering::SeqCst) {
+            return Err("stdio MCP adapter exceeded output limit".to_string());
+        }
+        Ok(StdioOutput {
+            status,
+            stdout,
+            stderr,
+        })
+    }
+
+    fn read_limited_pipe<R: Read + Send + 'static>(
+        mut reader: R,
+        limit: usize,
+        output_exceeded: Arc<AtomicBool>,
+    ) -> thread::JoinHandle<Vec<u8>> {
+        thread::spawn(move || {
+            let mut output = Vec::new();
+            let mut buffer = [0u8; 4096];
+            loop {
+                match reader.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(read) => {
+                        let remaining = limit.saturating_sub(output.len());
+                        if read > remaining {
+                            output.extend_from_slice(&buffer[..remaining]);
+                            output_exceeded.store(true, Ordering::SeqCst);
+                            break;
+                        }
+                        output.extend_from_slice(&buffer[..read]);
+                    }
+                    Err(_) => break,
+                }
+            }
+            output
+        })
     }
 
     fn adapter_denial(

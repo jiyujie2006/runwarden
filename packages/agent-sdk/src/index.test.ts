@@ -69,6 +69,28 @@ describe("RunwardenClient", () => {
     });
   });
 
+  it("sends an Origin header for Node and agent fetch clients", async () => {
+    const calls: Array<{ url: string; init: FetchInit | undefined }> = [];
+    const client = new RunwardenClient("http://127.0.0.1:8088/", {
+      launchToken: "launch-secret",
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ providers: [], side_effect_executed: false })
+        };
+      }
+    });
+
+    await client.providerList();
+
+    expect(calls[0]!.init?.headers).toMatchObject({
+      authorization: "Bearer launch-secret",
+      origin: "http://127.0.0.1:8088"
+    });
+  });
+
   it("submits approval decisions to the Local API without local state changes", async () => {
     const calls: Array<{ url: string; init: FetchInit | undefined }> = [];
     const client = new RunwardenClient("http://127.0.0.1:8088/", {

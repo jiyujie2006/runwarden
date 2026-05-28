@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::{Component, Path, PathBuf};
 
@@ -495,11 +496,32 @@ fn collect_argument_strings(value: &Value, visitor: &mut impl FnMut(&str, &str))
 
 fn path_is_within_root(path: &Path, root: &Path) -> bool {
     let candidate = if path.is_absolute() {
-        normalize_path(path)
+        path.to_path_buf()
     } else {
-        normalize_path(&root.join(path))
+        root.join(path)
     };
-    candidate.starts_with(normalize_path(root))
+    let Ok(canonical_root) = root.canonicalize() else {
+        return normalize_path(&candidate).starts_with(normalize_path(root));
+    };
+
+    match candidate.canonicalize() {
+        Ok(canonical_candidate) => canonical_candidate.starts_with(&canonical_root),
+        Err(_) => canonical_existing_parent(&candidate)
+            .map(|parent| parent.starts_with(&canonical_root))
+            .unwrap_or_else(|| normalize_path(&candidate).starts_with(normalize_path(root))),
+    }
+}
+
+fn canonical_existing_parent(path: &Path) -> Option<PathBuf> {
+    let mut current = path.parent()?.to_path_buf();
+    loop {
+        if fs::symlink_metadata(&current).is_ok() {
+            return current.canonicalize().ok();
+        }
+        if !current.pop() {
+            return None;
+        }
+    }
 }
 
 fn normalize_path(path: &Path) -> PathBuf {

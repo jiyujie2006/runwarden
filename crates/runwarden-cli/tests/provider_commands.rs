@@ -14,6 +14,25 @@ fn manifest_toml() -> &'static str {
     "#
 }
 
+fn report_manifest_toml(root: &std::path::Path) -> String {
+    format!(
+        r#"
+    version = "0.1"
+    name = "report-provider-session"
+    mode = "offline"
+    provider_allowlist = ["runwarden.report.render"]
+
+    [[roots]]
+    name = "evidence"
+    path = "{}"
+
+    [active_assessment]
+    enabled = true
+    "#,
+        root.display()
+    )
+}
+
 #[test]
 fn provider_call_runs_input_inspect_from_file() {
     let dir = tempdir().expect("tempdir");
@@ -330,7 +349,82 @@ fn provider_call_with_session_rejects_provider_not_in_manifest_allowlist() {
         .output()
         .expect("provider call");
 
-    assert!(!output.status.success());
-    let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
-    assert!(stderr.contains("provider is not allowed by session"));
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    assert!(stdout.contains(r#""decision": "denied""#));
+    assert!(stdout.contains(r#""error_kind": "provider_not_allowed""#));
+    assert!(stdout.contains(r#""side_effect_executed": false"#));
+}
+
+#[test]
+fn provider_call_with_session_routes_high_risk_provider_through_kernel_before_execution() {
+    let dir = tempdir().expect("tempdir");
+    let manifest_path = dir.path().join("assessment.toml");
+    let evidence_root = dir.path().join("evidence");
+    let trace_path = evidence_root.join("trace.json");
+    let report_path = evidence_root.join("report.json");
+    fs::create_dir(&evidence_root).expect("evidence root");
+    fs::write(&manifest_path, report_manifest_toml(&evidence_root)).expect("write manifest");
+    fs::write(
+        &trace_path,
+        r#"[
+          {
+            "obs_id":"obs_1",
+            "event_type":"provider_completed",
+            "provider":"runwarden.input.inspect",
+            "payload":{"ok":true},
+            "previous_hash":null,
+            "event_hash":"hash_1"
+          }
+        ]"#,
+    )
+    .expect("trace");
+    fs::write(
+        &report_path,
+        r#"{"claims":[{"id":"finding-1","text":"Input inspection completed","obs_refs":["obs_1"]}]}"#,
+    )
+    .expect("report");
+
+    let create = Command::new(env!("CARGO_BIN_EXE_runwarden"))
+        .current_dir(dir.path())
+        .args(["session", "create", "--manifest"])
+        .arg(&manifest_path)
+        .args(["--session", "enterprise_ops", "--json"])
+        .output()
+        .expect("session create");
+    assert!(create.status.success());
+
+    let output = Command::new(env!("CARGO_BIN_EXE_runwarden"))
+        .current_dir(dir.path())
+        .args([
+            "provider",
+            "call",
+            "--session",
+            "enterprise_ops",
+            "--provider",
+            "runwarden.report.render",
+            "--root",
+            "evidence",
+            "--report",
+        ])
+        .arg(&report_path)
+        .args(["--trace"])
+        .arg(&trace_path)
+        .arg("--json")
+        .output()
+        .expect("provider call");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    assert!(stdout.contains(r#""decision": "requires_review""#));
+    assert!(stdout.contains(r#""error_kind": "approval_invalid""#));
+    assert!(!stdout.contains(r#""extension": "markdown""#));
 }

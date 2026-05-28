@@ -641,6 +641,16 @@ fn handle_report_render(id: Value, params: Option<&Value>) -> Value {
     let arguments = params
         .and_then(|params| params.get("arguments"))
         .unwrap_or(&Value::Null);
+    let call = provider_call_from_arguments("runwarden.report.render", arguments);
+    let mut enforcer = KernelEnforcer::new(
+        first_party_provider_registry(),
+        kernel_policy_from_arguments("runwarden.report.render", arguments),
+    );
+    let outcome = enforcer.evaluate_call(&call);
+    if outcome.decision != PolicyDecision::Allowed {
+        return tool_error_result(id, provider_outcome_payload(&outcome));
+    }
+
     let Some((report, trace_events)) = report_and_trace_args(id.clone(), params) else {
         return jsonrpc_error(
             id,

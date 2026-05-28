@@ -119,7 +119,9 @@ impl InMemoryTraceStore {
         }
 
         let consumed = events.len();
-        let next_offset = if query.offset + consumed < total_matching {
+        let next_offset = if truncated_by_bytes && consumed == 0 {
+            None
+        } else if query.offset + consumed < total_matching {
             Some(query.offset + consumed)
         } else {
             None

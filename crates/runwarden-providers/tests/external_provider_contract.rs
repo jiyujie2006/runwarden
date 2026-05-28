@@ -259,3 +259,146 @@ fn external_mcp_sse_adapter_reads_allowed_event_stream() {
     assert_eq!(result["event"], "{\"ready\":true}");
     assert_eq!(result["side_effect_executed"], true);
 }
+
+#[cfg(unix)]
+#[test]
+fn external_mcp_stdio_requires_exact_allowlisted_command() {
+    let dir = tempdir().expect("tempdir");
+    let manifest = load_provider_manifest(&format!(
+        r#"{{
+          "schema_version": "1",
+          "provider_id": "external.mcp.browser.open_page",
+          "provider_class": "external",
+          "kind": "mcp",
+          "risk": "network_active",
+          "side_effects": ["process_spawn"],
+          "transport": "stdio",
+          "downstream_identity": "browser-mcp",
+          "tool_identity": "open_page",
+          "declared_permissions": ["process_spawn"],
+          "allowed_origins": [],
+          "command_allowlist": ["sh"],
+          "working_root": "{}",
+          "schema_pin": {{
+            "algorithm": "sha256",
+            "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+            "schema": {{"type": "object"}}
+          }},
+          "observed_schema": {{"type": "object"}}
+        }}"#,
+        dir.path().display()
+    ))
+    .expect("manifest parses");
+    let request = ExternalMcpAdapterRequest {
+        transport: Some("stdio".to_string()),
+        command: Some("/bin/sh".to_string()),
+        cwd: Some(dir.path().to_path_buf()),
+        ..ExternalMcpAdapterRequest::default()
+    };
+
+    let result = execute_external_mcp_adapter(&manifest, &request, Some(dir.path()));
+
+    assert_eq!(result["decision"], "denied");
+    assert_eq!(result["error_kind"], "provider_not_allowed");
+    assert_eq!(result["side_effect_executed"], false);
+}
+
+#[cfg(unix)]
+#[test]
+fn external_mcp_stdio_enforces_timeout_while_waiting() {
+    let dir = tempdir().expect("tempdir");
+    let manifest = load_provider_manifest(&format!(
+        r#"{{
+          "schema_version": "1",
+          "provider_id": "external.mcp.browser.open_page",
+          "provider_class": "external",
+          "kind": "mcp",
+          "risk": "network_active",
+          "side_effects": ["process_spawn"],
+          "transport": "stdio",
+          "downstream_identity": "browser-mcp",
+          "tool_identity": "open_page",
+          "declared_permissions": ["process_spawn"],
+          "allowed_origins": [],
+          "command_allowlist": ["/bin/sh"],
+          "working_root": "{}",
+          "schema_pin": {{
+            "algorithm": "sha256",
+            "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+            "schema": {{"type": "object"}}
+          }},
+          "observed_schema": {{"type": "object"}}
+        }}"#,
+        dir.path().display()
+    ))
+    .expect("manifest parses");
+    let request = ExternalMcpAdapterRequest {
+        transport: Some("stdio".to_string()),
+        command: Some("/bin/sh".to_string()),
+        args: vec!["-c".to_string(), "sleep 1".to_string()],
+        cwd: Some(dir.path().to_path_buf()),
+        timeout_ms: Some(10),
+        ..ExternalMcpAdapterRequest::default()
+    };
+
+    let result = execute_external_mcp_adapter(&manifest, &request, Some(dir.path()));
+
+    assert_eq!(result["execution_status"], "failed");
+    assert!(
+        result["reason"]
+            .as_str()
+            .expect("reason")
+            .contains("timed out")
+    );
+    assert_eq!(result["side_effect_executed"], true);
+}
+
+#[cfg(unix)]
+#[test]
+fn external_mcp_stdio_enforces_output_limit_while_reading() {
+    let dir = tempdir().expect("tempdir");
+    let manifest = load_provider_manifest(&format!(
+        r#"{{
+          "schema_version": "1",
+          "provider_id": "external.mcp.browser.open_page",
+          "provider_class": "external",
+          "kind": "mcp",
+          "risk": "network_active",
+          "side_effects": ["process_spawn"],
+          "transport": "stdio",
+          "downstream_identity": "browser-mcp",
+          "tool_identity": "open_page",
+          "declared_permissions": ["process_spawn"],
+          "allowed_origins": [],
+          "command_allowlist": ["/bin/sh"],
+          "working_root": "{}",
+          "schema_pin": {{
+            "algorithm": "sha256",
+            "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+            "schema": {{"type": "object"}}
+          }},
+          "observed_schema": {{"type": "object"}}
+        }}"#,
+        dir.path().display()
+    ))
+    .expect("manifest parses");
+    let request = ExternalMcpAdapterRequest {
+        transport: Some("stdio".to_string()),
+        command: Some("/bin/sh".to_string()),
+        args: vec!["-c".to_string(), "printf 1234567890".to_string()],
+        cwd: Some(dir.path().to_path_buf()),
+        stdout_limit_bytes: Some(4),
+        ..ExternalMcpAdapterRequest::default()
+    };
+
+    let result = execute_external_mcp_adapter(&manifest, &request, Some(dir.path()));
+
+    assert_eq!(result["execution_status"], "failed");
+    assert!(
+        result["reason"]
+            .as_str()
+            .expect("reason")
+            .contains("output limit")
+    );
+    assert_eq!(result["side_effect_executed"], true);
+}

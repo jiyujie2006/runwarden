@@ -115,3 +115,34 @@ fn artifact_verify_rejects_symlink_escape() {
             .any(|finding| finding.kind == ArtifactErrorKind::SymlinkEscape)
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn artifact_seal_rejects_symlink_target_before_write() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempdir().expect("tempdir");
+    let outside = tempdir().expect("outside");
+    fs::create_dir_all(dir.path().join("reports")).expect("reports dir");
+    fs::write(outside.path().join("report.md"), "outside\n").expect("outside file");
+    symlink(
+        outside.path().join("report.md"),
+        dir.path().join("reports/report.md"),
+    )
+    .expect("symlink");
+
+    let error = seal_artifact(
+        dir.path(),
+        "report-md",
+        "reports/report.md",
+        "finding cites obs_1\n",
+    )
+    .expect_err("symlink target fails closed");
+
+    assert_eq!(error.kind, ArtifactErrorKind::SymlinkEscape);
+    assert!(!error.side_effect_executed);
+    assert_eq!(
+        fs::read_to_string(outside.path().join("report.md")).expect("outside unchanged"),
+        "outside\n"
+    );
+}

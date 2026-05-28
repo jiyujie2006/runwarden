@@ -125,6 +125,41 @@ fn root_escape_is_denied_before_side_effect() {
     assert!(!outcome.envelope.side_effect_executed);
 }
 
+#[cfg(unix)]
+#[test]
+fn symlink_escape_inside_scoped_root_is_denied_before_side_effect() {
+    use std::fs;
+    use std::os::unix::fs::symlink;
+
+    let root = tempfile::tempdir().expect("root");
+    let outside = tempfile::tempdir().expect("outside");
+    fs::write(outside.path().join("secret.txt"), "secret").expect("secret");
+    symlink(
+        outside.path().join("secret.txt"),
+        root.path().join("link.txt"),
+    )
+    .expect("symlink");
+
+    let provider_id = "runwarden.evidence.inspect";
+    let registry = registry_with(provider(
+        provider_id,
+        ProviderRisk::Low,
+        vec![SideEffectKind::FileRead],
+    ));
+    let mut policy = base_policy(provider_id);
+    policy.add_scoped_root(ScopedRoot::new("evidence", root.path()));
+    let mut enforcer = KernelEnforcer::new(registry, policy);
+
+    let outcome = enforcer.evaluate_call(&call(
+        provider_id,
+        json!({"root":"evidence","target_path": root.path().join("link.txt").to_string_lossy()}),
+    ));
+
+    assert_eq!(outcome.decision, PolicyDecision::Denied);
+    assert_eq!(outcome.envelope.error_kind, Some(ErrorKind::RootEscape));
+    assert!(!outcome.envelope.side_effect_executed);
+}
+
 #[test]
 fn private_network_egress_is_denied_even_when_host_allowlisted() {
     let provider_id = "runwarden.http.replay";

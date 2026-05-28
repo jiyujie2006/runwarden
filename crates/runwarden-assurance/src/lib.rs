@@ -69,6 +69,8 @@ pub mod artifact {
         let sidecar_relative_path =
             PathBuf::from(format!("{}.redaction.json", format_path(relative_path)));
         let sidecar_path = contained_path(artifact_root, &sidecar_relative_path)?;
+        reject_symlink_components(artifact_root, relative_path)?;
+        reject_symlink_components(artifact_root, &sidecar_relative_path)?;
         if let Some(parent) = artifact_path.parent() {
             fs::create_dir_all(parent).map_err(|err| {
                 artifact_error(
@@ -79,6 +81,8 @@ pub mod artifact {
                 )
             })?;
         }
+        reject_symlink_components(artifact_root, relative_path)?;
+        reject_symlink_components(artifact_root, &sidecar_relative_path)?;
 
         let sidecar = RedactionSidecar {
             artifact_id: artifact_id.clone(),
@@ -297,6 +301,40 @@ pub mod artifact {
             return false;
         };
         !canonical_path.starts_with(canonical_root)
+    }
+
+    fn reject_symlink_components(root: &Path, relative_path: &Path) -> Result<(), ArtifactError> {
+        if fs::symlink_metadata(root)
+            .map(|metadata| metadata.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            return Err(artifact_error(
+                ArtifactErrorKind::SymlinkEscape,
+                format_path(root),
+                "artifact root must not be a symlink",
+                false,
+            ));
+        }
+
+        let mut current = root.to_path_buf();
+        for component in relative_path.components() {
+            let Component::Normal(part) = component else {
+                continue;
+            };
+            current.push(part);
+            if fs::symlink_metadata(&current)
+                .map(|metadata| metadata.file_type().is_symlink())
+                .unwrap_or(false)
+            {
+                return Err(artifact_error(
+                    ArtifactErrorKind::SymlinkEscape,
+                    format_path(relative_path),
+                    "artifact path contains a symlink component",
+                    false,
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn artifact_error(

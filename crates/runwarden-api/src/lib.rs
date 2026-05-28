@@ -110,8 +110,25 @@ impl LocalApiRouter {
         Self { security }
     }
 
+    pub fn from_config(config: LocalApiServerConfig) -> Self {
+        Self::new(LocalApiSecurity::new(
+            config.launch_token,
+            [config.allowed_host],
+            [config.allowed_origin],
+        ))
+    }
+
     pub fn handle(&mut self, request: LocalApiRequest, body: Option<Value>) -> LocalApiResponse {
         let route_path = route_path(&request.path);
+        if request.method == "OPTIONS" {
+            return self.security.authorize_preflight(&request);
+        }
+        if route_path != "/health" && route_path != "/artifacts/download" {
+            let authorization = self.security.authorize_control_plane(&request);
+            if authorization.status != 200 {
+                return authorization;
+            }
+        }
         if request.method == "GET"
             && route_path.starts_with("/providers/")
             && route_path.ends_with("/status")
@@ -188,6 +205,9 @@ impl LocalApiRouter {
             ("POST", "/reports/preview") => self.report_render(&request, body, true),
             ("POST", "/artifacts/verify") => self.artifact_verify(&request, body),
             ("POST", "/artifacts/token") => self.artifact_token(&request, body),
+            ("GET", "/artifacts/download") | ("POST", "/artifacts/download") => {
+                self.artifact_download(&request, body)
+            }
             ("POST", "/artifacts/submission") => self.artifact_submission(&request, body),
             ("POST", "/eval/agent-native") => self.eval_agent_native(&request, body),
             ("POST", "/release/smoke") => self.release_smoke(&request),
@@ -374,10 +394,15 @@ impl LocalApiRouter {
         request: &LocalApiRequest,
         body: Option<Value>,
     ) -> LocalApiResponse {
+        let authorization = self.security.authorize_control_plane(request);
+        if authorization.status != 200 {
+            return authorization;
+        }
+        let authorization_headers = authorization.headers;
         let Some(body) = body else {
-            return self.operation_error(
-                request,
+            return operation_error_with_headers(
                 400,
+                authorization_headers,
                 "failed",
                 "argument_schema_invalid",
                 "provider call body is required",
@@ -387,9 +412,9 @@ impl LocalApiRouter {
         let call: ProviderCall = match serde_json::from_value(body) {
             Ok(call) => call,
             Err(err) => {
-                return self.operation_error(
-                    request,
+                return operation_error_with_headers(
                     400,
+                    authorization_headers,
                     "failed",
                     "argument_schema_invalid",
                     format!("provider call body is invalid: {err}"),
@@ -397,10 +422,10 @@ impl LocalApiRouter {
                 );
             }
         };
-        let Some(session) = self.security.sessions.get(&call.session_id) else {
-            return self.operation_error(
-                request,
+        let Some(session) = self.security.sessions.get(&call.session_id).cloned() else {
+            return operation_error_with_headers(
                 404,
+                authorization_headers,
                 "denied",
                 "manifest_invalid",
                 "session was not found",
@@ -424,7 +449,7 @@ impl LocalApiRouter {
                 self.security
                     .persist_consumed_approval(&call, &enforcer.approval_binding_for_call(&call));
             }
-            match execute_first_party_provider_call(&call) {
+            match execute_first_party_provider_call(&call, Some(&session)) {
                 Ok(output) => {
                     outcome.execution_status = if output
                         .get("external_adapter_required")
@@ -447,8 +472,9 @@ impl LocalApiRouter {
             }
         }
 
-        self.operation_response(
-            request,
+        operation_response_with_headers(
+            200,
+            authorization_headers,
             json!({
                 "outcome": outcome,
                 "api_owns_security_decision": false,
@@ -460,10 +486,15 @@ impl LocalApiRouter {
     }
 
     fn trace_export(&self, request: &LocalApiRequest, body: Option<Value>) -> LocalApiResponse {
+        let authorization = self.security.authorize_control_plane(request);
+        if authorization.status != 200 {
+            return authorization;
+        }
+        let authorization_headers = authorization.headers;
         let Some(body) = body else {
-            return self.operation_error(
-                request,
+            return operation_error_with_headers(
                 400,
+                authorization_headers,
                 "failed",
                 "argument_schema_invalid",
                 "trace export body is required",
@@ -473,9 +504,9 @@ impl LocalApiRouter {
         let events = match read_trace_from_body(&body) {
             Ok(events) => events,
             Err(message) => {
-                return self.operation_error(
-                    request,
+                return operation_error_with_headers(
                     400,
+                    authorization_headers,
                     "failed",
                     "argument_schema_invalid",
                     message,
@@ -496,12 +527,16 @@ impl LocalApiRouter {
             max_bytes: number_field(&body, "max_bytes"),
         };
         match store.stream_export(query) {
-            Ok(page) => {
-                self.operation_response(request, json!(page), false, ["query_next_trace_page"])
-            }
-            Err(err) => self.operation_error(
-                request,
+            Ok(page) => operation_response_with_headers(
+                200,
+                authorization_headers,
+                json!(page),
+                false,
+                ["query_next_trace_page"],
+            ),
+            Err(err) => operation_error_with_headers(
                 422,
+                authorization_headers,
                 "denied",
                 "trace_tampered",
                 err.to_string(),
@@ -756,11 +791,41 @@ impl LocalApiRouter {
         )
     }
 
+    fn artifact_download(
+        &mut self,
+        request: &LocalApiRequest,
+        body: Option<Value>,
+    ) -> LocalApiResponse {
+        let token = query_param(&request.path, "token")
+            .or_else(|| body.as_ref().and_then(|body| string_field(body, "token")));
+        let Some(token) = token else {
+            return operation_error_with_headers(
+                400,
+                BTreeMap::new(),
+                "failed",
+                "argument_schema_invalid",
+                "artifact download token is required",
+                false,
+            );
+        };
+
+        let mut response = self.security.consume_artifact_download_token(&token);
+        response
+            .headers
+            .extend(self.security.optional_cors_headers(request));
+        response
+    }
+
     fn artifact_submission(
         &self,
         request: &LocalApiRequest,
         body: Option<Value>,
     ) -> LocalApiResponse {
+        let authorization = self.security.authorize_control_plane(request);
+        if authorization.status != 200 {
+            return authorization;
+        }
+        let authorization_headers = authorization.headers;
         let output_path = body
             .as_ref()
             .and_then(|body| string_field(body, "output_path"))
@@ -775,12 +840,32 @@ impl LocalApiRouter {
         ) {
             Ok(root) => root,
             Err(message) => {
-                return self.operation_error(request, 500, "failed", "internal", message, false);
+                return operation_error_with_headers(
+                    500,
+                    authorization_headers,
+                    "failed",
+                    "internal",
+                    message,
+                    false,
+                );
             }
         };
         match write_submission_bundle(&root, Path::new(&output_path), full) {
-            Ok(result) => self.operation_response(request, result, true, ["verify_artifacts"]),
-            Err(message) => self.operation_error(request, 500, "failed", "internal", message, true),
+            Ok(result) => operation_response_with_headers(
+                200,
+                authorization_headers,
+                result,
+                true,
+                ["verify_artifacts"],
+            ),
+            Err(message) => operation_error_with_headers(
+                500,
+                authorization_headers,
+                "failed",
+                "internal",
+                message,
+                true,
+            ),
         }
     }
 
@@ -845,10 +930,15 @@ impl LocalApiRouter {
     }
 
     fn ui_launch(&self, request: &LocalApiRequest, body: Option<Value>) -> LocalApiResponse {
+        let authorization = self.security.authorize_control_plane(request);
+        if authorization.status != 200 {
+            return authorization;
+        }
+        let authorization_headers = authorization.headers;
         let Some(body) = body else {
-            return self.operation_error(
-                request,
+            return operation_error_with_headers(
                 400,
+                authorization_headers,
                 "failed",
                 "argument_schema_invalid",
                 "ui launch body is required",
@@ -860,8 +950,17 @@ impl LocalApiRouter {
         let artifacts_path =
             string_field(&body, "artifacts_path").unwrap_or_else(|| "artifacts".to_string());
         match write_ui_launch_bundle(&bind, port as u16, Path::new(&artifacts_path)) {
-            Ok(result) => self.operation_response(request, result, true, []),
-            Err(message) => self.operation_error(request, 500, "failed", "internal", message, true),
+            Ok(result) => {
+                operation_response_with_headers(200, authorization_headers, result, true, [])
+            }
+            Err(message) => operation_error_with_headers(
+                500,
+                authorization_headers,
+                "failed",
+                "internal",
+                message,
+                true,
+            ),
         }
     }
 
@@ -1174,7 +1273,10 @@ fn verify_trace_events(events: Vec<TraceEvent>) -> Value {
     }
 }
 
-fn execute_first_party_provider_call(call: &ProviderCall) -> Result<Value, String> {
+fn execute_first_party_provider_call(
+    call: &ProviderCall,
+    session: Option<&SessionManifest>,
+) -> Result<Value, String> {
     let registry = full_provider_registry();
     if registry
         .get(&call.provider)
@@ -1205,6 +1307,7 @@ fn execute_first_party_provider_call(call: &ProviderCall) -> Result<Value, Strin
         }
         "runwarden.evidence.inspect" => {
             let root = string_field(&call.arguments, "root_path")
+                .or_else(|| resolve_session_root_path(session, &call.arguments))
                 .or_else(|| string_field(&call.arguments, "root"))
                 .ok_or_else(|| "root_path is required".to_string())?;
             inspect_evidence_root(Path::new(&root), EvidenceInspectPolicy::default())
@@ -1283,6 +1386,19 @@ fn execute_first_party_provider_call(call: &ProviderCall) -> Result<Value, Strin
         }
         other => Err(format!("unsupported first-party provider call: {other}")),
     }
+}
+
+fn resolve_session_root_path(
+    session: Option<&SessionManifest>,
+    arguments: &Value,
+) -> Option<String> {
+    let root = string_field(arguments, "root")?;
+    let session = session?;
+    session
+        .roots
+        .iter()
+        .find(|candidate| candidate.name == root)
+        .map(|candidate| candidate.path.to_string_lossy().into_owned())
 }
 
 fn load_agent_native_cases(
@@ -1613,26 +1729,18 @@ pub fn serve_one_request(
     listener: TcpListener,
     config: LocalApiServerConfig,
 ) -> std::io::Result<()> {
+    let mut router = LocalApiRouter::from_config(config);
+    serve_next_request(&listener, &mut router)
+}
+
+pub fn serve_next_request(
+    listener: &TcpListener,
+    router: &mut LocalApiRouter,
+) -> std::io::Result<()> {
     let (mut stream, _) = listener.accept()?;
-    let mut bytes = Vec::new();
-    let mut buffer = [0u8; 4096];
-    loop {
-        let read = stream.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        bytes.extend_from_slice(&buffer[..read]);
-        if bytes.windows(4).any(|window| window == b"\r\n\r\n") || bytes.len() > 16 * 1024 {
-            break;
-        }
-    }
+    let bytes = read_http_request_bytes(&mut stream)?;
     let request_text = String::from_utf8_lossy(&bytes);
     let (request, body) = parse_http_request(&request_text);
-    let mut router = LocalApiRouter::new(LocalApiSecurity::new(
-        config.launch_token,
-        [config.allowed_host],
-        [config.allowed_origin],
-    ));
     let response = router.handle(request, body);
     let body = serde_json::to_string(&response.body).expect("local API body serializes");
     let status_text = status_text(response.status);
@@ -1650,6 +1758,41 @@ pub fn serve_one_request(
     stream.flush()?;
     let _ = stream.shutdown(Shutdown::Write);
     Ok(())
+}
+
+fn read_http_request_bytes(stream: &mut impl Read) -> std::io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    let mut buffer = [0u8; 4096];
+    loop {
+        let read = stream.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&buffer[..read]);
+        if let Some(expected_len) = expected_http_request_len(&bytes) {
+            if bytes.len() >= expected_len {
+                break;
+            }
+        } else if bytes.len() > 16 * 1024 {
+            break;
+        }
+    }
+    Ok(bytes)
+}
+
+fn expected_http_request_len(bytes: &[u8]) -> Option<usize> {
+    let header_end = bytes
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|position| position + 4)?;
+    let head = String::from_utf8_lossy(&bytes[..header_end]);
+    let content_length = head.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.eq_ignore_ascii_case("content-length")
+            .then(|| value.trim().parse::<usize>().ok())
+            .flatten()
+    });
+    Some(header_end + content_length.unwrap_or(0))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1724,12 +1867,7 @@ impl LocalApiSecurity {
             );
         }
 
-        let mut headers = BTreeMap::new();
-        headers.insert(
-            "access-control-allow-origin".to_string(),
-            origin.to_string(),
-        );
-        headers.insert("vary".to_string(), "Origin".to_string());
+        let headers = self.cors_headers(origin);
 
         LocalApiResponse {
             status: 200,
@@ -1741,6 +1879,35 @@ impl LocalApiSecurity {
                 "side_effect_executed": false
             }),
         }
+    }
+
+    pub fn authorize_preflight(&self, request: &LocalApiRequest) -> LocalApiResponse {
+        let Some(host) = request.header_value("host").map(normalize_host) else {
+            return denied(403, "missing Host header", "host");
+        };
+        if !self.allowed_hosts.contains(&host) {
+            return denied(403, "Host is not allowed for Runwarden Local API", "host");
+        }
+
+        let Some(origin) = request.header_value("origin") else {
+            return denied(403, "missing Origin header", "origin");
+        };
+        if !self.allowed_origins.contains(origin) {
+            return denied(
+                403,
+                "Origin is not allowed for Runwarden Local API",
+                "origin",
+            );
+        }
+
+        response_with_headers(
+            200,
+            self.cors_headers(origin),
+            json!({
+                "preflight": true,
+                "side_effect_executed": false
+            }),
+        )
     }
 
     pub fn insert_approval(&mut self, approval: ApprovalRecord) {
@@ -1896,6 +2063,39 @@ impl LocalApiSecurity {
             || request
                 .header_value("x-runwarden-token")
                 .is_some_and(|token| token == self.launch_token)
+    }
+
+    fn cors_headers(&self, origin: &str) -> BTreeMap<String, String> {
+        let mut headers = BTreeMap::new();
+        headers.insert(
+            "access-control-allow-origin".to_string(),
+            origin.to_string(),
+        );
+        headers.insert(
+            "access-control-allow-methods".to_string(),
+            "GET, POST, OPTIONS".to_string(),
+        );
+        headers.insert(
+            "access-control-allow-headers".to_string(),
+            "authorization, content-type, x-runwarden-token".to_string(),
+        );
+        headers.insert("vary".to_string(), "Origin".to_string());
+        headers
+    }
+
+    fn optional_cors_headers(&self, request: &LocalApiRequest) -> BTreeMap<String, String> {
+        let host_allowed = request
+            .header_value("host")
+            .map(normalize_host)
+            .is_some_and(|host| self.allowed_hosts.contains(&host));
+        let Some(origin) = request.header_value("origin") else {
+            return BTreeMap::new();
+        };
+        if host_allowed && self.allowed_origins.contains(origin) {
+            self.cors_headers(origin)
+        } else {
+            BTreeMap::new()
+        }
     }
 }
 

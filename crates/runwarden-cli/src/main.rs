@@ -7,7 +7,7 @@ use std::{
 };
 
 use clap::{Parser, Subcommand};
-use runwarden_api::{LocalApiServerConfig, serve_one_request};
+use runwarden_api::{LocalApiRouter, LocalApiServerConfig, serve_next_request, serve_one_request};
 use runwarden_assurance::accountability::accountability_summary;
 use runwarden_assurance::artifact::{seal_artifact, verify_artifact_manifest};
 use runwarden_assurance::audit::audit_summary;
@@ -22,7 +22,9 @@ use runwarden_assurance::report::{
 };
 use runwarden_kernel::artifact::ArtifactManifest;
 use runwarden_kernel::authority::{ApprovalBinding, ApprovalRecord, ApprovalState};
+use runwarden_kernel::contracts::{PolicyDecision, ProviderCall};
 use runwarden_kernel::evidence::{InMemoryTraceStore, TraceEvent, TraceQuery, hex_sha256};
+use runwarden_kernel::kernel::KernelEnforcer;
 use runwarden_kernel::manifest::{AssessmentManifest, SessionManifest};
 use runwarden_providers::catalog::{
     EXTERNAL_PROVIDER_IDS, FIRST_PARTY_PROVIDER_IDS, default_external_provider_manifest,
@@ -738,16 +740,67 @@ fn run() -> anyhow::Result<()> {
                 format,
                 json,
             } => {
-                if let Some(session_id) = &session {
-                    let session_manifest = read_session(session_id)?;
-                    if !session_manifest.allowed_providers.contains(&provider) {
-                        anyhow::bail!("provider is not allowed by session: {provider}");
+                let session_manifest = session.as_deref().map(read_session).transpose()?;
+                let mut provider_call = session_manifest.as_ref().map(|session_manifest| {
+                    provider_call_from_cli(
+                        session_manifest,
+                        &provider,
+                        input.as_ref(),
+                        root.as_ref(),
+                        trace.as_ref(),
+                        report.as_ref(),
+                        format.as_deref(),
+                    )
+                });
+                if let Some(call) = provider_call.as_mut() {
+                    attach_matching_approval(call)?;
+                    let mut enforcer = KernelEnforcer::new(
+                        full_provider_registry(),
+                        session_manifest
+                            .as_ref()
+                            .expect("session-backed provider call")
+                            .to_kernel_policy(),
+                    );
+                    for approval in read_all_approvals()? {
+                        enforcer.add_approval(approval);
+                    }
+                    let outcome = enforcer.evaluate_call(call);
+                    if outcome.decision != PolicyDecision::Allowed {
+                        if json {
+                            println!("{}", serde_json::to_string_pretty(&outcome)?);
+                        } else {
+                            println!(
+                                "provider call {}: {}",
+                                serde_json::to_string(&outcome.decision)?,
+                                outcome.envelope.reason
+                            );
+                        }
+                        return Ok(());
+                    }
+                    if call
+                        .approval_id
+                        .as_deref()
+                        .and_then(|approval_id| enforcer.approval_state(approval_id))
+                        == Some(ApprovalState::Consumed)
+                    {
+                        persist_consumed_cli_approval(
+                            call,
+                            &enforcer.approval_binding_for_call(call),
+                        )?;
                     }
                 }
+                let execution_root = resolve_cli_execution_root(session_manifest.as_ref(), root);
                 let result = if provider.starts_with("external.") {
-                    call_external_provider(&provider, input, root)?
+                    call_external_provider(&provider, input, execution_root)?
                 } else {
-                    call_first_party_provider(&provider, input, root, trace, report, format)?
+                    call_first_party_provider(
+                        &provider,
+                        input,
+                        execution_root,
+                        trace,
+                        report,
+                        format,
+                    )?
                 };
                 if json {
                     println!("{}", serde_json::to_string_pretty(&result)?);
@@ -1075,8 +1128,9 @@ fn run() -> anyhow::Result<()> {
                     if once {
                         serve_one_request(listener, config)?;
                     } else {
+                        let mut router = LocalApiRouter::from_config(config);
                         loop {
-                            serve_one_request(listener.try_clone()?, config.clone())?;
+                            serve_next_request(&listener, &mut router)?;
                         }
                     }
                 }
@@ -1214,6 +1268,123 @@ fn runtime_denial_error_kind(kind: &ProviderRuntimeDenialKind) -> &'static str {
         ProviderRuntimeDenialKind::TimeoutTooLarge
         | ProviderRuntimeDenialKind::OutputLimitTooLarge => "budget_exceeded",
     }
+}
+
+fn provider_call_from_cli(
+    session_manifest: &SessionManifest,
+    provider: &str,
+    input: Option<&PathBuf>,
+    root: Option<&PathBuf>,
+    trace: Option<&PathBuf>,
+    report: Option<&PathBuf>,
+    format: Option<&str>,
+) -> ProviderCall {
+    let mut arguments = serde_json::Map::new();
+    if let Some(path) = input {
+        arguments.insert(
+            "input_path".to_string(),
+            serde_json::Value::String(path.to_string_lossy().into_owned()),
+        );
+    }
+    if let Some(path) = root {
+        let root_value = path.to_string_lossy().into_owned();
+        let key = if session_manifest
+            .roots
+            .iter()
+            .any(|root| root.name == root_value)
+        {
+            "root"
+        } else {
+            "root_path"
+        };
+        arguments.insert(key.to_string(), serde_json::Value::String(root_value));
+    }
+    if let Some(path) = trace {
+        arguments.insert(
+            "trace_path".to_string(),
+            serde_json::Value::String(path.to_string_lossy().into_owned()),
+        );
+    }
+    if let Some(path) = report {
+        arguments.insert(
+            "report_path".to_string(),
+            serde_json::Value::String(path.to_string_lossy().into_owned()),
+        );
+    }
+    if let Some(format) = format {
+        arguments.insert(
+            "format".to_string(),
+            serde_json::Value::String(format.to_string()),
+        );
+    }
+
+    ProviderCall {
+        session_id: session_manifest.session_id.clone(),
+        provider: provider.to_string(),
+        action: provider_action(provider).to_string(),
+        arguments: serde_json::Value::Object(arguments),
+        actor_id: session_manifest.actor_id.clone(),
+        authz_id: session_manifest.authz_id.clone(),
+        approval_id: None,
+    }
+}
+
+fn provider_action(provider: &str) -> &str {
+    provider.rsplit('.').next().unwrap_or("call")
+}
+
+fn resolve_cli_execution_root(
+    session_manifest: Option<&SessionManifest>,
+    root: Option<PathBuf>,
+) -> Option<PathBuf> {
+    let root = root?;
+    let root_text = root.to_string_lossy();
+    session_manifest
+        .and_then(|session| {
+            session
+                .roots
+                .iter()
+                .find(|candidate| candidate.name == root_text)
+                .map(|candidate| candidate.path.clone())
+        })
+        .or(Some(root))
+}
+
+fn attach_matching_approval(call: &mut ProviderCall) -> anyhow::Result<()> {
+    let binding = cli_approval_binding(call)?;
+    if let Some(approval) = read_all_approvals()?
+        .into_iter()
+        .find(|approval| approval.binding == binding)
+    {
+        call.approval_id = Some(approval.approval_id);
+    }
+    Ok(())
+}
+
+fn persist_consumed_cli_approval(
+    call: &ProviderCall,
+    binding: &ApprovalBinding,
+) -> anyhow::Result<()> {
+    let Some(approval_id) = call.approval_id.as_deref() else {
+        return Ok(());
+    };
+    let mut approval = read_approval(approval_id)?;
+    if approval.state == ApprovalState::Approved {
+        approval.consume_once(binding)?;
+        write_approval(&approval)?;
+    }
+    Ok(())
+}
+
+fn cli_approval_binding(call: &ProviderCall) -> anyhow::Result<ApprovalBinding> {
+    Ok(ApprovalBinding {
+        session_id: call.session_id.clone(),
+        provider: call.provider.clone(),
+        action: call.action.clone(),
+        argument_hash: hex_sha256(&serde_json::to_vec(&call.arguments)?),
+        authz_id: call.authz_id.clone(),
+        actor_id: call.actor_id.clone(),
+    })
 }
 
 fn call_first_party_provider(

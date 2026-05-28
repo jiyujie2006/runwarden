@@ -2,7 +2,7 @@ use runwarden_mcp::handle_jsonrpc_body;
 use serde_json::{Value, json};
 
 #[test]
-fn agent_only_assessment_flow_uses_runwarden_tools_from_bootstrap_to_report_render() {
+fn agent_only_assessment_flow_mediates_report_render_before_execution() {
     let listed =
         handle_jsonrpc_body(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#)
             .expect("tools/list");
@@ -69,7 +69,7 @@ fn agent_only_assessment_flow_uses_runwarden_tools_from_bootstrap_to_report_rend
     ));
     assert_eq!(lint["ok"], true);
 
-    let render = tool_payload(&call_tool(
+    let render_response = call_tool(
         5,
         "runwarden.report.render",
         json!({
@@ -77,8 +77,11 @@ fn agent_only_assessment_flow_uses_runwarden_tools_from_bootstrap_to_report_rend
             "trace_events": trace_events,
             "format": "html"
         }),
-    ));
-    assert_eq!(render["extension"], "html");
+    );
+    assert_eq!(render_response["result"]["isError"], true);
+    let render = tool_payload(&render_response);
+    assert_eq!(render["decision"], "requires_review");
+    assert_eq!(render["envelope"]["error_kind"], "approval_invalid");
     assert_eq!(render["side_effect_executed"], false);
 }
 

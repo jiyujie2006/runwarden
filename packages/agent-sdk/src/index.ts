@@ -140,15 +140,18 @@ export type FetchFn = (url: string, init?: FetchInit) => Promise<FetchResponse>;
 
 export interface RunwardenClientOptions {
   launchToken?: string;
+  origin?: string;
   fetch?: FetchFn;
 }
 
 export class RunwardenClient {
   private readonly launchToken: string | undefined;
+  private readonly origin: string;
   private readonly fetchFn: FetchFn;
 
   constructor(private readonly baseUrl: string, options: RunwardenClientOptions = {}) {
     this.launchToken = options.launchToken;
+    this.origin = options.origin ?? new URL(baseUrl).origin;
     this.fetchFn = options.fetch ?? defaultFetch();
   }
 
@@ -250,7 +253,8 @@ export class RunwardenClient {
     body?: unknown
   ): Promise<T> {
     const headers: Record<string, string> = {
-      accept: "application/json"
+      accept: "application/json",
+      origin: this.origin
     };
     if (this.launchToken) {
       headers.authorization = `Bearer ${this.launchToken}`;

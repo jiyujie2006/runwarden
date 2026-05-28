@@ -91,7 +91,7 @@ fn trace_store_query_filters_events_and_enforces_byte_budget() {
 
     assert!(bounded.events.is_empty());
     assert!(bounded.truncated_by_bytes);
-    assert_eq!(bounded.next_offset, Some(0));
+    assert_eq!(bounded.next_offset, None);
 }
 
 #[test]
