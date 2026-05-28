@@ -16,6 +16,10 @@ fn strict_check_validates_repo_contracts() {
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
     assert!(stdout.contains("schema artifacts present"));
     assert!(stdout.contains("first-party provider catalog present"));
+    assert!(stdout.contains("scenario golden corpora present"));
+    assert!(stdout.contains("split reference docs present"));
+    assert!(stdout.contains("generated TypeScript contracts present"));
+    assert!(stdout.contains("release binary matrix present"));
     assert!(stdout.contains("release gate scripts present"));
     assert!(stdout.contains("release assurance commands present"));
 }

@@ -1003,6 +1003,7 @@ pub mod cert {
                 "release_scripts",
                 &[
                     "scripts/dev_gate.sh",
+                    "scripts/check_ts_contracts.sh",
                     "scripts/release_gate_local.sh",
                     "scripts/generate_artifacts.sh",
                     "scripts/artifact_leak_scan.sh",
@@ -1014,6 +1015,12 @@ pub mod cert {
                 &[
                     "scenarios/enterprise-agent-security/manifests/assessment.toml",
                     "scenarios/enterprise-agent-security/expected/denials.json",
+                    "scenarios/local-web-risk/expected/eval-baseline.json",
+                    "scenarios/workflow-processing-agent/expected/eval-baseline.json",
+                    "scenarios/ops-collaboration-agent/expected/eval-baseline.json",
+                    "scenarios/knowledge-retrieval-qa/expected/eval-baseline.json",
+                    "scenarios/government-office-assistant/expected/eval-baseline.json",
+                    "scenarios/offline-evidence/expected/eval-baseline.json",
                     "tests/fixtures/default-trace.json",
                     "tests/fixtures/default-report.json",
                     "examples/providers/external.mcp.browser.open_page.json",

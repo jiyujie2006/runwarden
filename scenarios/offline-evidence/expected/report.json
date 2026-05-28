@@ -1,0 +1,9 @@
+{
+  "claims": [
+    {
+      "id": "offline-evidence-1",
+      "text": "Evidence indexing rejects root escape attempts and preserves a verifiable trace reference.",
+      "obs_refs": ["obs_offline_evidence_1"]
+    }
+  ]
+}

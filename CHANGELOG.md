@@ -11,6 +11,9 @@ All notable changes to Runwarden are documented in this file.
 - Added Local API and MCP boundaries that expose only Runwarden-managed operations, preserve side-effect state, require control-plane authorization, and route provider calls through kernel decisions.
 - Added Reviewer Console view-model and static rendering packages, TypeScript SDK helpers, MCP helper utilities, and config safety tools.
 - Added scenario fixtures, schema artifacts, security assessment skill packaging, CI gates, release evidence workflow, release smoke checks, and generated artifact verification.
+- Added real external MCP stdio, HTTP, and SSE adapter execution contracts behind provider manifest allowlists and origin checks.
+- Added dedicated `runwarden authority create` and `runwarden authority inspect` commands for bound approval records.
+- Added complete scenario golden corpora, split reference documentation, generated TypeScript contract checks, `runwarden-kernel` binary, and WebUI responsive/accessibility gates.
 
 ### Fixed
 
@@ -18,7 +21,9 @@ All notable changes to Runwarden are documented in this file.
 - Bound provider policy outcomes to deterministic `obs_*` IDs and trace event labels before side effects.
 - Ensured MCP `runwarden.provider.call` respects kernel session allowlists before executing inline providers.
 - Reported external providers without an adapter as incomplete instead of completed.
+- Closed the recorded follow-up gaps from the initial plan completion audit.
 
 ### Changed
 
 - Documented the Runwarden security model, design system, CLI, MCP, reviewer console, release process, and enterprise submission map.
+- Wired `runwarden eval scenarios --json` and generated TypeScript declaration drift checks into local and CI gates.

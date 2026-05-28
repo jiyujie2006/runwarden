@@ -1,26 +1,18 @@
-export type PolicyDecision = "allowed" | "denied" | "requires_review";
-export type ExecutionStatus = "not_executed" | "running" | "completed" | "failed" | "incomplete";
-export type ExecutionMode = "dry_run" | "enforced" | "debug";
-export type ErrorKind =
-  | "manifest_invalid"
-  | "provider_unknown"
-  | "provider_not_allowed"
-  | "argument_schema_invalid"
-  | "scope_violation"
-  | "root_escape"
-  | "egress_denied"
-  | "budget_exceeded"
-  | "active_assessment_required"
-  | "authz_invalid"
-  | "approval_invalid"
-  | "approval_consumed"
-  | "approval_expired"
-  | "trace_tampered"
-  | "trace_write_failed"
-  | "redaction_failed"
-  | "artifact_invalid"
-  | "report_citation_invalid"
-  | "internal";
+import type {
+  ApprovalState,
+  ErrorKind,
+  ExecutionMode,
+  ExecutionStatus,
+  PolicyDecision
+} from "./generated/contracts";
+
+export type {
+  ApprovalState,
+  ErrorKind,
+  ExecutionMode,
+  ExecutionStatus,
+  PolicyDecision
+} from "./generated/contracts";
 
 export interface ProviderCall {
   session_id: string;
@@ -65,8 +57,6 @@ export interface ArtifactRef {
   path: string;
   sha256?: string | null;
 }
-
-export type ApprovalState = "pending" | "approved" | "consumed" | "denied" | "expired" | "revoked";
 
 export interface ApprovalRecord {
   approval_id: string;

@@ -949,11 +949,23 @@ pub mod evidence {
 }
 
 pub mod external {
+    use std::collections::BTreeMap;
+    use std::io::{Read, Write};
+    use std::net::{TcpStream, ToSocketAddrs};
+    use std::path::{Path, PathBuf};
+    use std::process::{Command, Stdio};
+    use std::time::Duration;
+
     use runwarden_kernel::{
         ProviderClass, ProviderContract, ProviderKind, ProviderManifest, ProviderRisk,
         SideEffectKind,
     };
-    use serde::Serialize;
+    use serde::{Deserialize, Serialize};
+    use serde_json::{Value, json};
+
+    use super::runtime::{
+        ProviderRuntime, ProviderRuntimeDenialKind, ProviderRuntimePolicy, ProviderRuntimeRequest,
+    };
 
     #[derive(Debug, Clone, PartialEq, Serialize)]
     pub struct ExternalProviderCertReport {
@@ -965,6 +977,334 @@ pub mod external {
 
     pub fn load_provider_manifest(input: &str) -> serde_json::Result<ProviderManifest> {
         serde_json::from_str(input)
+    }
+
+    #[derive(Debug, Clone, PartialEq, Deserialize)]
+    pub struct ExternalMcpAdapterRequest {
+        #[serde(default)]
+        pub manifest_path: Option<PathBuf>,
+        #[serde(default)]
+        pub transport: Option<String>,
+        #[serde(default)]
+        pub command: Option<String>,
+        #[serde(default)]
+        pub args: Vec<String>,
+        #[serde(default)]
+        pub cwd: Option<PathBuf>,
+        #[serde(default)]
+        pub url: Option<String>,
+        #[serde(default)]
+        pub headers: BTreeMap<String, String>,
+        #[serde(default)]
+        pub timeout_ms: Option<u64>,
+        #[serde(default)]
+        pub stdout_limit_bytes: Option<usize>,
+        #[serde(default)]
+        pub stderr_limit_bytes: Option<usize>,
+        #[serde(default)]
+        pub request: Value,
+    }
+
+    impl Default for ExternalMcpAdapterRequest {
+        fn default() -> Self {
+            Self {
+                manifest_path: None,
+                transport: None,
+                command: None,
+                args: Vec::new(),
+                cwd: None,
+                url: None,
+                headers: BTreeMap::new(),
+                timeout_ms: None,
+                stdout_limit_bytes: None,
+                stderr_limit_bytes: None,
+                request: Value::Null,
+            }
+        }
+    }
+
+    pub fn execute_external_mcp_adapter(
+        manifest: &ProviderManifest,
+        request: &ExternalMcpAdapterRequest,
+        runtime_root: Option<&Path>,
+    ) -> Value {
+        if manifest.provider_class != ProviderClass::External || manifest.kind != ProviderKind::Mcp
+        {
+            return adapter_denial(
+                &manifest.provider_id,
+                request.transport.as_deref().unwrap_or("unknown"),
+                "provider_not_allowed",
+                "external MCP adapter execution requires an external MCP provider manifest",
+            );
+        }
+
+        let transport = request
+            .transport
+            .as_deref()
+            .or(manifest.transport.as_deref())
+            .unwrap_or("stdio");
+
+        match transport {
+            "stdio" => execute_stdio(manifest, request, runtime_root),
+            "http" => execute_http(manifest, request, "http"),
+            "https" => adapter_denial(
+                &manifest.provider_id,
+                "https",
+                "egress_denied",
+                "https MCP adapter execution requires a trusted HTTP client adapter",
+            ),
+            "sse" => execute_sse(manifest, request),
+            other => adapter_denial(
+                &manifest.provider_id,
+                other,
+                "provider_not_allowed",
+                "unsupported external MCP transport",
+            ),
+        }
+    }
+
+    fn execute_stdio(
+        manifest: &ProviderManifest,
+        request: &ExternalMcpAdapterRequest,
+        runtime_root: Option<&Path>,
+    ) -> Value {
+        let transport = "stdio";
+        let Some(command) = request.command.as_deref() else {
+            return adapter_denial(
+                &manifest.provider_id,
+                transport,
+                "argument_schema_invalid",
+                "stdio MCP adapter requires a command",
+            );
+        };
+        if !command_is_allowlisted(command, &manifest.command_allowlist) {
+            return adapter_denial(
+                &manifest.provider_id,
+                transport,
+                "provider_not_allowed",
+                "stdio MCP adapter command is not allowlisted by the provider manifest",
+            );
+        }
+
+        let cwd = request
+            .cwd
+            .clone()
+            .or_else(|| manifest.working_root.as_ref().map(PathBuf::from))
+            .unwrap_or_else(|| PathBuf::from("."));
+        let root = runtime_root
+            .map(Path::to_path_buf)
+            .or_else(|| manifest.working_root.as_ref().map(PathBuf::from))
+            .unwrap_or_else(|| cwd.clone());
+        let policy = ProviderRuntimePolicy::locked_to_root(root);
+        let mut runtime_request = ProviderRuntimeRequest::new(command).cwd(cwd);
+        for arg in &request.args {
+            runtime_request = runtime_request.arg(arg.clone());
+        }
+        if let Some(timeout_ms) = request.timeout_ms {
+            runtime_request = runtime_request.timeout_ms(timeout_ms);
+        }
+        if let Some(stdout_limit_bytes) = request.stdout_limit_bytes {
+            runtime_request = runtime_request.stdout_limit_bytes(stdout_limit_bytes);
+        }
+        if let Some(stderr_limit_bytes) = request.stderr_limit_bytes {
+            runtime_request = runtime_request.stderr_limit_bytes(stderr_limit_bytes);
+        }
+
+        let prepared = match ProviderRuntime::prepare(&policy, &runtime_request) {
+            Ok(prepared) => prepared,
+            Err(denial) => {
+                return json!({
+                    "provider": manifest.provider_id,
+                    "transport": transport,
+                    "decision": "denied",
+                    "execution_status": "not_executed",
+                    "error_kind": runtime_denial_error_kind(&denial.kind),
+                    "reason": denial.reason,
+                    "side_effect_executed": denial.side_effect_executed
+                });
+            }
+        };
+
+        let body = jsonrpc_request(manifest, request);
+        let frame = content_length_frame(&body);
+        let mut child = match Command::new(&prepared.executable)
+            .args(&prepared.args)
+            .current_dir(&prepared.cwd)
+            .env_clear()
+            .envs(&prepared.env)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(err) => {
+                return adapter_failure(
+                    &manifest.provider_id,
+                    transport,
+                    format!("failed to spawn stdio MCP adapter: {err}"),
+                    false,
+                );
+            }
+        };
+
+        match child.stdin.take() {
+            Some(mut stdin) => {
+                if let Err(err) = stdin.write_all(frame.as_bytes()) {
+                    let _ = child.kill();
+                    return adapter_failure(
+                        &manifest.provider_id,
+                        transport,
+                        format!("failed to write MCP frame to adapter stdin: {err}"),
+                        true,
+                    );
+                }
+            }
+            None => {
+                let _ = child.kill();
+                return adapter_failure(
+                    &manifest.provider_id,
+                    transport,
+                    "failed to open adapter stdin",
+                    true,
+                );
+            }
+        }
+
+        match child.wait_with_output() {
+            Ok(output) => json!({
+                "provider": manifest.provider_id,
+                "transport": transport,
+                "decision": "allowed",
+                "execution_status": if output.status.success() { "completed" } else { "failed" },
+                "exit_status": output.status.code(),
+                "stdout": bounded_utf8(&output.stdout, prepared.stdout_limit_bytes),
+                "stderr": bounded_utf8(&output.stderr, prepared.stderr_limit_bytes),
+                "side_effect_executed": true
+            }),
+            Err(err) => adapter_failure(
+                &manifest.provider_id,
+                transport,
+                format!("failed to wait for stdio MCP adapter: {err}"),
+                true,
+            ),
+        }
+    }
+
+    fn execute_http(
+        manifest: &ProviderManifest,
+        request: &ExternalMcpAdapterRequest,
+        transport: &str,
+    ) -> Value {
+        let Some(url) = request.url.as_deref() else {
+            return adapter_denial(
+                &manifest.provider_id,
+                transport,
+                "argument_schema_invalid",
+                "HTTP MCP adapter requires a url",
+            );
+        };
+        let parsed = match parse_http_url(url) {
+            Ok(parsed) => parsed,
+            Err(reason) => {
+                return adapter_denial(&manifest.provider_id, transport, "egress_denied", reason);
+            }
+        };
+        if !origin_allowed(&parsed.origin, &manifest.allowed_origins) {
+            return adapter_denial(
+                &manifest.provider_id,
+                transport,
+                "egress_denied",
+                "HTTP MCP adapter origin is not allowlisted by the provider manifest",
+            );
+        }
+
+        let body = serde_json::to_vec(&jsonrpc_request(manifest, request))
+            .expect("MCP request serializes");
+        let mut header_lines = String::new();
+        for (name, value) in &request.headers {
+            if safe_header_name(name) && safe_header_value(value) {
+                header_lines.push_str(name);
+                header_lines.push_str(": ");
+                header_lines.push_str(value);
+                header_lines.push_str("\r\n");
+            }
+        }
+        let request_text = format!(
+            "POST {} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nAccept: application/json\r\nContent-Length: {}\r\nConnection: close\r\n{}\r\n",
+            parsed.path_and_query,
+            parsed.host_header,
+            body.len(),
+            header_lines
+        );
+
+        let response = match send_http_request(&parsed, &request_text, &body, request.timeout_ms) {
+            Ok(response) => response,
+            Err(reason) => {
+                return adapter_failure(&manifest.provider_id, transport, reason, true);
+            }
+        };
+        json!({
+            "provider": manifest.provider_id,
+            "transport": transport,
+            "decision": "allowed",
+            "execution_status": if (200..300).contains(&response.status) { "completed" } else { "failed" },
+            "http_status": response.status,
+            "body": response.body,
+            "side_effect_executed": true
+        })
+    }
+
+    fn execute_sse(manifest: &ProviderManifest, request: &ExternalMcpAdapterRequest) -> Value {
+        let transport = "sse";
+        let Some(url) = request.url.as_deref() else {
+            return adapter_denial(
+                &manifest.provider_id,
+                transport,
+                "argument_schema_invalid",
+                "SSE MCP adapter requires a url",
+            );
+        };
+        let parsed = match parse_http_url(url) {
+            Ok(parsed) => parsed,
+            Err(reason) => {
+                return adapter_denial(&manifest.provider_id, transport, "egress_denied", reason);
+            }
+        };
+        if !origin_allowed(&parsed.origin, &manifest.allowed_origins) {
+            return adapter_denial(
+                &manifest.provider_id,
+                transport,
+                "egress_denied",
+                "SSE MCP adapter origin is not allowlisted by the provider manifest",
+            );
+        }
+
+        let request_text = format!(
+            "GET {} HTTP/1.1\r\nHost: {}\r\nAccept: text/event-stream\r\nConnection: close\r\n\r\n",
+            parsed.path_and_query, parsed.host_header
+        );
+        let response = match send_http_request(&parsed, &request_text, &[], request.timeout_ms) {
+            Ok(response) => response,
+            Err(reason) => {
+                return adapter_failure(&manifest.provider_id, transport, reason, true);
+            }
+        };
+        let event = response
+            .body
+            .lines()
+            .find_map(|line| line.strip_prefix("data:").map(str::trim))
+            .unwrap_or_default()
+            .to_string();
+        json!({
+            "provider": manifest.provider_id,
+            "transport": transport,
+            "decision": "allowed",
+            "execution_status": if (200..300).contains(&response.status) && !event.is_empty() { "completed" } else { "failed" },
+            "http_status": response.status,
+            "event": event,
+            "side_effect_executed": true
+        })
     }
 
     pub fn certify_external_provider_manifest(
@@ -1054,6 +1394,194 @@ pub mod external {
             manifest.risk,
             ProviderRisk::NetworkActive | ProviderRisk::CredentialUse
         ) || manifest.side_effects.contains(&SideEffectKind::Network)
+    }
+
+    fn command_is_allowlisted(command: &str, allowlist: &[String]) -> bool {
+        let executable_name = Path::new(command)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(command);
+        allowlist
+            .iter()
+            .any(|allowed| allowed == command || allowed == executable_name)
+    }
+
+    fn jsonrpc_request(manifest: &ProviderManifest, request: &ExternalMcpAdapterRequest) -> Value {
+        if !request.request.is_null() {
+            return request.request.clone();
+        }
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": manifest.tool_identity.as_deref().unwrap_or("call"),
+            "params": {}
+        })
+    }
+
+    fn content_length_frame(value: &Value) -> String {
+        let body = serde_json::to_string(value).expect("MCP request serializes");
+        format!("Content-Length: {}\r\n\r\n{}", body.len(), body)
+    }
+
+    fn bounded_utf8(bytes: &[u8], limit: usize) -> String {
+        let end = bytes.len().min(limit);
+        String::from_utf8_lossy(&bytes[..end]).into_owned()
+    }
+
+    fn adapter_denial(
+        provider: &str,
+        transport: &str,
+        error_kind: &str,
+        reason: impl Into<String>,
+    ) -> Value {
+        json!({
+            "provider": provider,
+            "transport": transport,
+            "decision": "denied",
+            "execution_status": "not_executed",
+            "error_kind": error_kind,
+            "reason": reason.into(),
+            "side_effect_executed": false
+        })
+    }
+
+    fn adapter_failure(
+        provider: &str,
+        transport: &str,
+        reason: impl Into<String>,
+        side_effect_executed: bool,
+    ) -> Value {
+        json!({
+            "provider": provider,
+            "transport": transport,
+            "decision": "allowed",
+            "execution_status": "failed",
+            "reason": reason.into(),
+            "side_effect_executed": side_effect_executed
+        })
+    }
+
+    fn runtime_denial_error_kind(kind: &ProviderRuntimeDenialKind) -> &'static str {
+        match kind {
+            ProviderRuntimeDenialKind::ShellDenied => "provider_not_allowed",
+            ProviderRuntimeDenialKind::CwdEscape => "root_escape",
+            ProviderRuntimeDenialKind::EnvInheritanceDenied
+            | ProviderRuntimeDenialKind::EnvNotAllowed => "scope_violation",
+            ProviderRuntimeDenialKind::NetworkDenied => "egress_denied",
+            ProviderRuntimeDenialKind::TimeoutTooLarge
+            | ProviderRuntimeDenialKind::OutputLimitTooLarge => "budget_exceeded",
+        }
+    }
+
+    struct ParsedHttpUrl {
+        origin: String,
+        host_header: String,
+        socket_addr: String,
+        path_and_query: String,
+    }
+
+    fn parse_http_url(url: &str) -> Result<ParsedHttpUrl, String> {
+        let Some(rest) = url.strip_prefix("http://") else {
+            return Err(
+                "only http:// MCP adapter URLs are supported by this local executor".into(),
+            );
+        };
+        let (authority, path_and_query) = match rest.split_once('/') {
+            Some((authority, path)) => (authority, format!("/{path}")),
+            None => (rest, "/".to_string()),
+        };
+        if authority.is_empty() || authority.contains('@') {
+            return Err("HTTP MCP adapter URL authority is invalid".into());
+        }
+        let (host, port) = match authority.rsplit_once(':') {
+            Some((host, port)) if !host.is_empty() => {
+                let port = port
+                    .parse::<u16>()
+                    .map_err(|_| "HTTP MCP adapter URL port is invalid".to_string())?;
+                (host.to_string(), port)
+            }
+            _ => (authority.to_string(), 80),
+        };
+        let host_header = if port == 80 {
+            host.clone()
+        } else {
+            format!("{host}:{port}")
+        };
+        Ok(ParsedHttpUrl {
+            origin: format!("http://{host_header}"),
+            socket_addr: format!("{host}:{port}"),
+            host_header,
+            path_and_query,
+        })
+    }
+
+    fn origin_allowed(origin: &str, allowed_origins: &[String]) -> bool {
+        allowed_origins.iter().any(|allowed| allowed == origin)
+    }
+
+    fn safe_header_name(name: &str) -> bool {
+        !name.is_empty()
+            && name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-'))
+    }
+
+    fn safe_header_value(value: &str) -> bool {
+        !value.contains('\r') && !value.contains('\n')
+    }
+
+    struct HttpResponse {
+        status: u16,
+        body: String,
+    }
+
+    fn send_http_request(
+        parsed: &ParsedHttpUrl,
+        request_text: &str,
+        body: &[u8],
+        timeout_ms: Option<u64>,
+    ) -> Result<HttpResponse, String> {
+        let timeout = Duration::from_millis(timeout_ms.unwrap_or(5_000));
+        let socket_addr = parsed
+            .socket_addr
+            .to_socket_addrs()
+            .map_err(|err| format!("failed to resolve MCP adapter URL: {err}"))?
+            .next()
+            .ok_or_else(|| "failed to resolve MCP adapter URL".to_string())?;
+        let mut stream = TcpStream::connect_timeout(&socket_addr, timeout)
+            .map_err(|err| format!("failed to connect to MCP adapter: {err}"))?;
+        stream
+            .set_read_timeout(Some(timeout))
+            .map_err(|err| format!("failed to set MCP adapter read timeout: {err}"))?;
+        stream
+            .set_write_timeout(Some(timeout))
+            .map_err(|err| format!("failed to set MCP adapter write timeout: {err}"))?;
+        stream
+            .write_all(request_text.as_bytes())
+            .and_then(|()| stream.write_all(body))
+            .map_err(|err| format!("failed to write MCP adapter HTTP request: {err}"))?;
+        let mut response = Vec::new();
+        stream
+            .read_to_end(&mut response)
+            .map_err(|err| format!("failed to read MCP adapter HTTP response: {err}"))?;
+        parse_http_response(&response)
+    }
+
+    fn parse_http_response(response: &[u8]) -> Result<HttpResponse, String> {
+        let response = String::from_utf8_lossy(response);
+        let (head, body) = response
+            .split_once("\r\n\r\n")
+            .ok_or_else(|| "MCP adapter HTTP response is malformed".to_string())?;
+        let status = head
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .and_then(|status| status.parse::<u16>().ok())
+            .ok_or_else(|| "MCP adapter HTTP status is malformed".to_string())?;
+        Ok(HttpResponse {
+            status,
+            body: body.to_string(),
+        })
     }
 }
 
@@ -1197,8 +1725,28 @@ pub mod catalog {
     }
 
     pub fn default_external_providers() -> Vec<KernelProvider> {
+        default_external_specs()
+            .into_iter()
+            .map(external_provider)
+            .collect()
+    }
+
+    pub fn default_external_provider_manifests() -> Vec<ProviderManifest> {
+        default_external_specs()
+            .into_iter()
+            .map(external_provider_manifest)
+            .collect()
+    }
+
+    pub fn default_external_provider_manifest(provider_id: &str) -> Option<ProviderManifest> {
+        default_external_provider_manifests()
+            .into_iter()
+            .find(|manifest| manifest.provider_id == provider_id)
+    }
+
+    fn default_external_specs() -> Vec<ExternalProviderSpec> {
         vec![
-            external_provider(ExternalProviderSpec {
+            ExternalProviderSpec {
                 id: "external.mcp.browser.open_page",
                 kind: ProviderKind::Mcp,
                 risk: ProviderRisk::NetworkActive,
@@ -1208,8 +1756,8 @@ pub mod catalog {
                 tool_identity: "open_page",
                 declared_permissions: vec!["network"],
                 allowed_origins: vec!["https://example.com"],
-            }),
-            external_provider(ExternalProviderSpec {
+            },
+            ExternalProviderSpec {
                 id: "external.mcp.filesystem.read_file",
                 kind: ProviderKind::Mcp,
                 risk: ProviderRisk::High,
@@ -1219,8 +1767,8 @@ pub mod catalog {
                 tool_identity: "read_file",
                 declared_permissions: vec!["file_read"],
                 allowed_origins: vec![],
-            }),
-            external_provider(ExternalProviderSpec {
+            },
+            ExternalProviderSpec {
                 id: "external.mcp.api.request",
                 kind: ProviderKind::Api,
                 risk: ProviderRisk::NetworkActive,
@@ -1230,8 +1778,8 @@ pub mod catalog {
                 tool_identity: "request",
                 declared_permissions: vec!["network"],
                 allowed_origins: vec!["https://api.example.com"],
-            }),
-            external_provider(ExternalProviderSpec {
+            },
+            ExternalProviderSpec {
                 id: "external.mcp.scanner.run",
                 kind: ProviderKind::Scanner,
                 risk: ProviderRisk::High,
@@ -1241,8 +1789,8 @@ pub mod catalog {
                 tool_identity: "run",
                 declared_permissions: vec!["file_read"],
                 allowed_origins: vec![],
-            }),
-            external_provider(ExternalProviderSpec {
+            },
+            ExternalProviderSpec {
                 id: "external.shell.command",
                 kind: ProviderKind::Shell,
                 risk: ProviderRisk::Destructive,
@@ -1252,8 +1800,8 @@ pub mod catalog {
                 tool_identity: "command",
                 declared_permissions: vec!["process_spawn"],
                 allowed_origins: vec![],
-            }),
-            external_provider(ExternalProviderSpec {
+            },
+            ExternalProviderSpec {
                 id: "external.plugin.security_scan",
                 kind: ProviderKind::Plugin,
                 risk: ProviderRisk::High,
@@ -1263,8 +1811,8 @@ pub mod catalog {
                 tool_identity: "scan",
                 declared_permissions: vec!["file_read"],
                 allowed_origins: vec![],
-            }),
-            external_provider(ExternalProviderSpec {
+            },
+            ExternalProviderSpec {
                 id: "external.skill.assessment_helper",
                 kind: ProviderKind::Skill,
                 risk: ProviderRisk::Medium,
@@ -1274,8 +1822,8 @@ pub mod catalog {
                 tool_identity: "run",
                 declared_permissions: vec!["analysis"],
                 allowed_origins: vec![],
-            }),
-            external_provider(ExternalProviderSpec {
+            },
+            ExternalProviderSpec {
                 id: "external.enterprise.ticket_lookup",
                 kind: ProviderKind::Enterprise,
                 risk: ProviderRisk::CredentialUse,
@@ -1285,7 +1833,7 @@ pub mod catalog {
                 tool_identity: "lookup",
                 declared_permissions: vec!["network", "credential_use"],
                 allowed_origins: vec!["https://tickets.example.com"],
-            }),
+            },
         ]
     }
 
@@ -1333,8 +1881,13 @@ pub mod catalog {
     }
 
     fn external_provider(spec: ExternalProviderSpec) -> KernelProvider {
+        let manifest = external_provider_manifest(spec);
+        ProviderContract::from_manifest(&manifest).provider
+    }
+
+    fn external_provider_manifest(spec: ExternalProviderSpec) -> ProviderManifest {
         let schema = json!({"type":"object"});
-        let manifest = ProviderManifest {
+        ProviderManifest {
             schema_version: "1".to_string(),
             provider_id: spec.id.to_string(),
             provider_class: ProviderClass::External,
@@ -1366,8 +1919,7 @@ pub mod catalog {
             },
             schema_pin: ProviderSchemaPin::new(schema.clone()),
             observed_schema: schema,
-        };
-        ProviderContract::from_manifest(&manifest).provider
+        }
     }
 
     fn object_schema(description: &str) -> Value {

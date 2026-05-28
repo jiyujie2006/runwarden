@@ -16,11 +16,14 @@ runwarden provider call --provider runwarden.input.inspect --input input.txt --j
 runwarden provider call --provider runwarden.evidence.inspect --root evidence --json
 runwarden approval pending --json
 runwarden approval approve approval-1 --reviewer reviewer_alice --reason "reviewed scope and risk" --json
+runwarden authority create --approval approval-1 --session enterprise_ops --provider external.mcp.browser.open_page --action open_page --arguments '{"url":"https://example.com"}' --authz authz-1 --actor agent-1 --json
+runwarden authority inspect approval-1 --json
 runwarden trace verify --trace trace.json --json
 runwarden trace export --trace trace.json --provider runwarden.input.inspect --offset 0 --limit 100 --compact-refs --json
 runwarden report lint --report report.json --trace trace.json --json
 runwarden report render --report report.json --trace trace.json --format html --json
 runwarden eval all --json
+runwarden eval scenarios --json
 runwarden eval agent-native --json
 runwarden cert all --json
 runwarden cert provider-manifest --json

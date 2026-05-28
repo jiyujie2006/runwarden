@@ -1,0 +1,8 @@
+[
+  {
+    "provider": "external.mcp.browser.open_page",
+    "action": "open_page",
+    "decision": "denied",
+    "execution_status": "not_executed"
+  }
+]

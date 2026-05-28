@@ -1,0 +1,18 @@
+version = "0.1"
+name = "government-office-assistant"
+mode = "offline"
+provider_allowlist = [
+  "runwarden.input.inspect",
+  "runwarden.report.lint",
+  "external.mcp.api.request",
+]
+
+[actor]
+id = "agent-government"
+
+[authorization]
+id = "authz-government"
+state = "active"
+
+[active_assessment]
+enabled = true

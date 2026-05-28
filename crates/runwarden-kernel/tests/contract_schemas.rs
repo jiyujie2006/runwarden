@@ -110,8 +110,8 @@ fn checked_in_schema_artifacts_match_rust_contracts() {
 #[test]
 fn typescript_sdk_contract_enums_match_rust_schema_values() {
     let root = workspace_root();
-    let sdk = fs::read_to_string(root.join("packages/agent-sdk/src/index.ts"))
-        .expect("read SDK contracts");
+    let sdk = fs::read_to_string(root.join("packages/agent-sdk/src/generated/contracts.ts"))
+        .expect("read generated SDK contracts");
     let provider_outcome = read_schema(&root, "provider-outcome.schema.json");
     let approval_record = read_schema(&root, "approval-record.schema.json");
 
@@ -132,6 +132,31 @@ fn typescript_sdk_contract_enums_match_rust_schema_values() {
         &sdk,
         &approval_record["definitions"]["ApprovalState"]["enum"],
     );
+}
+
+#[test]
+fn generated_typescript_contracts_are_checked_by_gate_script() {
+    let root = workspace_root();
+
+    assert!(
+        root.join("packages/agent-sdk/scripts/generate-contracts.mjs")
+            .exists(),
+        "TypeScript declaration generator is missing"
+    );
+    assert!(
+        root.join("scripts/check_ts_contracts.sh").exists(),
+        "generated TypeScript contract diff gate is missing"
+    );
+    assert!(
+        root.join("packages/agent-sdk/src/generated/contracts.ts")
+            .exists(),
+        "generated TypeScript contract output is missing"
+    );
+
+    let dev_gate = fs::read_to_string(root.join("scripts/dev_gate.sh")).expect("read dev gate");
+    let pr_gate = fs::read_to_string(root.join("scripts/pr_fast_gate.sh")).expect("read pr gate");
+    assert!(dev_gate.contains("scripts/check_ts_contracts.sh"));
+    assert!(pr_gate.contains("scripts/check_ts_contracts.sh"));
 }
 
 fn assert_schema_title(schema: schemars::schema::RootSchema, expected: &str) {

@@ -1,0 +1,14 @@
+[
+  {
+    "provider": "runwarden.input.inspect",
+    "action": "inspect",
+    "decision": "allowed",
+    "execution_status": "completed"
+  },
+  {
+    "provider": "external.shell.command",
+    "action": "command",
+    "decision": "denied",
+    "execution_status": "not_executed"
+  }
+]

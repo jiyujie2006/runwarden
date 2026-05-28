@@ -21,15 +21,18 @@ use runwarden_assurance::report::{
     RenderFormat, ReportDraft, lint_report_against_trace, render_report, scaffold_report_from_trace,
 };
 use runwarden_kernel::artifact::ArtifactManifest;
-use runwarden_kernel::authority::{ApprovalRecord, ApprovalState};
+use runwarden_kernel::authority::{ApprovalBinding, ApprovalRecord, ApprovalState};
 use runwarden_kernel::evidence::{InMemoryTraceStore, TraceEvent, TraceQuery, hex_sha256};
 use runwarden_kernel::manifest::{AssessmentManifest, SessionManifest};
 use runwarden_providers::catalog::{
-    EXTERNAL_PROVIDER_IDS, FIRST_PARTY_PROVIDER_IDS, default_external_providers,
-    first_party_registry, full_provider_registry,
+    EXTERNAL_PROVIDER_IDS, FIRST_PARTY_PROVIDER_IDS, default_external_provider_manifest,
+    default_external_providers, first_party_registry, full_provider_registry,
 };
 use runwarden_providers::evidence::{EvidenceInspectPolicy, inspect_evidence_root};
-use runwarden_providers::external::{certify_external_provider_manifest, load_provider_manifest};
+use runwarden_providers::external::{
+    ExternalMcpAdapterRequest, certify_external_provider_manifest, execute_external_mcp_adapter,
+    load_provider_manifest,
+};
 use runwarden_providers::input::{InputInspectPolicy, InputSource, inspect_input};
 use runwarden_providers::runtime::{
     ProviderRuntime, ProviderRuntimeDenialKind, ProviderRuntimePolicy, ProviderRuntimeRequest,
@@ -91,6 +94,10 @@ enum Command {
     Approval {
         #[command(subcommand)]
         command: ApprovalCommand,
+    },
+    Authority {
+        #[command(subcommand)]
+        command: AuthorityCommand,
     },
     Release {
         #[command(subcommand)]
@@ -167,6 +174,10 @@ enum EvalCommand {
         trace: Option<PathBuf>,
         #[arg(long = "expected-obs")]
         expected_obs: Vec<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    Scenarios {
         #[arg(long)]
         json: bool,
     },
@@ -360,6 +371,35 @@ enum ApprovalCommand {
 }
 
 #[derive(Debug, Subcommand)]
+enum AuthorityCommand {
+    Create {
+        #[arg(long)]
+        approval: String,
+        #[arg(long)]
+        session: String,
+        #[arg(long)]
+        provider: String,
+        #[arg(long)]
+        action: String,
+        #[arg(long, default_value = "{}")]
+        arguments: String,
+        #[arg(long = "argument-hash")]
+        argument_hash: Option<String>,
+        #[arg(long)]
+        authz: Option<String>,
+        #[arg(long)]
+        actor: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    Inspect {
+        approval_id: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 enum ApiCommand {
     Serve {
         #[arg(long, default_value = "127.0.0.1")]
@@ -530,6 +570,20 @@ fn run() -> anyhow::Result<()> {
                     anyhow::bail!("eval agent-native failed");
                 }
             }
+            EvalCommand::Scenarios { json } => {
+                let root = find_workspace_root(env::current_dir()?)?;
+                let result = evaluate_scenario_corpora(&root)?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                } else if result["passed"].as_bool() == Some(true) {
+                    println!("eval scenarios passed");
+                } else {
+                    println!("eval scenarios failed");
+                }
+                if result["passed"].as_bool() != Some(true) {
+                    anyhow::bail!("eval scenarios failed");
+                }
+            }
         },
         Command::Cert { command } => match command {
             CertCommand::All { json } => {
@@ -582,6 +636,7 @@ fn run() -> anyhow::Result<()> {
                         "script",
                         &[
                             "scripts/dev_gate.sh",
+                            "scripts/check_ts_contracts.sh",
                             "scripts/pr_fast_gate.sh",
                             "scripts/nightly_full_gate.sh",
                             "scripts/security_gate_local.sh",
@@ -886,6 +941,56 @@ fn run() -> anyhow::Result<()> {
                 }
             }
         },
+        Command::Authority { command } => match command {
+            AuthorityCommand::Create {
+                approval,
+                session,
+                provider,
+                action,
+                arguments,
+                argument_hash,
+                authz,
+                actor,
+                json,
+            } => {
+                safe_record_id(&approval)?;
+                let computed_hash = match argument_hash {
+                    Some(hash) => hash,
+                    None => argument_hash_from_json(&arguments)?,
+                };
+                let approval = ApprovalRecord::new(
+                    approval,
+                    ApprovalBinding {
+                        session_id: session,
+                        provider,
+                        action,
+                        argument_hash: computed_hash,
+                        authz_id: authz,
+                        actor_id: actor,
+                    },
+                );
+                write_approval(&approval)?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&approval)?);
+                } else {
+                    println!("created authority approval {}", approval.approval_id);
+                }
+            }
+            AuthorityCommand::Inspect { approval_id, json } => {
+                let approval = read_approval(&approval_id)?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&approval)?);
+                } else {
+                    println!(
+                        "{} {} {} {}",
+                        approval.approval_id,
+                        approval.binding.provider,
+                        approval.binding.action,
+                        approval.binding.argument_hash
+                    );
+                }
+            }
+        },
         Command::Release { command } => match command {
             ReleaseCommand::Smoke { json } => {
                 let root = find_workspace_root(env::current_dir()?)?;
@@ -1061,6 +1166,32 @@ fn call_external_provider(
                     "side_effect_executed": denial.side_effect_executed
                 })),
             }
+        }
+        other if other.starts_with("external.mcp.") => {
+            let input_path = input.ok_or_else(|| {
+                anyhow::anyhow!("--input JSON is required for external MCP adapter calls")
+            })?;
+            let request_body = fs::read_to_string(&input_path)?;
+            let request: ExternalMcpAdapterRequest = serde_json::from_str(&request_body)?;
+            let manifest = if let Some(manifest_path) = &request.manifest_path {
+                let manifest_body = fs::read_to_string(manifest_path)?;
+                load_provider_manifest(&manifest_body)?
+            } else {
+                default_external_provider_manifest(other).ok_or_else(|| {
+                    anyhow::anyhow!("missing default external provider manifest: {other}")
+                })?
+            };
+            if manifest.provider_id != other {
+                anyhow::bail!(
+                    "external MCP manifest provider_id {} does not match requested provider {other}",
+                    manifest.provider_id
+                );
+            }
+            Ok(execute_external_mcp_adapter(
+                &manifest,
+                &request,
+                root.as_deref(),
+            ))
         }
         other => Ok(json!({
             "provider": other,
@@ -1319,6 +1450,140 @@ fn load_agent_native_cases(
         .collect()
 }
 
+fn evaluate_scenario_corpora(root: &Path) -> anyhow::Result<serde_json::Value> {
+    let scenarios_dir = root.join("scenarios");
+    let mut entries = fs::read_dir(&scenarios_dir)?.collect::<Result<Vec<_>, _>>()?;
+    entries.sort_by_key(|entry| entry.file_name());
+
+    let mut cases = Vec::new();
+    let mut passed = true;
+    for entry in entries {
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let scenario_path = entry.path();
+        let scenario = entry.file_name().to_string_lossy().into_owned();
+        let mut missing = Vec::new();
+        for relative_path in scenario_corpus_required_files() {
+            if !scenario_path.join(relative_path).exists() {
+                missing.push((*relative_path).to_string());
+            }
+        }
+
+        let case = if missing.is_empty() {
+            let obs_refs = read_obs_refs(&scenario_path.join("expected/obs-refs.json"))?;
+            let report = read_report(&scenario_path.join("expected/report.json"))?;
+            let mut store = InMemoryTraceStore::default();
+            for obs_ref in &obs_refs {
+                store.append_signed(
+                    obs_ref.clone(),
+                    "scenario_golden".to_string(),
+                    Some("runwarden.eval.scenarios".to_string()),
+                    json!({ "scenario": scenario }),
+                );
+            }
+            let trace_events = store.query(TraceQuery {
+                limit: obs_refs.len().max(1),
+                ..TraceQuery::default()
+            });
+            let eval = evaluate_report_assurance(
+                &report,
+                &trace_events.events,
+                obs_refs.clone(),
+                EvalThresholds::strict(),
+            );
+            let baseline = read_json_value(&scenario_path.join("expected/eval-baseline.json"))?;
+            let expected_pass = baseline
+                .get("expected_pass")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(true);
+            let baseline_passed = eval.passed == expected_pass
+                && eval.metrics.trace_completeness
+                    >= baseline
+                        .get("min_trace_completeness")
+                        .and_then(serde_json::Value::as_f64)
+                        .unwrap_or(1.0)
+                && eval.metrics.report_citation_accuracy
+                    >= baseline
+                        .get("min_report_citation_accuracy")
+                        .and_then(serde_json::Value::as_f64)
+                        .unwrap_or(1.0);
+
+            let denials = read_json_value(&scenario_path.join("expected/denials.json"))?;
+            let provider_calls =
+                read_json_value(&scenario_path.join("expected/provider-calls.json"))?;
+            let case_passed = baseline_passed && !obs_refs.is_empty();
+            if !case_passed {
+                passed = false;
+            }
+            json!({
+                "id": scenario,
+                "passed": case_passed,
+                "obs_refs": obs_refs,
+                "denial_count": denials.as_array().map_or(0, Vec::len),
+                "provider_call_count": provider_calls.as_array().map_or(0, Vec::len),
+                "metrics": eval.metrics,
+                "failures": eval.failures
+            })
+        } else {
+            passed = false;
+            json!({
+                "id": scenario,
+                "passed": false,
+                "missing": missing
+            })
+        };
+        cases.push(case);
+    }
+
+    if cases.is_empty() {
+        passed = false;
+    }
+
+    Ok(json!({
+        "suite": "scenario-golden-corpus",
+        "passed": passed,
+        "case_count": cases.len(),
+        "cases": cases,
+        "side_effect_executed": false
+    }))
+}
+
+fn scenario_corpus_required_files() -> &'static [&'static str] {
+    &[
+        "README.md",
+        "manifests/assessment.toml",
+        "attacks/prompt-injection.md",
+        "benign/request.md",
+        "expected/denials.json",
+        "expected/provider-calls.json",
+        "expected/obs-refs.json",
+        "expected/report.json",
+        "expected/eval-baseline.json",
+    ]
+}
+
+fn read_obs_refs(path: &Path) -> anyhow::Result<Vec<String>> {
+    let value = read_json_value(path)?;
+    let values = value
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("{} must contain a JSON array", path.display()))?;
+    values
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(ToString::to_string)
+                .ok_or_else(|| anyhow::anyhow!("{} contains a non-string obs ref", path.display()))
+        })
+        .collect()
+}
+
+fn read_json_value(path: &Path) -> anyhow::Result<serde_json::Value> {
+    let body = fs::read_to_string(path)?;
+    Ok(serde_json::from_str(&body)?)
+}
+
 fn expectation_for_config_path(path: &Path) -> AgentNativeExpectation {
     let name = path
         .file_name()
@@ -1457,6 +1722,7 @@ fn workspace_provenance() -> serde_json::Value {
         "subject": [
             {"name": "runwarden"},
             {"name": "runwarden-mcp"},
+            {"name": "runwarden-kernel"},
             {"name": "runwarden-artifacts"}
         ],
         "buildType": "runwarden.local.release-evidence.v1",
@@ -1473,7 +1739,9 @@ fn release_smoke_report(root: &Path) -> anyhow::Result<serde_json::Value> {
     let cert = certify_workspace(root);
     let bench = benchmark_workspace(root)?;
     let agent_native = evaluate_agent_native_configs(&load_agent_native_cases(root, Vec::new())?);
-    let passed = cert.passed && bench.passed && agent_native.passed;
+    let scenario_eval = evaluate_scenario_corpora(root)?;
+    let scenario_eval_passed = scenario_eval["passed"].as_bool() == Some(true);
+    let passed = cert.passed && bench.passed && agent_native.passed && scenario_eval_passed;
 
     Ok(json!({
         "passed": passed,
@@ -1493,6 +1761,11 @@ fn release_smoke_report(root: &Path) -> anyhow::Result<serde_json::Value> {
                 "passed": agent_native.passed,
                 "metrics": agent_native.metrics,
                 "cases": agent_native.cases
+            },
+            {
+                "id": "scenario_golden_corpus",
+                "passed": scenario_eval_passed,
+                "suite": scenario_eval
             }
         ],
         "side_effect_executed": false
@@ -1528,15 +1801,28 @@ fn reviewer_console_html(bind: &str, port: u16) -> String {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Runwarden Reviewer Console</title>
   <style>
-    body {{ margin: 0; font-family: system-ui, sans-serif; background: #f7f5ef; color: #1f2a24; }}
-    main {{ display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }}
-    nav {{ background: #21352c; color: white; padding: 24px; }}
-    nav a {{ color: white; display: block; margin: 0 0 14px; text-decoration: none; }}
-    section {{ padding: 24px; }}
+    body {{ margin: 0; font-family: "IBM Plex Sans", system-ui, sans-serif; background: #f7f8f4; color: #20241f; }}
+    main {{ display: grid; grid-template-columns: 220px minmax(0, 1fr) 320px; min-height: 100vh; }}
+    nav {{ background: #151813; color: #f3faf5; padding: 24px; }}
+    nav a {{ color: inherit; display: block; margin: 0 0 14px; padding: 9px 10px; border-radius: 6px; text-decoration: none; }}
+    nav a:hover {{ background: #262d24; }}
+    section {{ padding: 24px; min-width: 0; }}
     .strip {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 24px; }}
     .pill, .module {{ border: 1px solid #d8d1c5; background: white; border-radius: 6px; padding: 14px; }}
     .grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }}
+    .actions {{ display: flex; gap: 8px; margin-top: 12px; }}
+    button {{ border: 1px solid #cdd5c8; background: white; border-radius: 6px; min-height: 44px; padding: 8px 12px; }}
+    button:hover {{ border-color: #2f6f4e; background: #eef1ea; }}
+    button:focus-visible, nav a:focus-visible {{ outline: 2px solid #2f6f4e; outline-offset: 2px; }}
+    aside {{ border-left: 1px solid #cdd5c8; background: white; padding: 24px; min-width: 0; }}
+    textarea {{ width: 100%; min-height: 88px; box-sizing: border-box; }}
     code {{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }}
+    @media (max-width: 980px) {{
+      main {{ grid-template-columns: 1fr; }}
+      nav {{ display: flex; gap: 6px; overflow-x: auto; }}
+      .strip, .grid {{ grid-template-columns: 1fr; }}
+      aside {{ border-left: 0; border-top: 1px solid #cdd5c8; }}
+    }}
   </style>
 </head>
 <body>
@@ -1556,12 +1842,17 @@ fn reviewer_console_html(bind: &str, port: u16) -> String {
       <div class="pill"><span>Approvals</span><br><strong>unknown</strong></div>
     </div>
     <div class="grid">
-      <article class="module" id="approvals"><h2>Approval Queue</h2><p>No actions waiting for review</p></article>
+      <article class="module" id="approvals"><h2>Approval Queue</h2><p>No actions waiting for review</p><div class="actions"><button data-action="approve">Approve</button><button data-action="deny">Deny</button></div></article>
       <article class="module" id="trace"><h2>Trace Explorer</h2><p>No trace events yet</p></article>
       <article class="module"><h2>Reports</h2><p>No report rendered</p></article>
       <article class="module" id="artifacts"><h2>Artifacts</h2><p>No artifacts generated</p></article>
     </div>
   </section>
+  <aside aria-label="Approval details">
+    <h2>Approval Details</h2>
+    <p>Select an approval to inspect provider, action, authz, actor, argument hash, and obs refs.</p>
+    <label>Reason<textarea name="reason"></textarea></label>
+  </aside>
 </main>
 </body>
 </html>
@@ -1716,6 +2007,12 @@ fn write_approval(approval: &ApprovalRecord) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn argument_hash_from_json(arguments: &str) -> anyhow::Result<String> {
+    let value: serde_json::Value = serde_json::from_str(arguments)?;
+    let bytes = serde_json::to_vec(&value)?;
+    Ok(hex_sha256(&bytes))
+}
+
 fn safe_record_id(record_id: &str) -> anyhow::Result<&str> {
     if record_id.is_empty()
         || !record_id
@@ -1772,8 +2069,11 @@ fn run_strict_check() -> anyhow::Result<()> {
         "tests/fixtures/default-trace.json",
         "tests/fixtures/default-report.json",
         "scripts/dev_gate.sh",
+        "scripts/check_ts_contracts.sh",
         "scripts/release_gate_local.sh",
         ".github/workflows/ci.yml",
+        "crates/runwarden-kernel/src/main.rs",
+        "packages/agent-sdk/src/generated/contracts.ts",
     ];
 
     for path in required_paths {
@@ -1787,6 +2087,7 @@ fn run_strict_check() -> anyhow::Result<()> {
     for command in [
         "runwarden cert all --json",
         "runwarden eval all --json",
+        "runwarden eval scenarios --json",
         "runwarden eval agent-native --json",
         "runwarden bench run --json",
         "runwarden artifact verify --artifacts artifacts --manifest artifacts/artifact-manifest.json --json",
@@ -1812,13 +2113,66 @@ fn run_strict_check() -> anyhow::Result<()> {
         anyhow::bail!("strict check failed: external provider catalog is empty");
     }
 
+    for path in reference_doc_required_paths() {
+        if !root.join(path).exists() {
+            anyhow::bail!("strict check failed: missing reference doc {path}");
+        }
+    }
+
+    let scenario_eval = evaluate_scenario_corpora(&root)?;
+    if scenario_eval["passed"].as_bool() != Some(true) {
+        anyhow::bail!("strict check failed: scenario golden corpus eval did not pass");
+    }
+
+    let dev_gate = fs::read_to_string(root.join("scripts/dev_gate.sh"))?;
+    let pr_gate = fs::read_to_string(root.join("scripts/pr_fast_gate.sh"))?;
+    if !dev_gate.contains("scripts/check_ts_contracts.sh")
+        || !pr_gate.contains("scripts/check_ts_contracts.sh")
+    {
+        anyhow::bail!("strict check failed: generated TypeScript contract check is not gated");
+    }
+
+    let release_workflow = fs::read_to_string(root.join(".github/workflows/release.yml"))?;
+    if !release_workflow.contains("target/release/runwarden*")
+        || !root.join("crates/runwarden-kernel/src/main.rs").exists()
+    {
+        anyhow::bail!("strict check failed: release binary matrix does not include named binaries");
+    }
+
     println!("runwarden strict check passed");
     println!("- schema artifacts present");
     println!("- first-party provider catalog present");
+    println!("- scenario golden corpora present");
+    println!("- split reference docs present");
+    println!("- generated TypeScript contracts present");
+    println!("- release binary matrix present");
     println!("- design contract present");
     println!("- release gate scripts present");
     println!("- release assurance commands present");
     Ok(())
+}
+
+fn reference_doc_required_paths() -> &'static [&'static str] {
+    &[
+        "docs/reference/rust-kernel-ts-interaction.md",
+        "docs/reference/provider-model.md",
+        "docs/reference/authority-and-session.md",
+        "docs/reference/evidence-and-accountability.md",
+        "docs/reference/threat-model.md",
+        "docs/reference/agent-integration.md",
+        "docs/reference/provider-integration.md",
+        "docs/reference/webui-review-console.md",
+        "docs/reference/release-installation.md",
+        "docs/reference/first-scenario.md",
+        "docs/reference/kernel-manifest.md",
+        "docs/reference/provider-manifest.md",
+        "docs/reference/assessment-manifest.md",
+        "docs/reference/provider-contract.md",
+        "docs/reference/artifact-manifest.md",
+        "docs/reference/json-contracts.md",
+        "docs/reference/ci.md",
+        "docs/reference/roadmap.md",
+    ]
 }
 
 fn find_workspace_root(mut current: PathBuf) -> anyhow::Result<PathBuf> {
@@ -1942,7 +2296,9 @@ fn certify_release_artifact_surface(root: &Path) -> CertReport {
         && workflow.contains("actions/upload-artifact")
         && workflow.contains("softprops/action-gh-release")
         && root.join("scripts/generate_artifacts.sh").exists()
-        && root.join("scripts/artifact_leak_scan.sh").exists();
+        && root.join("scripts/artifact_leak_scan.sh").exists()
+        && root.join("crates/runwarden-kernel/src/main.rs").exists()
+        && workflow.contains("target/release/runwarden*");
     CertReport {
         passed,
         checks: vec![cert_check(

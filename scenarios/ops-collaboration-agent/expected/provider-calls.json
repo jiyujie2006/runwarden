@@ -1,0 +1,8 @@
+[
+  {
+    "provider": "external.enterprise.ticket_lookup",
+    "action": "lookup",
+    "decision": "requires_review",
+    "execution_status": "not_executed"
+  }
+]

@@ -1,0 +1,14 @@
+[
+  {
+    "provider": "runwarden.evidence.inspect",
+    "action": "inspect",
+    "decision": "denied",
+    "execution_status": "not_executed"
+  },
+  {
+    "provider": "runwarden.trace.export",
+    "action": "export",
+    "decision": "allowed",
+    "execution_status": "completed"
+  }
+]
