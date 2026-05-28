@@ -24,3 +24,7 @@ For local review, generate the static launch bundle with:
 ```bash
 runwarden ui --bind 127.0.0.1 --port 8088 --artifacts artifacts --json
 ```
+
+`--artifacts` must be a relative workspace path. The launch writer rejects
+absolute paths, parent traversal, and symlink escapes before writing. The bind
+value is escaped before it is embedded in the generated HTML.

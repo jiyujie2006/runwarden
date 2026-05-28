@@ -26,6 +26,10 @@ MCP mapping rules:
   chain before report use.
 - `runwarden.trace.export` accepts inline `trace_events`, provider/event/obs
   filters, offset/limit pagination, byte budgets, and optional compact obs refs.
+- Stdio framing rejects raw payloads and `Content-Length` bodies above 1 MiB,
+  and rejects headers above 16 KiB before allocating the body.
+- MCP helper encoders reject messages that do not serialize to JSON instead of
+  emitting malformed frames.
 
 Minimal flow:
 

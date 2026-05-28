@@ -10,5 +10,7 @@ The UI contract requires:
 - minimum 44 px action targets
 - keyboard focus styling
 - no inline script execution
+- escaped bind text in generated HTML
+- launch bundles written only to relative workspace artifact paths
 
 The CLI can write a launch bundle with `runwarden ui --artifacts artifacts --json`.

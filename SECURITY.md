@@ -10,4 +10,7 @@ Security-sensitive invariants:
 - Rust kernel code owns authorization and enforcement decisions.
 - TypeScript code must not duplicate allow/deny logic.
 - Reports must cite verified `obs_*` events.
-
+- External MCP adapters must enforce trusted roots, command allowlists, private
+  egress denial, frame/output limits, and timeout cleanup before side effects.
+- Artifact and UI writers must reject absolute output paths, parent traversal,
+  and symlink escapes.

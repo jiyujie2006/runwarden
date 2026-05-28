@@ -45,3 +45,12 @@ runwarden api serve --bind 127.0.0.1 --port 8088 --once --json
 cert, eval, and bench providers, including `runwarden.eval.agent-native`.
 When no session is supplied, `provider list` includes first-party providers and
 the certified external provider families declared in the kernel-managed catalog.
+
+Approval-bound CLI provider calls bind file contents, not only file paths. When
+`input_path`, `trace_path`, `report_path`, or an external MCP manifest path is
+part of the approved call, the CLI records a SHA-256 digest before approval
+matching and rechecks it immediately before execution.
+
+Artifact and UI output arguments (`--output`, `--artifacts`) must be relative
+workspace paths. Absolute paths, parent traversal, and symlink escapes are
+rejected before writing bundles.

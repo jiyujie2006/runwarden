@@ -29,9 +29,13 @@ gate coverage.
   bench, approval, artifact submission/verification, release smoke, and UI
   launch checks.
 - Local API security primitives for launch-token, Host/Origin, approval
-  mutation, approval queue, and one-time artifact download tokens.
+  mutation, approval queue, one-time artifact download tokens, relative
+  workspace artifact roots, and reviewer-console HTML escaping.
 - TypeScript SDK, config tools, MCP helpers, and a dependency-free reviewer
   console renderer.
+- Hardened external MCP adapters for trusted stdio roots, exact command
+  allowlists, DNS-rebinding-resistant egress checks, bounded frames/output, and
+  process-tree cleanup.
 - CI/release evidence gates with schema drift checks, cert, bench, artifact
   leak scanning, and release smoke coverage.
 

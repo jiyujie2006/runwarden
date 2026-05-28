@@ -22,6 +22,7 @@ All notable changes to Runwarden are documented in this file.
 - Ensured MCP `runwarden.provider.call` respects kernel session allowlists before executing inline providers.
 - Reported external providers without an adapter as incomplete instead of completed.
 - Closed the recorded follow-up gaps from the initial plan completion audit.
+- Hardened external MCP stdio execution, DNS rebinding/private egress checks, MCP stdio frame bounds, CLI approval file-digest binding, actor-bound authz, artifact/UI output path containment, reviewer-console HTML escaping, semantic redaction sidecar verification, and semantic report citation linting.
 
 ### Changed
 
