@@ -33,6 +33,26 @@ fn cwd_escape_is_denied_before_process_spawn() {
     assert!(!denial.side_effect_executed);
 }
 
+#[cfg(unix)]
+#[test]
+fn cwd_symlink_escape_is_denied_before_process_spawn() {
+    use std::fs;
+    use std::os::unix::fs::symlink;
+
+    let root = tempfile::tempdir().expect("root");
+    let outside = tempfile::tempdir().expect("outside");
+    fs::create_dir_all(outside.path().join("provider")).expect("outside provider");
+    symlink(outside.path().join("provider"), root.path().join("link")).expect("symlink");
+
+    let policy = ProviderRuntimePolicy::locked_to_root(root.path());
+    let request = ProviderRuntimeRequest::new("runwarden-provider").cwd(root.path().join("link"));
+
+    let denial = ProviderRuntime::prepare(&policy, &request).expect_err("cwd escape denied");
+
+    assert_eq!(denial.kind, ProviderRuntimeDenialKind::CwdEscape);
+    assert!(!denial.side_effect_executed);
+}
+
 #[test]
 fn parent_environment_inheritance_is_denied_when_scrubbed() {
     let request = request().inherit_parent_env(true);

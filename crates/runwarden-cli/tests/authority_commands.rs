@@ -104,7 +104,7 @@ fn provider_call_executes_external_mcp_stdio_adapter_from_manifest() {
               "provider_id": "external.mcp.browser.open_page",
               "provider_class": "external",
               "kind": "mcp",
-              "risk": "network_active",
+              "risk": "high",
               "side_effects": ["process_spawn"],
               "transport": "stdio",
               "downstream_identity": "browser-mcp",

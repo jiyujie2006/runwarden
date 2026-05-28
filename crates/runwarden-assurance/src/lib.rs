@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use runwarden_kernel::evidence::TraceEvent;
+use runwarden_kernel::evidence::{InMemoryTraceStore, TraceEvent};
 use serde::{Deserialize, Serialize};
 
 pub const FAST_GATE_NAME: &str = "runwarden-fast-gate";
@@ -219,6 +219,15 @@ pub mod artifact {
                 return;
             }
         };
+        if symlink_escapes(artifact_root, &sidecar_path) {
+            findings.push(artifact_error(
+                ArtifactErrorKind::SymlinkEscape,
+                sidecar_relative_path.clone(),
+                "redaction sidecar path resolves outside the artifact root",
+                false,
+            ));
+            return;
+        }
         match fs::read(&sidecar_path) {
             Ok(bytes) => {
                 if entry.redaction_sidecar_sha256.as_deref() != Some(hex_sha256(&bytes).as_str()) {
@@ -416,6 +425,7 @@ pub mod report {
     pub enum ReportLintErrorKind {
         UncitedClaim,
         UnknownObservation,
+        TraceTampered,
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -450,11 +460,21 @@ pub mod report {
         report: &ReportDraft,
         trace_events: &[TraceEvent],
     ) -> ReportLintResult {
+        let mut errors = Vec::new();
+        if let Err(err) = verify_trace_hash_chain(trace_events) {
+            errors.push(ReportLintError {
+                kind: ReportLintErrorKind::TraceTampered,
+                claim_id: String::new(),
+                obs_ref: Some(err.obs_id),
+                message: format!("trace hash chain is invalid: {}", err.reason),
+            });
+            return ReportLintResult { ok: false, errors };
+        }
+
         let known_obs_refs: BTreeSet<_> = trace_events
             .iter()
             .map(|event| event.obs_id.clone())
             .collect();
-        let mut errors = Vec::new();
 
         for claim in &report.claims {
             if claim.obs_refs.is_empty() {
@@ -483,6 +503,16 @@ pub mod report {
             ok: errors.is_empty(),
             errors,
         }
+    }
+
+    fn verify_trace_hash_chain(
+        trace_events: &[TraceEvent],
+    ) -> Result<(), runwarden_kernel::evidence::TraceVerificationError> {
+        let mut store = InMemoryTraceStore::default();
+        for event in trace_events {
+            store.append(event.clone());
+        }
+        store.verify_hash_chain()
     }
 
     pub fn scaffold_report_from_trace(trace_events: &[TraceEvent]) -> ReportDraft {

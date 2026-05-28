@@ -4,6 +4,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::path::{Component, Path, PathBuf};
 
 use serde_json::Value;
+use time::OffsetDateTime;
 
 use crate::authority::{ApprovalBinding, ApprovalRecord, ApprovalState, ApprovalTransitionError};
 use crate::contracts::{
@@ -373,31 +374,44 @@ impl KernelEnforcer {
                 ErrorKind::ApprovalInvalid,
                 "approval is still pending reviewer decision",
             ),
-            ApprovalState::Approved => match approval.consume_once(&binding) {
-                Ok(()) => allow(
-                    call,
-                    "approval",
-                    "bound approval consumed before side effect",
-                ),
-                Err(ApprovalTransitionError::BindingMismatch) => deny(
-                    call,
-                    "approval",
-                    ErrorKind::ApprovalInvalid,
-                    "approval binding does not match this provider call",
-                ),
-                Err(ApprovalTransitionError::AlreadyConsumed) => deny(
-                    call,
-                    "approval",
-                    ErrorKind::ApprovalConsumed,
-                    "approval was already consumed",
-                ),
-                Err(ApprovalTransitionError::InvalidState) => deny(
-                    call,
-                    "approval",
-                    ErrorKind::ApprovalInvalid,
-                    "approval cannot be consumed from its current state",
-                ),
-            },
+            ApprovalState::Approved => {
+                if approval
+                    .expires_at
+                    .is_some_and(|expires_at| expires_at <= OffsetDateTime::now_utc())
+                {
+                    return deny(
+                        call,
+                        "approval",
+                        ErrorKind::ApprovalExpired,
+                        "approval is expired",
+                    );
+                }
+                match approval.consume_once(&binding) {
+                    Ok(()) => allow(
+                        call,
+                        "approval",
+                        "bound approval consumed before side effect",
+                    ),
+                    Err(ApprovalTransitionError::BindingMismatch) => deny(
+                        call,
+                        "approval",
+                        ErrorKind::ApprovalInvalid,
+                        "approval binding does not match this provider call",
+                    ),
+                    Err(ApprovalTransitionError::AlreadyConsumed) => deny(
+                        call,
+                        "approval",
+                        ErrorKind::ApprovalConsumed,
+                        "approval was already consumed",
+                    ),
+                    Err(ApprovalTransitionError::InvalidState) => deny(
+                        call,
+                        "approval",
+                        ErrorKind::ApprovalInvalid,
+                        "approval cannot be consumed from its current state",
+                    ),
+                }
+            }
             ApprovalState::Consumed => deny(
                 call,
                 "approval",

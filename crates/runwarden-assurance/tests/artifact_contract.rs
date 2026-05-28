@@ -71,6 +71,37 @@ fn artifact_verify_rejects_redaction_sidecar_mismatch() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn artifact_verify_rejects_redaction_sidecar_symlink_escape() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempdir().expect("tempdir");
+    let outside = tempdir().expect("outside");
+    let manifest = seal_artifact(
+        dir.path(),
+        "report-md",
+        "reports/report.md",
+        "finding cites obs_1\n",
+    )
+    .expect("artifact sealed");
+    fs::write(outside.path().join("sidecar.json"), "{\"outside\":true}\n")
+        .expect("outside sidecar");
+    let sidecar_path = dir.path().join("reports/report.md.redaction.json");
+    fs::remove_file(&sidecar_path).expect("remove sidecar");
+    symlink(outside.path().join("sidecar.json"), sidecar_path).expect("symlink");
+
+    let verification = verify_artifact_manifest(dir.path(), &manifest);
+
+    assert_eq!(verification.status, ArtifactVerificationStatus::Failed);
+    assert!(
+        verification
+            .findings
+            .iter()
+            .any(|finding| finding.kind == ArtifactErrorKind::SymlinkEscape)
+    );
+}
+
 #[test]
 fn artifact_seal_rejects_path_escape() {
     let dir = tempdir().expect("tempdir");

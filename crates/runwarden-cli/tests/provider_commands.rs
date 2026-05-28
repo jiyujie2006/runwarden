@@ -1,5 +1,7 @@
 use std::{fs, process::Command};
 
+use runwarden_kernel::evidence::TraceEvent;
+use serde_json::json;
 use tempfile::tempdir;
 
 fn manifest_toml() -> &'static str {
@@ -31,6 +33,17 @@ fn report_manifest_toml(root: &std::path::Path) -> String {
     "#,
         root.display()
     )
+}
+
+fn provider_completed_trace_json(provider: &str) -> String {
+    let event = TraceEvent::sealed(
+        "obs_1".to_string(),
+        "provider_completed".to_string(),
+        Some(provider.to_string()),
+        json!({"ok": true}),
+        None,
+    );
+    serde_json::to_string_pretty(&vec![event]).expect("trace json")
 }
 
 #[test]
@@ -190,16 +203,7 @@ fn provider_call_runs_report_lint_from_report_and_trace() {
     let report_path = dir.path().join("report.json");
     fs::write(
         &trace_path,
-        r#"[
-          {
-            "obs_id":"obs_1",
-            "event_type":"provider_completed",
-            "provider":"runwarden.evidence.inspect",
-            "payload":{"ok":true},
-            "previous_hash":null,
-            "event_hash":"hash_1"
-          }
-        ]"#,
+        provider_completed_trace_json("runwarden.evidence.inspect"),
     )
     .expect("trace");
     fs::write(
@@ -371,16 +375,7 @@ fn provider_call_with_session_routes_high_risk_provider_through_kernel_before_ex
     fs::write(&manifest_path, report_manifest_toml(&evidence_root)).expect("write manifest");
     fs::write(
         &trace_path,
-        r#"[
-          {
-            "obs_id":"obs_1",
-            "event_type":"provider_completed",
-            "provider":"runwarden.input.inspect",
-            "payload":{"ok":true},
-            "previous_hash":null,
-            "event_hash":"hash_1"
-          }
-        ]"#,
+        provider_completed_trace_json("runwarden.input.inspect"),
     )
     .expect("trace");
     fs::write(

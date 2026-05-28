@@ -1,3 +1,4 @@
+use runwarden_kernel::evidence::TraceEvent;
 use runwarden_mcp::handle_jsonrpc_body;
 use serde_json::{Value, json};
 
@@ -43,16 +44,13 @@ fn agent_only_assessment_flow_mediates_report_render_before_execution() {
     assert_eq!(inspection["provider"], "runwarden.input.inspect");
     assert_eq!(inspection["side_effect_executed"], false);
 
-    let trace_events = json!([
-        {
-            "obs_id": "obs_1",
-            "event_type": "provider_completed",
-            "provider": "runwarden.input.inspect",
-            "payload": {"ok": true},
-            "previous_hash": null,
-            "event_hash": "hash_1"
-        }
-    ]);
+    let trace_events = json!([TraceEvent::sealed(
+        "obs_1".to_string(),
+        "provider_completed".to_string(),
+        Some("runwarden.input.inspect".to_string()),
+        json!({"ok": true}),
+        None,
+    )]);
     let report = json!({
         "claims": [
             {"id": "finding-1", "text": "Input inspection completed", "obs_refs": ["obs_1"]}

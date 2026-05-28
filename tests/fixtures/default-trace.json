@@ -7,7 +7,7 @@
       "decision": "allowed"
     },
     "previous_hash": null,
-    "event_hash": "fixture_hash_1"
+    "event_hash": "62fe421c4b05d85d51c9b0457d78777f547b4589870de85f11422e4da5037622"
   },
   {
     "obs_id": "obs_eval_2",
@@ -17,7 +17,7 @@
       "decision": "denied",
       "reason": "shell provider disabled by default"
     },
-    "previous_hash": "fixture_hash_1",
-    "event_hash": "fixture_hash_2"
+    "previous_hash": "62fe421c4b05d85d51c9b0457d78777f547b4589870de85f11422e4da5037622",
+    "event_hash": "c2dd376aedc0166f72c110bd25c6e4298c393fbe9f9f991e16f9cd059e588534"
   }
 ]

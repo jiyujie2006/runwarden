@@ -7,6 +7,7 @@ use runwarden_kernel::{
     ProviderKind, ProviderRisk, SideEffectKind,
 };
 use serde_json::json;
+use time::{Duration, OffsetDateTime};
 
 fn provider(id: &str, risk: ProviderRisk, side_effects: Vec<SideEffectKind>) -> KernelProvider {
     KernelProvider {
@@ -329,6 +330,43 @@ fn high_risk_provider_requires_bound_approval_then_consumes_once() {
         Some(ErrorKind::ApprovalConsumed)
     );
     assert!(!replay.envelope.side_effect_executed);
+}
+
+#[test]
+fn high_risk_provider_rejects_approved_but_expired_approval_before_consuming() {
+    let provider_id = "runwarden.report.publish";
+    let registry = registry_with(provider(
+        provider_id,
+        ProviderRisk::ReportClaim,
+        vec![SideEffectKind::ArtifactWrite],
+    ));
+    let policy = base_policy(provider_id);
+    let mut enforcer = KernelEnforcer::new(registry, policy);
+    let mut request = call(
+        provider_id,
+        json!({"root":"evidence","target_path":"/srv/runwarden/evidence/report.md"}),
+    );
+    let mut approval =
+        ApprovalRecord::new("approval-1", enforcer.approval_binding_for_call(&request));
+    approval
+        .approve("reviewer-alice", "report claim risk reviewed")
+        .expect("approval can be approved");
+    approval.expires_at = Some(OffsetDateTime::now_utc() - Duration::seconds(1));
+    enforcer.add_approval(approval);
+    request.approval_id = Some("approval-1".to_string());
+
+    let outcome = enforcer.evaluate_call(&request);
+
+    assert_eq!(outcome.decision, PolicyDecision::Denied);
+    assert_eq!(
+        outcome.envelope.error_kind,
+        Some(ErrorKind::ApprovalExpired)
+    );
+    assert_eq!(
+        enforcer.approval_state("approval-1"),
+        Some(ApprovalState::Approved)
+    );
+    assert!(!outcome.envelope.side_effect_executed);
 }
 
 #[test]

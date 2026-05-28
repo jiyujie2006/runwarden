@@ -172,8 +172,15 @@ pub mod runtime {
                 ));
             }
 
-            let cwd = normalize_path(&request.cwd);
-            if !cwd.starts_with(&policy.cwd_root) {
+            let cwd_root = policy
+                .cwd_root
+                .canonicalize()
+                .unwrap_or_else(|_| normalize_path(&policy.cwd_root));
+            let cwd = request
+                .cwd
+                .canonicalize()
+                .unwrap_or_else(|_| normalize_path(&request.cwd));
+            if !cwd.starts_with(&cwd_root) {
                 return Err(denial(
                     ProviderRuntimeDenialKind::CwdEscape,
                     "provider cwd escapes the configured runtime root",
@@ -832,25 +839,12 @@ pub mod evidence {
         };
 
         if metadata.file_type().is_symlink() {
-            match path.canonicalize() {
-                Ok(target) if target.starts_with(canonical_root) => {}
-                Ok(_) => {
-                    result.violations.push(violation(
-                        EvidenceViolationKind::SymlinkEscape,
-                        relative_path,
-                        "symlink target escapes evidence root",
-                    ));
-                    return;
-                }
-                Err(err) => {
-                    result.violations.push(violation(
-                        EvidenceViolationKind::ReadFailed,
-                        relative_path,
-                        format!("failed to resolve symlink: {err}"),
-                    ));
-                    return;
-                }
-            }
+            result.violations.push(violation(
+                EvidenceViolationKind::SymlinkEscape,
+                relative_path,
+                "symlinked evidence files are rejected before reading",
+            ));
+            return;
         }
 
         let canonical_path = match path.canonicalize() {
@@ -1090,6 +1084,14 @@ pub mod external {
                 "stdio MCP adapter command is not allowlisted by the provider manifest",
             );
         }
+        if stdio_requires_unsupported_egress_controls(manifest) {
+            return adapter_denial(
+                &manifest.provider_id,
+                transport,
+                "egress_denied",
+                "stdio MCP adapter execution cannot enforce network egress or credential policies",
+            );
+        }
 
         let cwd = request
             .cwd
@@ -1248,7 +1250,13 @@ pub mod external {
             header_lines
         );
 
-        let response = match send_http_request(&parsed, &request_text, &body, request.timeout_ms) {
+        let response = match send_http_request(
+            &parsed,
+            &request_text,
+            &body,
+            request.timeout_ms,
+            http_response_limit_bytes(request),
+        ) {
             Ok(response) => response,
             Err(reason) => {
                 return adapter_failure(&manifest.provider_id, transport, reason, true);
@@ -1294,7 +1302,13 @@ pub mod external {
             "GET {} HTTP/1.1\r\nHost: {}\r\nAccept: text/event-stream\r\nConnection: close\r\n\r\n",
             parsed.path_and_query, parsed.host_header
         );
-        let response = match send_http_request(&parsed, &request_text, &[], request.timeout_ms) {
+        let response = match send_http_request(
+            &parsed,
+            &request_text,
+            &[],
+            request.timeout_ms,
+            http_response_limit_bytes(request),
+        ) {
             Ok(response) => response,
             Err(reason) => {
                 return adapter_failure(&manifest.provider_id, transport, reason, true);
@@ -1404,6 +1418,14 @@ pub mod external {
             manifest.risk,
             ProviderRisk::NetworkActive | ProviderRisk::CredentialUse
         ) || manifest.side_effects.contains(&SideEffectKind::Network)
+    }
+
+    fn stdio_requires_unsupported_egress_controls(manifest: &ProviderManifest) -> bool {
+        requires_egress(manifest)
+            || manifest
+                .side_effects
+                .contains(&SideEffectKind::CredentialUse)
+            || !manifest.allowed_origins.is_empty()
     }
 
     fn command_is_allowlisted(command: &str, allowlist: &[String]) -> bool {
@@ -1626,11 +1648,22 @@ pub mod external {
         body: String,
     }
 
+    fn http_response_limit_bytes(request: &ExternalMcpAdapterRequest) -> usize {
+        const DEFAULT_HTTP_RESPONSE_LIMIT_BYTES: usize = 65_536;
+        const MAX_HTTP_RESPONSE_LIMIT_BYTES: usize = 1_048_576;
+
+        request
+            .stdout_limit_bytes
+            .unwrap_or(DEFAULT_HTTP_RESPONSE_LIMIT_BYTES)
+            .min(MAX_HTTP_RESPONSE_LIMIT_BYTES)
+    }
+
     fn send_http_request(
         parsed: &ParsedHttpUrl,
         request_text: &str,
         body: &[u8],
         timeout_ms: Option<u64>,
+        response_limit_bytes: usize,
     ) -> Result<HttpResponse, String> {
         let timeout = Duration::from_millis(timeout_ms.unwrap_or(5_000));
         let socket_addr = parsed
@@ -1652,9 +1685,19 @@ pub mod external {
             .and_then(|()| stream.write_all(body))
             .map_err(|err| format!("failed to write MCP adapter HTTP request: {err}"))?;
         let mut response = Vec::new();
-        stream
-            .read_to_end(&mut response)
-            .map_err(|err| format!("failed to read MCP adapter HTTP response: {err}"))?;
+        let mut buffer = [0u8; 8192];
+        loop {
+            let read = stream
+                .read(&mut buffer)
+                .map_err(|err| format!("failed to read MCP adapter HTTP response: {err}"))?;
+            if read == 0 {
+                break;
+            }
+            if response.len().saturating_add(read) > response_limit_bytes {
+                return Err("MCP adapter HTTP response exceeded output limit".to_string());
+            }
+            response.extend_from_slice(&buffer[..read]);
+        }
         parse_http_response(&response)
     }
 

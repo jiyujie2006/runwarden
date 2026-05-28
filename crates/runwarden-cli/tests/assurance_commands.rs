@@ -1,26 +1,25 @@
 use std::{fs, process::Command};
 
+use runwarden_kernel::evidence::TraceEvent;
+use serde_json::json;
 use tempfile::tempdir;
 
-fn trace_json() -> &'static str {
-    r#"[
-      {
-        "obs_id":"obs_1",
-        "event_type":"provider_completed",
-        "provider":"runwarden.evidence.inspect",
-        "payload":{"ok":true},
-        "previous_hash":null,
-        "event_hash":"hash_1"
-      },
-      {
-        "obs_id":"obs_2",
-        "event_type":"provider_completed",
-        "provider":"runwarden.trace.verify",
-        "payload":{"ok":true},
-        "previous_hash":"hash_1",
-        "event_hash":"hash_2"
-      }
-    ]"#
+fn trace_json() -> String {
+    let first = TraceEvent::sealed(
+        "obs_1".to_string(),
+        "provider_completed".to_string(),
+        Some("runwarden.evidence.inspect".to_string()),
+        json!({"ok": true}),
+        None,
+    );
+    let second = TraceEvent::sealed(
+        "obs_2".to_string(),
+        "provider_completed".to_string(),
+        Some("runwarden.trace.verify".to_string()),
+        json!({"ok": true}),
+        Some(first.event_hash.clone()),
+    );
+    serde_json::to_string_pretty(&vec![first, second]).expect("trace json")
 }
 
 #[test]

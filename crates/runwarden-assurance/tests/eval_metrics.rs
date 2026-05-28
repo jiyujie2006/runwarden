@@ -1,21 +1,24 @@
 use runwarden_assurance::eval::{EvalThresholds, evaluate_report_assurance};
 use runwarden_assurance::report::{ReportClaim, ReportDraft};
-use runwarden_kernel::evidence::TraceEvent;
+use runwarden_kernel::evidence::{InMemoryTraceStore, TraceEvent};
 use serde_json::json;
 
-fn trace(obs_id: &str) -> TraceEvent {
-    TraceEvent::sealed(
-        obs_id.to_string(),
-        "provider_completed".to_string(),
-        Some("runwarden.evidence.inspect".to_string()),
-        json!({"ok": true}),
-        None,
-    )
+fn trace_events(obs_ids: &[&str]) -> Vec<TraceEvent> {
+    let mut store = InMemoryTraceStore::default();
+    for obs_id in obs_ids {
+        store.append_signed(
+            (*obs_id).to_string(),
+            "provider_completed",
+            Some("runwarden.evidence.inspect"),
+            json!({"ok": true}),
+        );
+    }
+    store.events_mut_for_test().to_vec()
 }
 
 #[test]
 fn eval_passes_when_report_cites_all_expected_trace_events() {
-    let trace_events = vec![trace("obs_1"), trace("obs_2")];
+    let trace_events = trace_events(&["obs_1", "obs_2"]);
     let report = ReportDraft::new(vec![
         ReportClaim::new("finding-1", "Policy denied raw shell", ["obs_1"]),
         ReportClaim::new("finding-2", "Trace verified", ["obs_2"]),
@@ -35,7 +38,7 @@ fn eval_passes_when_report_cites_all_expected_trace_events() {
 
 #[test]
 fn eval_fails_when_expected_obs_ref_is_missing_from_report() {
-    let trace_events = vec![trace("obs_1"), trace("obs_2")];
+    let trace_events = trace_events(&["obs_1", "obs_2"]);
     let report = ReportDraft::new(vec![ReportClaim::new(
         "finding-1",
         "Policy denied raw shell",

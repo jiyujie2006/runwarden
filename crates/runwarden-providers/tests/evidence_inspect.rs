@@ -94,3 +94,36 @@ fn evidence_inspect_rejects_symlink_escape() {
             .any(|violation| violation.kind == EvidenceViolationKind::SymlinkEscape)
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn evidence_inspect_rejects_in_root_symlink_before_reading_target() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempdir().expect("tempdir");
+    fs::write(dir.path().join("large.txt"), "x".repeat(64)).expect("write target");
+    symlink(dir.path().join("large.txt"), dir.path().join("link.txt")).expect("symlink");
+
+    let result = inspect_evidence_root(
+        dir.path(),
+        EvidenceInspectPolicy {
+            max_file_bytes: 4,
+            allowed_extensions: ["txt".to_string()].into(),
+            ..EvidenceInspectPolicy::default()
+        },
+    )
+    .expect("inspect evidence");
+
+    assert!(
+        !result
+            .files
+            .iter()
+            .any(|file| file.relative_path == "link.txt")
+    );
+    assert!(
+        result
+            .violations
+            .iter()
+            .any(|violation| violation.kind == EvidenceViolationKind::SymlinkEscape)
+    );
+}
