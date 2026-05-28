@@ -1,6 +1,6 @@
 # CI
 
-Pull requests run `scripts/pr_fast_gate.sh`.
+Pull requests and pushes to `main` run `scripts/pr_fast_gate.sh`.
 
 The gate checks:
 

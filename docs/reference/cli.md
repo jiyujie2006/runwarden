@@ -20,12 +20,14 @@ runwarden authority create --approval approval-1 --session enterprise_ops --prov
 runwarden authority inspect approval-1 --json
 runwarden trace verify --trace trace.json --json
 runwarden trace export --trace trace.json --provider runwarden.input.inspect --offset 0 --limit 100 --compact-refs --json
+runwarden report scaffold --trace trace.json --json
 runwarden report lint --report report.json --trace trace.json --json
 runwarden report render --report report.json --trace trace.json --format html --json
 runwarden eval all --json
 runwarden eval scenarios --json
 runwarden eval agent-native --json
 runwarden cert all --json
+runwarden cert agent-config examples/agent-configs/claude.runwarden-only.json --json
 runwarden cert provider-manifest --json
 runwarden cert mcp --json
 runwarden cert skill --json
