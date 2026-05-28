@@ -16,6 +16,8 @@ Preserve these invariants:
 
 - Agents see only `runwarden-mcp`; raw shell, filesystem, browser, HTTP, and
   downstream MCP tools stay behind Runwarden providers.
+- Runwarden-only agent configs allow `args: []` but must reject non-empty or
+  malformed `args` and any `env`, `cwd`, `url`, or `transport` override.
 - Provider calls must go through kernel session, scoped-root, egress, authz,
   approval, budget, and trace enforcement before side effects.
 - External MCP stdio adapters require a trusted runtime root, exact command

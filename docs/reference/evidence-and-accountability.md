@@ -2,9 +2,12 @@
 
 Every decision that matters must be traceable to an observation id. Reports are
 accepted only when claims cite `obs_*` references that exist in the verified
-trace and support the claim semantics. A claim that says a provider was denied,
-blocked, rejected, or completed must cite an observation with matching event
-type or decision payload.
+trace and support the claim semantics. A claim that says a provider completed
+must cite a completed or allowed observation; this completed semantic is checked
+before denial keywords so phrases like "completed and was not denied" do not
+require a denial observation. A claim that says a provider was denied, blocked,
+or rejected must cite an observation with matching event type or decision
+payload.
 
 Accountability summaries preserve:
 

@@ -2,6 +2,18 @@
 
 All notable changes to Runwarden are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- Preserved EOF-terminated multiline raw JSON support in `runwarden-mcp` while
+  keeping bounded stdio frame reads.
+- Aligned Rust and CLI agent-config certification with TypeScript config tools
+  for malformed `args` and `transport` override rejection.
+- Verified CLI-bound file digests before persisting consumed approval state.
+- Clarified completed report-claim semantics so negated denial text does not
+  require a denial observation.
+
 ## [0.1.0.0] - 2026-05-28
 
 ### Added

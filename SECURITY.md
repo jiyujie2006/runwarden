@@ -7,6 +7,8 @@ Security-sensitive invariants:
 
 - Agents only see the Runwarden skill and `runwarden-mcp`.
 - Raw shell, filesystem, browser, HTTP, and downstream MCP access are not exposed by default.
+- Runwarden-only agent configs must not redirect `runwarden-mcp` through
+  malformed/non-empty `args` or `env`, `cwd`, `url`, or `transport` overrides.
 - Rust kernel code owns authorization and enforcement decisions.
 - TypeScript code must not duplicate allow/deny logic.
 - Reports must cite verified `obs_*` events.
