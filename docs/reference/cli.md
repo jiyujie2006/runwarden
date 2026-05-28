@@ -1,0 +1,44 @@
+# CLI Reference
+
+`runwarden` is the human control plane. It initializes, checks, certifies, runs
+provider calls, manages sessions and approvals, verifies traces, renders reports,
+and verifies artifacts.
+
+Core commands:
+
+```bash
+runwarden check --strict
+runwarden agent generate-config --client claude --output examples/agent-configs/claude.runwarden-only.json
+runwarden agent check-config --client claude --input examples/agent-configs/claude.runwarden-only.json --json
+runwarden session create --manifest scenarios/enterprise-agent-security/manifests/assessment.toml --session enterprise_ops --json
+runwarden provider list --session enterprise_ops --json
+runwarden provider call --provider runwarden.input.inspect --input input.txt --json
+runwarden provider call --provider runwarden.evidence.inspect --root evidence --json
+runwarden approval pending --json
+runwarden approval approve approval-1 --reviewer reviewer_alice --reason "reviewed scope and risk" --json
+runwarden trace verify --trace trace.json --json
+runwarden trace export --trace trace.json --provider runwarden.input.inspect --offset 0 --limit 100 --compact-refs --json
+runwarden report lint --report report.json --trace trace.json --json
+runwarden report render --report report.json --trace trace.json --format html --json
+runwarden eval all --json
+runwarden eval agent-native --json
+runwarden cert all --json
+runwarden cert provider-manifest --json
+runwarden cert mcp --json
+runwarden cert skill --json
+runwarden cert workflow --json
+runwarden cert script --json
+runwarden cert package --json
+runwarden cert release-artifact --json
+runwarden bench run --json
+runwarden artifact submission --full --output artifacts --json
+runwarden artifact verify --json
+runwarden release smoke --json
+runwarden ui --bind 127.0.0.1 --port 8088 --artifacts artifacts --json
+runwarden api serve --bind 127.0.0.1 --port 8088 --once --json
+```
+
+`provider call` also supports first-party trace, report, audit, accountability,
+cert, eval, and bench providers, including `runwarden.eval.agent-native`.
+When no session is supplied, `provider list` includes first-party providers and
+the certified external provider families declared in the kernel-managed catalog.

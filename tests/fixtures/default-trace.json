@@ -1,0 +1,23 @@
+[
+  {
+    "obs_id": "obs_eval_1",
+    "event_type": "provider_completed",
+    "provider": "runwarden.input.inspect",
+    "payload": {
+      "decision": "allowed"
+    },
+    "previous_hash": null,
+    "event_hash": "fixture_hash_1"
+  },
+  {
+    "obs_id": "obs_eval_2",
+    "event_type": "provider_denied",
+    "provider": "external.shell.command",
+    "payload": {
+      "decision": "denied",
+      "reason": "shell provider disabled by default"
+    },
+    "previous_hash": "fixture_hash_1",
+    "event_hash": "fixture_hash_2"
+  }
+]

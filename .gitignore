@@ -1,0 +1,11 @@
+target/
+node_modules/
+dist/
+coverage/
+.turbo/
+.cache/
+.gstack/
+.DS_Store
+*.log
+artifacts/
+.worktrees/

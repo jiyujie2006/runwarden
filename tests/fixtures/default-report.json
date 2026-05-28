@@ -1,0 +1,14 @@
+{
+  "claims": [
+    {
+      "id": "input-inspection-completed",
+      "text": "Input inspection completed through a Runwarden provider.",
+      "obs_refs": ["obs_eval_1"]
+    },
+    {
+      "id": "raw-shell-denied",
+      "text": "Raw shell access was denied before side effects.",
+      "obs_refs": ["obs_eval_2"]
+    }
+  ]
+}

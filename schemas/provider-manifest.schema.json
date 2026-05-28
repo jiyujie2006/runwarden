@@ -1,0 +1,162 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ProviderManifest",
+  "type": "object",
+  "required": [
+    "kind",
+    "observed_schema",
+    "provider_class",
+    "provider_id",
+    "risk",
+    "schema_pin",
+    "schema_version"
+  ],
+  "properties": {
+    "allowed_origins": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "command_allowlist": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "declared_permissions": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "downstream_identity": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "kind": {
+      "$ref": "#/definitions/ProviderKind"
+    },
+    "observed_schema": true,
+    "provider_class": {
+      "$ref": "#/definitions/ProviderClass"
+    },
+    "provider_id": {
+      "type": "string"
+    },
+    "risk": {
+      "$ref": "#/definitions/ProviderRisk"
+    },
+    "schema_pin": {
+      "$ref": "#/definitions/ProviderSchemaPin"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "side_effects": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/SideEffectKind"
+      }
+    },
+    "tool_identity": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "transport": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "working_root": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "definitions": {
+    "ProviderClass": {
+      "type": "string",
+      "enum": [
+        "first_party",
+        "external"
+      ]
+    },
+    "ProviderKind": {
+      "type": "string",
+      "enum": [
+        "input",
+        "evidence",
+        "trace",
+        "report",
+        "audit",
+        "accountability",
+        "cert",
+        "eval",
+        "bench",
+        "web_static",
+        "http_replay",
+        "mcp",
+        "shell",
+        "plugin",
+        "skill",
+        "api",
+        "scanner",
+        "enterprise"
+      ]
+    },
+    "ProviderRisk": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "network_active",
+        "file_write",
+        "credential_use",
+        "destructive",
+        "report_claim"
+      ]
+    },
+    "ProviderSchemaPin": {
+      "type": "object",
+      "required": [
+        "algorithm",
+        "digest",
+        "schema"
+      ],
+      "properties": {
+        "algorithm": {
+          "type": "string"
+        },
+        "digest": {
+          "type": "string"
+        },
+        "schema": true
+      }
+    },
+    "SideEffectKind": {
+      "type": "string",
+      "enum": [
+        "none",
+        "network",
+        "file_read",
+        "file_write",
+        "process_spawn",
+        "credential_use",
+        "destructive",
+        "artifact_write"
+      ]
+    }
+  }
+}

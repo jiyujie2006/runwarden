@@ -1,0 +1,36 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "claims": {
+      "items": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "obs_refs": {
+            "items": {
+              "pattern": "^obs_",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "text",
+          "obs_refs"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "claims"
+  ],
+  "title": "ReportDraft",
+  "type": "object"
+}

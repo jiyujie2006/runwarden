@@ -1,0 +1,8 @@
+[
+  {
+    "provider": "external.shell.command",
+    "decision": "denied",
+    "reason": "raw shell is not exposed by default"
+  }
+]
+

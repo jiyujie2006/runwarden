@@ -1,0 +1,177 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AssessmentManifest",
+  "type": "object",
+  "required": [
+    "mode",
+    "name",
+    "version"
+  ],
+  "properties": {
+    "active_assessment": {
+      "default": {
+        "enabled": true
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/ActiveAssessmentManifest"
+        }
+      ]
+    },
+    "actor": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ActorManifest"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "authorization": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/AuthorizationManifest"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "budgets": {
+      "default": {
+        "max_argument_bytes": null
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/BudgetManifest"
+        }
+      ]
+    },
+    "mode": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "provider_allowlist": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "roots": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/RootManifest"
+      }
+    },
+    "targets": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/TargetManifest"
+      }
+    },
+    "version": {
+      "type": "string"
+    }
+  },
+  "definitions": {
+    "ActiveAssessmentManifest": {
+      "type": "object",
+      "required": [
+        "enabled"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ActorManifest": {
+      "type": "object",
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      }
+    },
+    "AuthorizationManifest": {
+      "type": "object",
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "state": {
+          "default": "active",
+          "allOf": [
+            {
+              "$ref": "#/definitions/AuthzManifestState"
+            }
+          ]
+        }
+      }
+    },
+    "AuthzManifestState": {
+      "type": "string",
+      "enum": [
+        "active",
+        "expired",
+        "revoked",
+        "denied"
+      ]
+    },
+    "BudgetManifest": {
+      "type": "object",
+      "properties": {
+        "max_argument_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0.0
+        }
+      }
+    },
+    "RootManifest": {
+      "type": "object",
+      "required": [
+        "name",
+        "path"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      }
+    },
+    "TargetManifest": {
+      "type": "object",
+      "required": [
+        "name",
+        "value"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

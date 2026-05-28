@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/runwarden-kernel",
+  "crates/runwarden-cli",
+  "crates/runwarden-mcp",
+  "crates/runwarden-api",
+  "crates/runwarden-providers",
+  "crates/runwarden-assurance",
+]
+
+[workspace.package]
+edition = "2024"
+license = "UNLICENSED"
+repository = "https://github.com/jiyujie2006/runwarden"
+rust-version = "1.95"
+
+[workspace.dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+schemars = { version = "0.8", features = ["uuid1"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+thiserror = "2.0"
+time = { version = "0.3", features = ["serde", "formatting", "parsing"] }
+toml = "0.8"
+uuid = { version = "1.11", features = ["serde", "v7"] }

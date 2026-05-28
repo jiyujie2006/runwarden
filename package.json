@@ -1,0 +1,16 @@
+{
+  "name": "runwarden-enterprise",
+  "private": true,
+  "version": "0.1.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.15"
+  },
+  "packageManager": "pnpm@11.4.0"
+}

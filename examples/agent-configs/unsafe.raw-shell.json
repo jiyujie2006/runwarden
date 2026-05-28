@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "runwarden": {
+      "command": "runwarden-mcp",
+      "args": []
+    },
+    "shell": {
+      "command": "shell-mcp",
+      "args": []
+    }
+  }
+}
+

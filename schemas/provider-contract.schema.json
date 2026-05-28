@@ -1,0 +1,177 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ProviderContract",
+  "type": "object",
+  "required": [
+    "enforcement",
+    "observed_schema_digest",
+    "provider",
+    "schema_pin",
+    "schema_rug_pull_detected"
+  ],
+  "properties": {
+    "enforcement": {
+      "$ref": "#/definitions/ProviderEnforcementContract"
+    },
+    "observed_schema_digest": {
+      "type": "string"
+    },
+    "provider": {
+      "$ref": "#/definitions/KernelProvider"
+    },
+    "schema_pin": {
+      "$ref": "#/definitions/ProviderSchemaPin"
+    },
+    "schema_rug_pull_detected": {
+      "type": "boolean"
+    }
+  },
+  "definitions": {
+    "KernelProvider": {
+      "type": "object",
+      "required": [
+        "authority_requirements",
+        "class",
+        "evidence_contract",
+        "id",
+        "input_schema",
+        "kind",
+        "output_schema",
+        "risk",
+        "side_effects"
+      ],
+      "properties": {
+        "authority_requirements": true,
+        "class": {
+          "$ref": "#/definitions/ProviderClass"
+        },
+        "evidence_contract": true,
+        "id": {
+          "type": "string"
+        },
+        "input_schema": true,
+        "kind": {
+          "$ref": "#/definitions/ProviderKind"
+        },
+        "output_schema": true,
+        "risk": {
+          "$ref": "#/definitions/ProviderRisk"
+        },
+        "side_effects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SideEffectKind"
+          }
+        }
+      }
+    },
+    "ProviderClass": {
+      "type": "string",
+      "enum": [
+        "first_party",
+        "external"
+      ]
+    },
+    "ProviderEnforcementContract": {
+      "type": "object",
+      "required": [
+        "requires_approval_gate",
+        "requires_egress_policy",
+        "requires_kernel_mediation",
+        "requires_redaction",
+        "requires_resource_limits",
+        "requires_schema_pin",
+        "requires_trace"
+      ],
+      "properties": {
+        "requires_approval_gate": {
+          "type": "boolean"
+        },
+        "requires_egress_policy": {
+          "type": "boolean"
+        },
+        "requires_kernel_mediation": {
+          "type": "boolean"
+        },
+        "requires_redaction": {
+          "type": "boolean"
+        },
+        "requires_resource_limits": {
+          "type": "boolean"
+        },
+        "requires_schema_pin": {
+          "type": "boolean"
+        },
+        "requires_trace": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ProviderKind": {
+      "type": "string",
+      "enum": [
+        "input",
+        "evidence",
+        "trace",
+        "report",
+        "audit",
+        "accountability",
+        "cert",
+        "eval",
+        "bench",
+        "web_static",
+        "http_replay",
+        "mcp",
+        "shell",
+        "plugin",
+        "skill",
+        "api",
+        "scanner",
+        "enterprise"
+      ]
+    },
+    "ProviderRisk": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "network_active",
+        "file_write",
+        "credential_use",
+        "destructive",
+        "report_claim"
+      ]
+    },
+    "ProviderSchemaPin": {
+      "type": "object",
+      "required": [
+        "algorithm",
+        "digest",
+        "schema"
+      ],
+      "properties": {
+        "algorithm": {
+          "type": "string"
+        },
+        "digest": {
+          "type": "string"
+        },
+        "schema": true
+      }
+    },
+    "SideEffectKind": {
+      "type": "string",
+      "enum": [
+        "none",
+        "network",
+        "file_read",
+        "file_write",
+        "process_spawn",
+        "credential_use",
+        "destructive",
+        "artifact_write"
+      ]
+    }
+  }
+}

@@ -1,0 +1,6 @@
+[providers.external_mcp_browser_open_page]
+provider_id = "external.mcp.browser.open_page"
+manifest = "examples/providers/external.mcp.browser.open_page.json"
+enabled = false
+schema_pin_required = true
+approval_required = true

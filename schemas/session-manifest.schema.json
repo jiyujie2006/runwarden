@@ -1,0 +1,134 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SessionManifest",
+  "type": "object",
+  "required": [
+    "active_assessment",
+    "allowed_providers",
+    "budgets",
+    "created_at",
+    "governance_state",
+    "manifest_hash",
+    "mode",
+    "roots",
+    "schema_version",
+    "session_id",
+    "targets"
+  ],
+  "properties": {
+    "active_assessment": {
+      "type": "boolean"
+    },
+    "actor_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "allowed_providers": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "authz_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "budgets": {
+      "$ref": "#/definitions/BudgetManifest"
+    },
+    "created_at": {
+      "type": "string"
+    },
+    "governance_state": {
+      "$ref": "#/definitions/AuthzManifestState"
+    },
+    "manifest_hash": {
+      "type": "string"
+    },
+    "mode": {
+      "type": "string"
+    },
+    "roots": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/RootManifest"
+      }
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "targets": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/TargetManifest"
+      }
+    },
+    "trace_path": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "definitions": {
+    "AuthzManifestState": {
+      "type": "string",
+      "enum": [
+        "active",
+        "expired",
+        "revoked",
+        "denied"
+      ]
+    },
+    "BudgetManifest": {
+      "type": "object",
+      "properties": {
+        "max_argument_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0.0
+        }
+      }
+    },
+    "RootManifest": {
+      "type": "object",
+      "required": [
+        "name",
+        "path"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      }
+    },
+    "TargetManifest": {
+      "type": "object",
+      "required": [
+        "name",
+        "value"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

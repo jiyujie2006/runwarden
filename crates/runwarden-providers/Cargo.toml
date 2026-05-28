@@ -1,0 +1,18 @@
+[package]
+name = "runwarden-providers"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+base64 = "0.22"
+runwarden-kernel = { path = "../runwarden-kernel" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+unicode-normalization = "0.1"
+
+[dev-dependencies]
+tempfile = "3.23"

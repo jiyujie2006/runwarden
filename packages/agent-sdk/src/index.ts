@@ -1,0 +1,290 @@
+export type PolicyDecision = "allowed" | "denied" | "requires_review";
+export type ExecutionStatus = "not_executed" | "running" | "completed" | "failed" | "incomplete";
+export type ExecutionMode = "dry_run" | "enforced" | "debug";
+export type ErrorKind =
+  | "manifest_invalid"
+  | "provider_unknown"
+  | "provider_not_allowed"
+  | "argument_schema_invalid"
+  | "scope_violation"
+  | "root_escape"
+  | "egress_denied"
+  | "budget_exceeded"
+  | "active_assessment_required"
+  | "authz_invalid"
+  | "approval_invalid"
+  | "approval_consumed"
+  | "approval_expired"
+  | "trace_tampered"
+  | "trace_write_failed"
+  | "redaction_failed"
+  | "artifact_invalid"
+  | "report_citation_invalid"
+  | "internal";
+
+export interface ProviderCall {
+  session_id: string;
+  provider: string;
+  action: string;
+  arguments: unknown;
+  actor_id?: string | null;
+  authz_id?: string | null;
+  approval_id?: string | null;
+}
+
+export interface ProviderOutcome {
+  decision: PolicyDecision;
+  execution_status: ExecutionStatus;
+  output: unknown;
+  envelope: DecisionEnvelope;
+  observation_id: string;
+  artifacts: ArtifactRef[];
+  next_actions: string[];
+}
+
+export interface DecisionEnvelope {
+  decision: PolicyDecision;
+  gate_id: string;
+  error_kind?: ErrorKind | null;
+  denied_by?: string | null;
+  reason: string;
+  provider: string;
+  action: string;
+  target: string;
+  authz_id?: string | null;
+  actor_id?: string | null;
+  approval_id?: string | null;
+  execution_mode: ExecutionMode;
+  side_effect_executed: boolean;
+  trace_event?: string | null;
+  suggestion?: string | null;
+}
+
+export interface ArtifactRef {
+  id: string;
+  path: string;
+  sha256?: string | null;
+}
+
+export type ApprovalState = "pending" | "approved" | "consumed" | "denied" | "expired" | "revoked";
+
+export interface ApprovalRecord {
+  approval_id: string;
+  state: ApprovalState;
+  binding?: unknown;
+  reviewer?: string | null;
+  reason?: string | null;
+}
+
+export interface ApprovalQueueResponse {
+  approvals: ApprovalRecord[];
+  side_effect_executed: false;
+}
+
+export interface ApprovalReviewInput {
+  reviewer: string;
+  reason: string;
+}
+
+export interface ApprovalMutationResponse {
+  approval: ApprovalRecord;
+  side_effect_executed: boolean;
+}
+
+export interface SessionCreateInput {
+  session_id: string;
+  manifest_toml: string;
+}
+
+export interface TraceExportInput {
+  trace_path: string;
+}
+
+export interface ReportLintInput {
+  report_path: string;
+  trace_path: string;
+}
+
+export interface ReportRenderInput extends ReportLintInput {
+  format: "markdown" | "json" | "html" | "sarif";
+}
+
+export interface ArtifactVerifyInput {
+  artifacts_path: string;
+  manifest_path: string;
+}
+
+export interface ArtifactSubmissionInput {
+  full?: boolean;
+  output_path: string;
+}
+
+export interface EvalAgentNativeInput {
+  config_paths?: string[];
+}
+
+export interface UiLaunchInput {
+  bind: string;
+  port: number;
+  artifacts_path: string;
+}
+
+export interface AgentCheckConfigInput {
+  client: string;
+  input_path: string;
+}
+
+export interface FetchInit {
+  method?: string;
+  headers?: Record<string, string>;
+  body?: string;
+}
+
+export interface FetchResponse {
+  ok: boolean;
+  status: number;
+  json(): Promise<unknown>;
+}
+
+export type FetchFn = (url: string, init?: FetchInit) => Promise<FetchResponse>;
+
+export interface RunwardenClientOptions {
+  launchToken?: string;
+  fetch?: FetchFn;
+}
+
+export class RunwardenClient {
+  private readonly launchToken: string | undefined;
+  private readonly fetchFn: FetchFn;
+
+  constructor(private readonly baseUrl: string, options: RunwardenClientOptions = {}) {
+    this.launchToken = options.launchToken;
+    this.fetchFn = options.fetch ?? defaultFetch();
+  }
+
+  async agentBootstrap(): Promise<Record<string, unknown>> {
+    return {
+      architecture: "agent_native_security_kernel",
+      agent_only_sees_runwarden: true,
+      all_tools_are_kernel_managed_providers: true,
+      raw_side_effect_tools_allowed: false
+    };
+  }
+
+  endpoint(path: string): string {
+    return new URL(path, this.baseUrl).toString();
+  }
+
+  async approvalQueue(): Promise<ApprovalQueueResponse> {
+    return this.request<ApprovalQueueResponse>("/approvals");
+  }
+
+  async sessionCreateFromManifest(input: SessionCreateInput): Promise<unknown> {
+    return this.request("/sessions", "POST", input);
+  }
+
+  async providerList(sessionId?: string): Promise<unknown> {
+    const query = sessionId ? `?session=${encodeURIComponent(sessionId)}` : "";
+    return this.request(`/providers${query}`);
+  }
+
+  async providerStatus(provider: string): Promise<unknown> {
+    return this.request(`/providers/${encodeURIComponent(provider)}/status`);
+  }
+
+  async providerCall(call: ProviderCall): Promise<unknown> {
+    return this.request("/provider-calls", "POST", call);
+  }
+
+  async traceExport(input: TraceExportInput): Promise<unknown> {
+    return this.request("/trace/export", "POST", input);
+  }
+
+  async reportLint(input: ReportLintInput): Promise<unknown> {
+    return this.request("/reports/lint", "POST", input);
+  }
+
+  async reportRender(input: ReportRenderInput): Promise<unknown> {
+    return this.request("/reports/render", "POST", input);
+  }
+
+  async artifactVerify(input: ArtifactVerifyInput): Promise<unknown> {
+    return this.request("/artifacts/verify", "POST", input);
+  }
+
+  async artifactSubmission(input: ArtifactSubmissionInput): Promise<unknown> {
+    return this.request("/artifacts/submission", "POST", input);
+  }
+
+  async evalAgentNative(input: EvalAgentNativeInput = {}): Promise<unknown> {
+    return this.request("/eval/agent-native", "POST", input);
+  }
+
+  async releaseSmoke(): Promise<unknown> {
+    return this.request("/release/smoke", "POST");
+  }
+
+  async uiLaunch(input: UiLaunchInput): Promise<unknown> {
+    return this.request("/ui/launch", "POST", input);
+  }
+
+  async agentCheckConfig(input: AgentCheckConfigInput): Promise<unknown> {
+    return this.request("/agent/config/check", "POST", input);
+  }
+
+  async approveApproval(
+    approvalId: string,
+    input: ApprovalReviewInput
+  ): Promise<ApprovalMutationResponse> {
+    return this.request<ApprovalMutationResponse>(
+      `/approvals/${encodeURIComponent(approvalId)}/approve`,
+      "POST",
+      input
+    );
+  }
+
+  async denyApproval(
+    approvalId: string,
+    input: ApprovalReviewInput
+  ): Promise<ApprovalMutationResponse> {
+    return this.request<ApprovalMutationResponse>(
+      `/approvals/${encodeURIComponent(approvalId)}/deny`,
+      "POST",
+      input
+    );
+  }
+
+  private async request<T>(
+    path: string,
+    method = "GET",
+    body?: unknown
+  ): Promise<T> {
+    const headers: Record<string, string> = {
+      accept: "application/json"
+    };
+    if (this.launchToken) {
+      headers.authorization = `Bearer ${this.launchToken}`;
+    }
+
+    const init: FetchInit = { method, headers };
+    if (body !== undefined) {
+      headers["content-type"] = "application/json";
+      init.body = JSON.stringify(body);
+    }
+
+    const response = await this.fetchFn(this.endpoint(path), init);
+    const payload = (await response.json()) as T;
+    if (!response.ok) {
+      throw new Error(`Runwarden Local API request failed with status ${response.status}`);
+    }
+    return payload;
+  }
+}
+
+function defaultFetch(): FetchFn {
+  const fetchFn = (globalThis as unknown as { fetch?: FetchFn }).fetch;
+  if (!fetchFn) {
+    throw new Error("RunwardenClient requires a fetch implementation");
+  }
+  return fetchFn;
+}
