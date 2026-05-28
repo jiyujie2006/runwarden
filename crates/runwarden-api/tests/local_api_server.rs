@@ -740,6 +740,108 @@ fn local_api_provider_call_resolves_scoped_root_names_before_execution() {
 }
 
 #[test]
+fn local_api_provider_call_resolves_relative_paths_against_scoped_root_before_reading() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let evidence_root = dir.path().join("evidence");
+    fs::create_dir(&evidence_root).expect("evidence root");
+    fs::write(evidence_root.join("Cargo.toml"), "safe scoped content").expect("write evidence");
+    let session_id = "relative_path_session";
+    let provider = "runwarden.input.inspect";
+    let mut router = router();
+    let create_session = router.handle(
+        authed("POST", "/sessions"),
+        Some(manifest_body_with_root(
+            session_id,
+            &[provider],
+            &evidence_root.to_string_lossy(),
+        )),
+    );
+    assert_eq!(create_session.status, 200);
+
+    let response = router.handle(
+        authed("POST", "/provider-calls"),
+        Some(json!({
+            "session_id": session_id,
+            "provider": provider,
+            "action": "inspect",
+            "arguments": {
+                "root": "evidence",
+                "input_path": "Cargo.toml"
+            }
+        })),
+    );
+
+    assert_eq!(response.status, 200);
+    assert_eq!(
+        response.body["operation"]["data"]["outcome"]["decision"],
+        "allowed"
+    );
+    assert_eq!(
+        response.body["operation"]["data"]["outcome"]["output"]["normalized_segments"][0]["text"],
+        "safe scoped content"
+    );
+}
+
+#[test]
+fn local_api_provider_call_applies_trace_export_query_arguments() {
+    let session_id = "trace_export_session";
+    let provider = "runwarden.trace.export";
+    let first = trace_event();
+    let second = TraceEvent::sealed(
+        "obs_2".to_string(),
+        "provider_completed".to_string(),
+        Some("runwarden.report.lint".to_string()),
+        json!({"ok": true}),
+        Some(first.event_hash.clone()),
+    );
+    let arguments = json!({
+        "trace": [first, second],
+        "provider": "runwarden.report.lint",
+        "limit": 10
+    });
+    let mut security =
+        LocalApiSecurity::new("launch-secret", ["127.0.0.1:0"], ["http://127.0.0.1:0"]);
+    security.insert_approval(approved_record(
+        "approval-1",
+        session_id,
+        provider,
+        "export",
+        &arguments,
+    ));
+    let mut router = LocalApiRouter::new(security);
+    let create_session = router.handle(
+        authed("POST", "/sessions"),
+        Some(manifest_body(session_id, &[provider])),
+    );
+    assert_eq!(create_session.status, 200);
+
+    let response = router.handle(
+        authed("POST", "/provider-calls"),
+        Some(json!({
+            "session_id": session_id,
+            "provider": provider,
+            "action": "export",
+            "arguments": arguments,
+            "approval_id": "approval-1"
+        })),
+    );
+
+    assert_eq!(response.status, 200);
+    assert_eq!(
+        response.body["operation"]["data"]["outcome"]["decision"],
+        "allowed"
+    );
+    assert_eq!(
+        response.body["operation"]["data"]["outcome"]["output"]["page"]["total_matching"],
+        1
+    );
+    assert_eq!(
+        response.body["operation"]["data"]["outcome"]["output"]["page"]["events"][0]["obs_id"],
+        "obs_2"
+    );
+}
+
+#[test]
 fn local_api_server_accepts_one_http_request_on_loopback() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
     let addr = listener.local_addr().expect("local addr");

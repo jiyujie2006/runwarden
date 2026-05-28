@@ -1041,6 +1041,14 @@ pub mod external {
                 "external MCP adapter execution requires an external MCP provider manifest",
             );
         }
+        if let Err(reason) = validate_manifest_schema_pin(manifest) {
+            return adapter_denial(
+                &manifest.provider_id,
+                request.transport.as_deref().unwrap_or("unknown"),
+                reason,
+                "external MCP adapter manifest schema pin is invalid",
+            );
+        }
 
         let transport = request
             .transport
@@ -1641,8 +1649,59 @@ pub mod external {
             origin: format!("http://{host_header}"),
             socket_addr: format!("{host}:{port}"),
             host_header,
-            path_and_query,
+            path_and_query: safe_http_path_and_query(path_and_query)?,
         })
+    }
+
+    fn validate_manifest_schema_pin(manifest: &ProviderManifest) -> Result<(), &'static str> {
+        if manifest.schema_pin.algorithm != "sha256"
+            || manifest.schema_pin.digest
+                != runwarden_kernel::schema_digest(&manifest.schema_pin.schema)
+        {
+            return Err("schema_pin_digest_mismatch");
+        }
+        if ProviderContract::from_manifest(manifest).schema_rug_pull_detected {
+            return Err("schema_rug_pull");
+        }
+        Ok(())
+    }
+
+    fn safe_http_path_and_query(path_and_query: String) -> Result<String, String> {
+        if path_and_query.chars().any(char::is_control)
+            || contains_percent_encoded_control(&path_and_query)
+        {
+            return Err("HTTP MCP adapter URL path contains control characters".to_string());
+        }
+        Ok(path_and_query)
+    }
+
+    fn contains_percent_encoded_control(value: &str) -> bool {
+        let bytes = value.as_bytes();
+        let mut index = 0;
+        while index + 2 < bytes.len() {
+            if bytes[index] == b'%'
+                && let (Some(high), Some(low)) =
+                    (hex_value(bytes[index + 1]), hex_value(bytes[index + 2]))
+            {
+                let decoded = (high << 4) | low;
+                if decoded < 0x20 || decoded == 0x7f {
+                    return true;
+                }
+                index += 3;
+                continue;
+            }
+            index += 1;
+        }
+        false
+    }
+
+    fn hex_value(byte: u8) -> Option<u8> {
+        match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            b'A'..=b'F' => Some(byte - b'A' + 10),
+            _ => None,
+        }
     }
 
     fn origin_allowed(origin: &str, allowed_origins: &[String]) -> bool {

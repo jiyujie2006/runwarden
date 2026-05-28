@@ -56,7 +56,9 @@ const RUNWARDEN_TOOLS: &[(&str, &str)] = &[
 
 pub fn handle_stdio_payload(payload: &str) -> anyhow::Result<String> {
     let body = decode_stdio_body(payload)?;
-    let response = handle_jsonrpc_body(body)?;
+    let Some(response) = handle_jsonrpc_message(body)? else {
+        return Ok(String::new());
+    };
     let response_body = serde_json::to_string(&response).context("serialize JSON-RPC response")?;
 
     Ok(format!(
@@ -67,19 +69,25 @@ pub fn handle_stdio_payload(payload: &str) -> anyhow::Result<String> {
 }
 
 pub fn handle_jsonrpc_body(body: &str) -> anyhow::Result<Value> {
+    Ok(handle_jsonrpc_message(body)?.unwrap_or(Value::Null))
+}
+
+pub fn handle_jsonrpc_message(body: &str) -> anyhow::Result<Option<Value>> {
     let request: Value = serde_json::from_str(body).context("parse JSON-RPC request")?;
-    let id = request.get("id").cloned().unwrap_or(Value::Null);
+    let Some(id) = request.get("id").cloned() else {
+        return Ok(None);
+    };
     let Some(method) = request.get("method").and_then(Value::as_str) else {
-        return Ok(jsonrpc_error(
+        return Ok(Some(jsonrpc_error(
             id,
             -32600,
             "JSON-RPC request is missing method",
             json!({"side_effect_executed": false}),
-        ));
+        )));
     };
 
     match method {
-        "initialize" => Ok(jsonrpc_ok(
+        "initialize" => Ok(Some(jsonrpc_ok(
             id,
             json!({
                 "protocolVersion": "2025-03-26",
@@ -93,15 +101,15 @@ pub fn handle_jsonrpc_body(body: &str) -> anyhow::Result<Value> {
                     }
                 }
             }),
-        )),
-        "tools/list" => Ok(jsonrpc_ok(id, json!({ "tools": tool_descriptors() }))),
-        "tools/call" => Ok(handle_tools_call(id, request.get("params"))),
-        _ => Ok(jsonrpc_error(
+        ))),
+        "tools/list" => Ok(Some(jsonrpc_ok(id, json!({ "tools": tool_descriptors() })))),
+        "tools/call" => Ok(Some(handle_tools_call(id, request.get("params")))),
+        _ => Ok(Some(jsonrpc_error(
             id,
             -32601,
             "method is not supported by Runwarden MCP",
             json!({"method": method, "side_effect_executed": false}),
-        )),
+        ))),
     }
 }
 

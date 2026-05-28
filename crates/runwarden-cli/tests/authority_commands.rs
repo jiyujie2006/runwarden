@@ -1,5 +1,7 @@
 use std::{fs, process::Command};
 
+use runwarden_kernel::authority::{ApprovalBinding, ApprovalRecord};
+use runwarden_kernel::evidence::hex_sha256;
 use tempfile::tempdir;
 
 #[test]
@@ -95,6 +97,27 @@ fn authority_create_rejects_path_traversal_approval_ids() {
 #[test]
 fn provider_call_executes_external_mcp_stdio_adapter_from_manifest() {
     let dir = tempdir().expect("tempdir");
+    let session_manifest_path = dir.path().join("assessment.toml");
+    fs::write(
+        &session_manifest_path,
+        format!(
+            r#"
+version = "1"
+name = "external mcp session"
+mode = "audit"
+provider_allowlist = ["external.mcp.browser.open_page"]
+
+[[roots]]
+name = "workspace"
+path = "{}"
+
+[active_assessment]
+enabled = true
+"#,
+            dir.path().display()
+        ),
+    )
+    .expect("write session manifest");
     let manifest_path = dir.path().join("external-mcp.json");
     fs::write(
         &manifest_path,
@@ -142,19 +165,60 @@ fn provider_call_executes_external_mcp_stdio_adapter_from_manifest() {
         .to_string(),
     )
     .expect("write request");
+    let create_session = Command::new(env!("CARGO_BIN_EXE_runwarden"))
+        .current_dir(dir.path())
+        .args(["session", "create", "--manifest"])
+        .arg(&session_manifest_path)
+        .args(["--session", "enterprise_ops", "--json"])
+        .output()
+        .expect("session create");
+    assert!(
+        create_session.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&create_session.stderr)
+    );
+    let arguments = serde_json::json!({
+        "input_path": input_path.to_string_lossy(),
+        "root": "workspace"
+    });
+    let mut approval = ApprovalRecord::new(
+        "approval-1",
+        ApprovalBinding {
+            session_id: "enterprise_ops".to_string(),
+            provider: "external.mcp.browser.open_page".to_string(),
+            action: "open_page".to_string(),
+            argument_hash: hex_sha256(
+                &serde_json::to_vec(&arguments).expect("arguments serialize"),
+            ),
+            authz_id: None,
+            actor_id: None,
+        },
+    );
+    approval
+        .approve("reviewer-alice", "reviewed stdio adapter execution")
+        .expect("approval can be approved");
+    let approval_dir = dir.path().join(".runwarden/approvals");
+    fs::create_dir_all(&approval_dir).expect("approval dir");
+    fs::write(
+        approval_dir.join("approval-1.json"),
+        serde_json::to_string_pretty(&approval).expect("approval json"),
+    )
+    .expect("write approval");
 
     let output = Command::new(env!("CARGO_BIN_EXE_runwarden"))
         .current_dir(dir.path())
         .args([
             "provider",
             "call",
+            "--session",
+            "enterprise_ops",
             "--provider",
             "external.mcp.browser.open_page",
             "--input",
         ])
         .arg(&input_path)
         .arg("--root")
-        .arg(dir.path())
+        .arg("workspace")
         .arg("--json")
         .output()
         .expect("external mcp provider call");

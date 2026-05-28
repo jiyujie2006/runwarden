@@ -531,14 +531,7 @@ impl LocalApiRouter {
         for event in events {
             store.append(event);
         }
-        let query = TraceQuery {
-            offset: number_field(&body, "offset").unwrap_or(0),
-            limit: number_field(&body, "limit").unwrap_or(100),
-            provider: string_field(&body, "provider"),
-            event_type: string_field(&body, "event_type"),
-            obs_prefix: string_field(&body, "obs_prefix"),
-            max_bytes: number_field(&body, "max_bytes"),
-        };
+        let query = trace_query_from_body(&body);
         match store.stream_export(query) {
             Ok(page) => operation_response_with_headers(
                 200,
@@ -1441,13 +1434,14 @@ fn execute_first_party_provider_call(
             "side_effect_executed": false
         }));
     }
+    let arguments = resolve_session_path_arguments(session, &call.arguments)?;
 
     match call.provider.as_str() {
         "runwarden.input.inspect" => {
-            let bytes = if let Some(text) = string_field(&call.arguments, "input_text") {
+            let bytes = if let Some(text) = string_field(&arguments, "input_text") {
                 text.into_bytes()
             } else {
-                let path = string_field(&call.arguments, "input_path")
+                let path = string_field(&arguments, "input_path")
                     .ok_or_else(|| "input_text or input_path is required".to_string())?;
                 fs::read(&path).map_err(|err| format!("failed to read input {path}: {err}"))?
             };
@@ -1458,38 +1452,38 @@ fn execute_first_party_provider_call(
             )))
         }
         "runwarden.evidence.inspect" => {
-            let root = string_field(&call.arguments, "root_path")
-                .or_else(|| resolve_session_root_path(session, &call.arguments))
-                .or_else(|| string_field(&call.arguments, "root"))
+            let root = string_field(&arguments, "root_path")
+                .or_else(|| resolve_session_root_path(session, &arguments))
+                .or_else(|| string_field(&arguments, "root"))
                 .ok_or_else(|| "root_path is required".to_string())?;
             inspect_evidence_root(Path::new(&root), EvidenceInspectPolicy::default())
                 .map(|inspection| json!(inspection))
                 .map_err(|err| err.to_string())
         }
-        "runwarden.trace.verify" => read_trace_from_body(&call.arguments).map(verify_trace_events),
+        "runwarden.trace.verify" => read_trace_from_body(&arguments).map(verify_trace_events),
         "runwarden.trace.export" => {
-            let events = read_trace_from_body(&call.arguments)?;
+            let events = read_trace_from_body(&arguments)?;
             let mut store = InMemoryTraceStore::default();
             for event in events {
                 store.append(event);
             }
             store
-                .stream_export(TraceQuery::default())
+                .stream_export(trace_query_from_body(&arguments))
                 .map(|page| json!(page))
                 .map_err(|err| err.to_string())
         }
         "runwarden.report.scaffold" => {
-            let events = read_trace_from_body(&call.arguments)?;
+            let events = read_trace_from_body(&arguments)?;
             Ok(json!(scaffold_report_from_trace(&events)))
         }
         "runwarden.report.lint" => {
-            let (report, trace) = read_report_and_trace_from_body(&call.arguments)?;
+            let (report, trace) = read_report_and_trace_from_body(&arguments)?;
             Ok(json!(lint_report_against_trace(&report, &trace)))
         }
         "runwarden.report.render" => {
-            let (report, trace) = read_report_and_trace_from_body(&call.arguments)?;
+            let (report, trace) = read_report_and_trace_from_body(&arguments)?;
             let format = parse_render_format(
-                string_field(&call.arguments, "format")
+                string_field(&arguments, "format")
                     .as_deref()
                     .unwrap_or("markdown"),
             )?;
@@ -1498,11 +1492,11 @@ fn execute_first_party_provider_call(
                 .map_err(|err| err.message)
         }
         "runwarden.audit.summary" => {
-            let events = read_trace_from_body(&call.arguments)?;
+            let events = read_trace_from_body(&arguments)?;
             Ok(json!(audit_summary(&events)))
         }
         "runwarden.accountability.summary" => {
-            let events = read_trace_from_body(&call.arguments)?;
+            let events = read_trace_from_body(&arguments)?;
             Ok(json!(accountability_summary(&events)))
         }
         "runwarden.cert.all" => {
@@ -1512,7 +1506,7 @@ fn execute_first_party_provider_call(
             Ok(json!(certify_workspace(&root)))
         }
         "runwarden.eval.all" => {
-            let (report, trace) = read_report_and_trace_from_body(&call.arguments)?;
+            let (report, trace) = read_report_and_trace_from_body(&arguments)?;
             let expected_obs: Vec<_> = trace.iter().map(|event| event.obs_id.clone()).collect();
             Ok(json!(evaluate_report_assurance(
                 &report,
@@ -1537,6 +1531,67 @@ fn execute_first_party_provider_call(
                 .map_err(|err| err.to_string())
         }
         other => Err(format!("unsupported first-party provider call: {other}")),
+    }
+}
+
+fn trace_query_from_body(body: &Value) -> TraceQuery {
+    TraceQuery {
+        offset: number_field(body, "offset").unwrap_or(0),
+        limit: number_field(body, "limit").unwrap_or(100),
+        provider: string_field(body, "provider"),
+        event_type: string_field(body, "event_type"),
+        obs_prefix: string_field(body, "obs_prefix"),
+        max_bytes: number_field(body, "max_bytes"),
+    }
+}
+
+fn resolve_session_path_arguments(
+    session: Option<&SessionManifest>,
+    arguments: &Value,
+) -> Result<Value, String> {
+    let mut resolved = arguments.clone();
+    let Some(object) = resolved.as_object_mut() else {
+        return Ok(resolved);
+    };
+    for field in ["input_path", "trace_path", "report_path"] {
+        let Some(path) = object.get(field).and_then(Value::as_str) else {
+            continue;
+        };
+        let path = PathBuf::from(path);
+        if path.is_absolute() {
+            continue;
+        }
+        let Some(resolved_path) = resolve_session_relative_path(session, arguments, &path)? else {
+            continue;
+        };
+        object.insert(
+            field.to_string(),
+            Value::String(resolved_path.to_string_lossy().into_owned()),
+        );
+    }
+    Ok(resolved)
+}
+
+fn resolve_session_relative_path(
+    session: Option<&SessionManifest>,
+    arguments: &Value,
+    path: &Path,
+) -> Result<Option<PathBuf>, String> {
+    let Some(session) = session else {
+        return Ok(None);
+    };
+    if let Some(root_name) = string_field(arguments, "root") {
+        let root = session
+            .roots
+            .iter()
+            .find(|root| root.name == root_name)
+            .ok_or_else(|| "relative path root is outside the session scope".to_string())?;
+        return Ok(Some(root.path.join(path)));
+    }
+    match session.roots.as_slice() {
+        [root] => Ok(Some(root.path.join(path))),
+        [] => Ok(None),
+        _ => Err("relative path requires an explicit scoped root".to_string()),
     }
 }
 

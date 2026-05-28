@@ -238,7 +238,7 @@ fn provider_call_runs_report_lint_from_report_and_trace() {
 }
 
 #[test]
-fn provider_call_runs_cert_and_bench_providers() {
+fn provider_call_routes_cert_and_runs_bench_providers() {
     let cert = Command::new(env!("CARGO_BIN_EXE_runwarden"))
         .args([
             "provider",
@@ -256,7 +256,8 @@ fn provider_call_runs_cert_and_bench_providers() {
     );
     let cert_stdout = String::from_utf8(cert.stdout).expect("utf8 stdout");
     assert!(cert_stdout.contains(r#""provider": "runwarden.cert.all""#));
-    assert!(cert_stdout.contains(r#""passed": true"#));
+    assert!(cert_stdout.contains(r#""decision": "requires_review""#));
+    assert!(cert_stdout.contains(r#""error_kind": "approval_invalid""#));
 
     let bench = Command::new(env!("CARGO_BIN_EXE_runwarden"))
         .args([
@@ -279,7 +280,7 @@ fn provider_call_runs_cert_and_bench_providers() {
 }
 
 #[test]
-fn provider_call_prepares_external_shell_provider_through_runtime_mediation() {
+fn provider_call_without_session_routes_external_shell_through_kernel_before_runtime() {
     let dir = tempdir().expect("tempdir");
     let request_path = dir.path().join("external-shell.json");
     fs::write(
@@ -316,7 +317,49 @@ fn provider_call_prepares_external_shell_provider_through_runtime_mediation() {
     assert!(stdout.contains(r#""decision": "requires_review""#));
     assert!(stdout.contains(r#""execution_status": "not_executed""#));
     assert!(stdout.contains(r#""side_effect_executed": false"#));
-    assert!(stdout.contains(r#""executable": "git""#));
+    assert!(stdout.contains(r#""error_kind": "approval_invalid""#));
+}
+
+#[test]
+fn provider_call_without_session_routes_high_risk_report_render_through_kernel() {
+    let dir = tempdir().expect("tempdir");
+    let trace_path = dir.path().join("trace.json");
+    let report_path = dir.path().join("report.json");
+    fs::write(
+        &trace_path,
+        provider_completed_trace_json("runwarden.input.inspect"),
+    )
+    .expect("trace");
+    fs::write(
+        &report_path,
+        r#"{"claims":[{"id":"finding-1","text":"Input inspection completed","obs_refs":["obs_1"]}]}"#,
+    )
+    .expect("report");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_runwarden"))
+        .args([
+            "provider",
+            "call",
+            "--provider",
+            "runwarden.report.render",
+            "--report",
+        ])
+        .arg(&report_path)
+        .args(["--trace"])
+        .arg(&trace_path)
+        .arg("--json")
+        .output()
+        .expect("provider call");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    assert!(stdout.contains(r#""decision": "requires_review""#));
+    assert!(stdout.contains(r#""error_kind": "approval_invalid""#));
+    assert!(!stdout.contains(r#""extension": "markdown""#));
 }
 
 #[test]

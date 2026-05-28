@@ -469,7 +469,8 @@ fn provider_requires_approval(provider: &KernelProvider) -> bool {
     ) || provider.side_effects.iter().any(|side_effect| {
         matches!(
             side_effect,
-            SideEffectKind::FileWrite
+            SideEffectKind::Network
+                | SideEffectKind::FileWrite
                 | SideEffectKind::ProcessSpawn
                 | SideEffectKind::CredentialUse
                 | SideEffectKind::Destructive

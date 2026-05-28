@@ -106,6 +106,28 @@ fn provider_policy_outcome_includes_observation_id_and_trace_event() {
 }
 
 #[test]
+fn network_side_effect_requires_reviewer_approval_even_for_low_risk_provider() {
+    let provider_id = "external.low_risk_network";
+    let registry = registry_with(provider(
+        provider_id,
+        ProviderRisk::Low,
+        vec![SideEffectKind::Network],
+    ));
+    let policy = base_policy(provider_id);
+    let mut enforcer = KernelEnforcer::new(registry, policy);
+
+    let outcome = enforcer.evaluate_call(&call(provider_id, json!({"url":"https://example.com"})));
+
+    assert_eq!(outcome.decision, PolicyDecision::RequiresReview);
+    assert_eq!(outcome.execution_status, ExecutionStatus::NotExecuted);
+    assert_eq!(
+        outcome.envelope.error_kind,
+        Some(ErrorKind::ApprovalInvalid)
+    );
+    assert!(!outcome.envelope.side_effect_executed);
+}
+
+#[test]
 fn root_escape_is_denied_before_side_effect() {
     let provider_id = "runwarden.evidence.inspect";
     let registry = registry_with(provider(

@@ -24,7 +24,7 @@ use runwarden_kernel::artifact::ArtifactManifest;
 use runwarden_kernel::authority::{ApprovalBinding, ApprovalRecord, ApprovalState};
 use runwarden_kernel::contracts::{PolicyDecision, ProviderCall};
 use runwarden_kernel::evidence::{InMemoryTraceStore, TraceEvent, TraceQuery, hex_sha256};
-use runwarden_kernel::kernel::KernelEnforcer;
+use runwarden_kernel::kernel::{KernelEnforcer, KernelPolicy, ScopedRoot};
 use runwarden_kernel::manifest::{AssessmentManifest, SessionManifest};
 use runwarden_providers::catalog::{
     EXTERNAL_PROVIDER_IDS, FIRST_PARTY_PROVIDER_IDS, default_external_provider_manifest,
@@ -741,16 +741,31 @@ fn run() -> anyhow::Result<()> {
                 json,
             } => {
                 let session_manifest = session.as_deref().map(read_session).transpose()?;
-                let mut provider_call = session_manifest.as_ref().map(|session_manifest| {
-                    provider_call_from_cli(
-                        session_manifest,
-                        &provider,
-                        input.as_ref(),
-                        root.as_ref(),
-                        trace.as_ref(),
-                        report.as_ref(),
-                        format.as_deref(),
-                    )
+                let mut provider_call = Some(match session_manifest.as_ref() {
+                    Some(session_manifest) => provider_call_from_cli(CliProviderCallInput {
+                        session_id: &session_manifest.session_id,
+                        actor_id: session_manifest.actor_id.clone(),
+                        authz_id: session_manifest.authz_id.clone(),
+                        session_manifest: Some(session_manifest),
+                        provider: &provider,
+                        input: input.as_ref(),
+                        root: root.as_ref(),
+                        trace: trace.as_ref(),
+                        report: report.as_ref(),
+                        format: format.as_deref(),
+                    }),
+                    None => provider_call_from_cli(CliProviderCallInput {
+                        session_id: "cli-provider-call",
+                        actor_id: None,
+                        authz_id: None,
+                        session_manifest: None,
+                        provider: &provider,
+                        input: input.as_ref(),
+                        root: root.as_ref(),
+                        trace: trace.as_ref(),
+                        report: report.as_ref(),
+                        format: format.as_deref(),
+                    }),
                 });
                 if let Some(call) = provider_call.as_mut() {
                     attach_matching_approval(call)?;
@@ -758,8 +773,16 @@ fn run() -> anyhow::Result<()> {
                         full_provider_registry(),
                         session_manifest
                             .as_ref()
-                            .expect("session-backed provider call")
-                            .to_kernel_policy(),
+                            .map(SessionManifest::to_kernel_policy)
+                            .unwrap_or_else(|| {
+                                default_cli_provider_policy(
+                                    &provider,
+                                    input.as_ref(),
+                                    root.as_ref(),
+                                    trace.as_ref(),
+                                    report.as_ref(),
+                                )
+                            }),
                     );
                     for approval in read_all_approvals()? {
                         enforcer.add_approval(approval);
@@ -1270,48 +1293,54 @@ fn runtime_denial_error_kind(kind: &ProviderRuntimeDenialKind) -> &'static str {
     }
 }
 
-fn provider_call_from_cli(
-    session_manifest: &SessionManifest,
-    provider: &str,
-    input: Option<&PathBuf>,
-    root: Option<&PathBuf>,
-    trace: Option<&PathBuf>,
-    report: Option<&PathBuf>,
-    format: Option<&str>,
-) -> ProviderCall {
+struct CliProviderCallInput<'a> {
+    session_id: &'a str,
+    actor_id: Option<String>,
+    authz_id: Option<String>,
+    session_manifest: Option<&'a SessionManifest>,
+    provider: &'a str,
+    input: Option<&'a PathBuf>,
+    root: Option<&'a PathBuf>,
+    trace: Option<&'a PathBuf>,
+    report: Option<&'a PathBuf>,
+    format: Option<&'a str>,
+}
+
+fn provider_call_from_cli(input: CliProviderCallInput<'_>) -> ProviderCall {
     let mut arguments = serde_json::Map::new();
-    if let Some(path) = input {
+    if let Some(path) = input.input {
         arguments.insert(
             "input_path".to_string(),
             serde_json::Value::String(path.to_string_lossy().into_owned()),
         );
     }
-    if let Some(path) = root {
+    if let Some(path) = input.root {
         let root_value = path.to_string_lossy().into_owned();
-        let key = if session_manifest
-            .roots
-            .iter()
-            .any(|root| root.name == root_value)
-        {
+        let key = if input.session_manifest.is_some_and(|session_manifest| {
+            session_manifest
+                .roots
+                .iter()
+                .any(|root| root.name == root_value)
+        }) {
             "root"
         } else {
             "root_path"
         };
         arguments.insert(key.to_string(), serde_json::Value::String(root_value));
     }
-    if let Some(path) = trace {
+    if let Some(path) = input.trace {
         arguments.insert(
             "trace_path".to_string(),
             serde_json::Value::String(path.to_string_lossy().into_owned()),
         );
     }
-    if let Some(path) = report {
+    if let Some(path) = input.report {
         arguments.insert(
             "report_path".to_string(),
             serde_json::Value::String(path.to_string_lossy().into_owned()),
         );
     }
-    if let Some(format) = format {
+    if let Some(format) = input.format {
         arguments.insert(
             "format".to_string(),
             serde_json::Value::String(format.to_string()),
@@ -1319,13 +1348,45 @@ fn provider_call_from_cli(
     }
 
     ProviderCall {
-        session_id: session_manifest.session_id.clone(),
-        provider: provider.to_string(),
-        action: provider_action(provider).to_string(),
+        session_id: input.session_id.to_string(),
+        provider: input.provider.to_string(),
+        action: provider_action(input.provider).to_string(),
         arguments: serde_json::Value::Object(arguments),
-        actor_id: session_manifest.actor_id.clone(),
-        authz_id: session_manifest.authz_id.clone(),
+        actor_id: input.actor_id,
+        authz_id: input.authz_id,
         approval_id: None,
+    }
+}
+
+fn default_cli_provider_policy(
+    provider: &str,
+    input: Option<&PathBuf>,
+    root: Option<&PathBuf>,
+    trace: Option<&PathBuf>,
+    report: Option<&PathBuf>,
+) -> KernelPolicy {
+    let mut policy = KernelPolicy::default();
+    policy.allow_provider(provider);
+    policy.active_assessment = true;
+    for (name, path) in [
+        ("input", input),
+        ("root", root),
+        ("trace", trace),
+        ("report", report),
+    ] {
+        if let Some(root) = default_cli_scoped_root(path) {
+            policy.add_scoped_root(ScopedRoot::new(format!("cli-{name}"), root));
+        }
+    }
+    policy
+}
+
+fn default_cli_scoped_root(path: Option<&PathBuf>) -> Option<PathBuf> {
+    let path = path?;
+    if path.is_dir() {
+        Some(path.clone())
+    } else {
+        path.parent().map(Path::to_path_buf)
     }
 }
 

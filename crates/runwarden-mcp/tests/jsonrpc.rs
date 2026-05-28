@@ -1,4 +1,4 @@
-use runwarden_mcp::{handle_jsonrpc_body, handle_stdio_payload};
+use runwarden_mcp::{handle_jsonrpc_body, handle_jsonrpc_message, handle_stdio_payload};
 use serde_json::{Value, json};
 
 #[test]
@@ -58,6 +58,22 @@ fn stdio_payload_rejects_short_content_length_frame() {
     let response = handle_stdio_payload("Content-Length: 20\r\n\r\n{}");
 
     assert!(response.is_err());
+}
+
+#[test]
+fn jsonrpc_notification_without_id_does_not_emit_response() {
+    let notification = r#"{"jsonrpc":"2.0","method":"initialized","params":{}}"#;
+    let framed = format!(
+        "Content-Length: {}\r\n\r\n{}",
+        notification.len(),
+        notification
+    );
+
+    let message = handle_jsonrpc_message(notification).expect("notification");
+    let frame = handle_stdio_payload(&framed).expect("stdio notification");
+
+    assert!(message.is_none());
+    assert!(frame.is_empty());
 }
 
 #[test]

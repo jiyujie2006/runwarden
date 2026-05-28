@@ -10,7 +10,9 @@ fn main() -> anyhow::Result<()> {
         if body.trim().is_empty() {
             continue;
         }
-        let response = runwarden_mcp::handle_jsonrpc_body(&body)?;
+        let Some(response) = runwarden_mcp::handle_jsonrpc_message(&body)? else {
+            continue;
+        };
         let response_body = serde_json::to_string(&response)?;
         write!(
             stdout,
