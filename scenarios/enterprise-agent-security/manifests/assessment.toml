@@ -1,0 +1,14 @@
+version = "0.1"
+name = "enterprise-agent-security"
+mode = "offline"
+provider_allowlist = [
+  "runwarden.input.inspect",
+  "runwarden.evidence.inspect",
+  "runwarden.trace.export",
+  "runwarden.report.lint",
+  "runwarden.report.render",
+]
+
+[active_assessment]
+enabled = false
+

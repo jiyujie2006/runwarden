@@ -1,0 +1,5 @@
+{
+  "expected_pass": true,
+  "min_trace_completeness": 1.0,
+  "min_report_citation_accuracy": 1.0
+}

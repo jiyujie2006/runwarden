@@ -1,0 +1,23 @@
+version = "0.1"
+name = "local-web-risk"
+mode = "offline"
+provider_allowlist = [
+  "runwarden.input.inspect",
+  "runwarden.trace.export",
+  "runwarden.report.lint",
+  "external.mcp.browser.open_page",
+]
+
+[[targets]]
+name = "public-web-target"
+value = "https://example.com"
+
+[actor]
+id = "agent-local-web"
+
+[authorization]
+id = "authz-local-web"
+state = "active"
+
+[active_assessment]
+enabled = true

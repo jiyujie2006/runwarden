@@ -1,0 +1,306 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "OperationResult_for_ProviderOutcome",
+  "type": "object",
+  "required": [
+    "artifacts",
+    "next_actions",
+    "obs_refs",
+    "ok",
+    "status"
+  ],
+  "properties": {
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ArtifactRef"
+      }
+    },
+    "data": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ProviderOutcome"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "error": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/OperationError"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "next_actions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "obs_refs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "status": {
+      "$ref": "#/definitions/OperationStatus"
+    }
+  },
+  "definitions": {
+    "ArtifactRef": {
+      "type": "object",
+      "required": [
+        "id",
+        "path"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "DecisionEnvelope": {
+      "type": "object",
+      "required": [
+        "action",
+        "decision",
+        "execution_mode",
+        "gate_id",
+        "provider",
+        "reason",
+        "side_effect_executed",
+        "target"
+      ],
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "actor_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "approval_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "authz_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "decision": {
+          "$ref": "#/definitions/PolicyDecision"
+        },
+        "denied_by": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error_kind": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ErrorKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "execution_mode": {
+          "$ref": "#/definitions/ExecutionMode"
+        },
+        "gate_id": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "side_effect_executed": {
+          "type": "boolean"
+        },
+        "suggestion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target": {
+          "type": "string"
+        },
+        "trace_event": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "ErrorCode": {
+      "type": "string"
+    },
+    "ErrorKind": {
+      "type": "string",
+      "enum": [
+        "manifest_invalid",
+        "provider_unknown",
+        "provider_not_allowed",
+        "argument_schema_invalid",
+        "scope_violation",
+        "root_escape",
+        "egress_denied",
+        "budget_exceeded",
+        "active_assessment_required",
+        "authz_invalid",
+        "approval_invalid",
+        "approval_consumed",
+        "approval_expired",
+        "trace_tampered",
+        "trace_write_failed",
+        "redaction_failed",
+        "artifact_invalid",
+        "report_citation_invalid",
+        "internal"
+      ]
+    },
+    "ExecutionMode": {
+      "type": "string",
+      "enum": [
+        "dry_run",
+        "enforced",
+        "debug"
+      ]
+    },
+    "ExecutionStatus": {
+      "type": "string",
+      "enum": [
+        "not_executed",
+        "running",
+        "completed",
+        "failed",
+        "incomplete"
+      ]
+    },
+    "OperationError": {
+      "type": "object",
+      "required": [
+        "code",
+        "developer_message",
+        "kind",
+        "obs_refs",
+        "retryable",
+        "side_effect_executed",
+        "user_message"
+      ],
+      "properties": {
+        "code": {
+          "$ref": "#/definitions/ErrorCode"
+        },
+        "developer_message": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/definitions/ErrorKind"
+        },
+        "obs_refs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "side_effect_executed": {
+          "type": "boolean"
+        },
+        "user_message": {
+          "type": "string"
+        }
+      }
+    },
+    "OperationStatus": {
+      "type": "string",
+      "enum": [
+        "ok",
+        "denied",
+        "requires_review",
+        "failed",
+        "incomplete"
+      ]
+    },
+    "PolicyDecision": {
+      "type": "string",
+      "enum": [
+        "allowed",
+        "denied",
+        "requires_review"
+      ]
+    },
+    "ProviderOutcome": {
+      "type": "object",
+      "required": [
+        "artifacts",
+        "decision",
+        "envelope",
+        "execution_status",
+        "next_actions",
+        "observation_id",
+        "output"
+      ],
+      "properties": {
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ArtifactRef"
+          }
+        },
+        "decision": {
+          "$ref": "#/definitions/PolicyDecision"
+        },
+        "envelope": {
+          "$ref": "#/definitions/DecisionEnvelope"
+        },
+        "execution_status": {
+          "$ref": "#/definitions/ExecutionStatus"
+        },
+        "next_actions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "observation_id": {
+          "type": "string"
+        },
+        "output": true
+      }
+    }
+  }
+}

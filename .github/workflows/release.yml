@@ -1,0 +1,51 @@
+name: Release Evidence
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release-smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: bash scripts/release_gate_local.sh
+      - run: bash scripts/generate_artifacts.sh
+      - run: bash scripts/artifact_leak_scan.sh
+      - run: cargo build --workspace --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runwarden-${{ matrix.os }}-release-evidence
+          path: |
+            target/release/runwarden*
+            target/release/runwarden-mcp*
+            artifacts/**
+
+  publish-release:
+    needs: release-smoke
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/**

@@ -1,0 +1,87 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ApprovalRecord",
+  "type": "object",
+  "required": [
+    "approval_id",
+    "binding",
+    "state"
+  ],
+  "properties": {
+    "approval_id": {
+      "type": "string"
+    },
+    "binding": {
+      "$ref": "#/definitions/ApprovalBinding"
+    },
+    "expires_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "reviewer": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "state": {
+      "$ref": "#/definitions/ApprovalState"
+    }
+  },
+  "definitions": {
+    "ApprovalBinding": {
+      "type": "object",
+      "required": [
+        "action",
+        "argument_hash",
+        "provider",
+        "session_id"
+      ],
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "actor_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "argument_hash": {
+          "type": "string"
+        },
+        "authz_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider": {
+          "type": "string"
+        },
+        "session_id": {
+          "type": "string"
+        }
+      }
+    },
+    "ApprovalState": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "approved",
+        "consumed",
+        "denied",
+        "expired",
+        "revoked"
+      ]
+    }
+  }
+}

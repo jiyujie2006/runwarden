@@ -1,0 +1,41 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ProviderCall",
+  "type": "object",
+  "required": [
+    "action",
+    "arguments",
+    "provider",
+    "session_id"
+  ],
+  "properties": {
+    "action": {
+      "type": "string"
+    },
+    "actor_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "approval_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "arguments": true,
+    "authz_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "provider": {
+      "type": "string"
+    },
+    "session_id": {
+      "type": "string"
+    }
+  }
+}

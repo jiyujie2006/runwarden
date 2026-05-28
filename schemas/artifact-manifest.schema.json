@@ -1,0 +1,62 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ArtifactManifest",
+  "type": "object",
+  "required": [
+    "artifacts",
+    "schema_version"
+  ],
+  "properties": {
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ArtifactManifestEntry"
+      }
+    },
+    "schema_version": {
+      "type": "string"
+    }
+  },
+  "definitions": {
+    "ArtifactManifestEntry": {
+      "type": "object",
+      "required": [
+        "artifact_id",
+        "obs_refs",
+        "relative_path"
+      ],
+      "properties": {
+        "artifact_id": {
+          "type": "string"
+        },
+        "obs_refs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "redaction_sidecar_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "redaction_sidecar_sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "relative_path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}

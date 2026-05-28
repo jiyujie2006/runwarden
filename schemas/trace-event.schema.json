@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TraceEvent",
+  "type": "object",
+  "required": [
+    "event_hash",
+    "event_type",
+    "obs_id",
+    "payload"
+  ],
+  "properties": {
+    "event_hash": {
+      "type": "string"
+    },
+    "event_type": {
+      "type": "string"
+    },
+    "obs_id": {
+      "type": "string"
+    },
+    "payload": true,
+    "previous_hash": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "provider": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

@@ -1,0 +1,18 @@
+version = "0.1"
+name = "workflow-processing-agent"
+mode = "offline"
+provider_allowlist = [
+  "runwarden.input.inspect",
+  "runwarden.report.lint",
+  "external.mcp.api.request",
+]
+
+[actor]
+id = "agent-workflow"
+
+[authorization]
+id = "authz-workflow"
+state = "active"
+
+[active_assessment]
+enabled = true

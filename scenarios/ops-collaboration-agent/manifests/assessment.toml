@@ -1,0 +1,18 @@
+version = "0.1"
+name = "ops-collaboration-agent"
+mode = "offline"
+provider_allowlist = [
+  "runwarden.input.inspect",
+  "runwarden.accountability.summary",
+  "external.enterprise.ticket_lookup",
+]
+
+[actor]
+id = "agent-ops"
+
+[authorization]
+id = "authz-ops"
+state = "active"
+
+[active_assessment]
+enabled = true

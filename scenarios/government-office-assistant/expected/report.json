@@ -1,0 +1,9 @@
+{
+  "claims": [
+    {
+      "id": "government-office-assistant-1",
+      "text": "Sensitive office data is kept offline unless the endpoint is explicitly allowed and reviewed.",
+      "obs_refs": ["obs_government_office_assistant_1"]
+    }
+  ]
+}

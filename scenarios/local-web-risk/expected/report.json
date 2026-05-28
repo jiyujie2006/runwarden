@@ -1,0 +1,9 @@
+{
+  "claims": [
+    {
+      "id": "local-web-risk-1",
+      "text": "Localhost browser egress is denied before the downstream MCP adapter runs.",
+      "obs_refs": ["obs_local_web_risk_1"]
+    }
+  ]
+}
