@@ -265,6 +265,45 @@ fn external_mcp_http_adapter_bounds_response_reads() {
 }
 
 #[test]
+fn external_mcp_http_adapter_rejects_timeout_above_runtime_policy_before_connect() {
+    let origin = "http://127.0.0.1:9";
+    let manifest = load_provider_manifest(&format!(
+        r#"{{
+          "schema_version": "1",
+          "provider_id": "external.mcp.browser.open_page",
+          "provider_class": "external",
+          "kind": "mcp",
+          "risk": "network_active",
+          "side_effects": ["network"],
+          "transport": "http",
+          "downstream_identity": "browser-mcp",
+          "tool_identity": "open_page",
+          "declared_permissions": ["network"],
+          "allowed_origins": ["{origin}"],
+          "schema_pin": {{
+            "algorithm": "sha256",
+            "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+            "schema": {{"type": "object"}}
+          }},
+          "observed_schema": {{"type": "object"}}
+        }}"#
+    ))
+    .expect("manifest parses");
+    let request = ExternalMcpAdapterRequest {
+        transport: Some("http".to_string()),
+        url: Some(format!("{origin}/mcp")),
+        timeout_ms: Some(30_001),
+        ..ExternalMcpAdapterRequest::default()
+    };
+
+    let result = execute_external_mcp_adapter(&manifest, &request, None);
+
+    assert_eq!(result["decision"], "denied");
+    assert_eq!(result["error_kind"], "budget_exceeded");
+    assert_eq!(result["side_effect_executed"], false);
+}
+
+#[test]
 fn external_mcp_sse_adapter_reads_allowed_event_stream() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind local test server");
     let addr = listener.local_addr().expect("local addr");

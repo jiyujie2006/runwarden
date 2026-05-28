@@ -403,6 +403,16 @@ fn handle_trace_export(id: Value, arguments: &Value) -> Value {
         );
     }
 
+    let call = provider_call_from_arguments("runwarden.trace.export", arguments);
+    let mut enforcer = KernelEnforcer::new(
+        first_party_provider_registry(),
+        kernel_policy_from_arguments("runwarden.trace.export", arguments),
+    );
+    let outcome = enforcer.evaluate_call(&call);
+    if outcome.decision != PolicyDecision::Allowed {
+        return tool_error_result(id, provider_outcome_payload(&outcome));
+    }
+
     let mut store = InMemoryTraceStore::default();
     for event in trace_events {
         store.append(event);

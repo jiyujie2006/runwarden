@@ -1255,11 +1255,17 @@ pub mod external {
             header_lines
         );
 
+        let timeout = match http_timeout(request) {
+            Ok(timeout) => timeout,
+            Err(reason) => {
+                return adapter_denial(&manifest.provider_id, transport, "budget_exceeded", reason);
+            }
+        };
         let response = match send_http_request(
             &parsed,
             &request_text,
             &body,
-            request.timeout_ms,
+            timeout,
             http_response_limit_bytes(request),
         ) {
             Ok(response) => response,
@@ -1307,11 +1313,17 @@ pub mod external {
             "GET {} HTTP/1.1\r\nHost: {}\r\nAccept: text/event-stream\r\nConnection: close\r\n\r\n",
             parsed.path_and_query, parsed.host_header
         );
+        let timeout = match http_timeout(request) {
+            Ok(timeout) => timeout,
+            Err(reason) => {
+                return adapter_denial(&manifest.provider_id, transport, "budget_exceeded", reason);
+            }
+        };
         let response = match send_http_request(
             &parsed,
             &request_text,
             &[],
-            request.timeout_ms,
+            timeout,
             http_response_limit_bytes(request),
         ) {
             Ok(response) => response,
@@ -1663,14 +1675,22 @@ pub mod external {
             .min(MAX_HTTP_RESPONSE_LIMIT_BYTES)
     }
 
+    fn http_timeout(request: &ExternalMcpAdapterRequest) -> Result<Duration, String> {
+        let timeout_ms = request.timeout_ms.unwrap_or(5_000);
+        let max_timeout_ms = ProviderRuntimePolicy::default().max_timeout_ms;
+        if timeout_ms > max_timeout_ms {
+            return Err("HTTP MCP adapter timeout exceeds runtime policy".to_string());
+        }
+        Ok(Duration::from_millis(timeout_ms))
+    }
+
     fn send_http_request(
         parsed: &ParsedHttpUrl,
         request_text: &str,
         body: &[u8],
-        timeout_ms: Option<u64>,
+        timeout: Duration,
         response_limit_bytes: usize,
     ) -> Result<HttpResponse, String> {
-        let timeout = Duration::from_millis(timeout_ms.unwrap_or(5_000));
         let socket_addr = parsed
             .socket_addr
             .to_socket_addrs()

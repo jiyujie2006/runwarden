@@ -424,7 +424,7 @@ fn local_api_trace_export_rejects_tampered_hash_chain_before_export() {
 fn local_api_report_render_rejects_uncited_claim_before_artifact_write() {
     let mut router = router();
     let response = router.handle(
-        authed("POST", "/reports/render"),
+        authed("POST", "/reports/preview"),
         Some(json!({
             "report": {
                 "claims": [
@@ -442,6 +442,75 @@ fn local_api_report_render_rejects_uncited_claim_before_artifact_write() {
         "report_citation_invalid"
     );
     assert_eq!(response.body["side_effect_executed"], false);
+}
+
+#[test]
+fn local_api_report_render_enqueues_pending_approval_before_rendering() {
+    let session_id = "report_render_session";
+    let provider = "runwarden.report.render";
+    let mut router = router();
+    let create_session = router.handle(
+        authed("POST", "/sessions"),
+        Some(manifest_body(session_id, &[provider])),
+    );
+    assert_eq!(create_session.status, 200);
+
+    let body = json!({
+            "session_id": session_id,
+            "report": {
+                "claims": [
+                    {"id": "finding-1", "text": "cited finding", "obs_refs": ["obs_1"]}
+                ]
+            },
+            "trace": [trace_event()],
+            "format": "markdown"
+    });
+
+    let response = router.handle(authed("POST", "/reports/render"), Some(body.clone()));
+    let approval_id = response.body["operation"]["data"]["outcome"]["envelope"]["approval_id"]
+        .as_str()
+        .expect("approval id")
+        .to_string();
+    let queue = router.handle(authed("GET", "/approvals"), None);
+
+    assert_eq!(response.status, 200);
+    assert_eq!(
+        response.body["operation"]["data"]["outcome"]["decision"],
+        "requires_review"
+    );
+    assert_eq!(
+        response.body["operation"]["data"]["outcome"]["execution_status"],
+        "not_executed"
+    );
+    assert!(response.body["operation"]["data"]["rendered"].is_null());
+    assert_eq!(response.body["side_effect_executed"], false);
+    assert_eq!(queue.body["approvals"][0]["approval_id"], approval_id);
+    assert_eq!(queue.body["approvals"][0]["state"], "pending");
+
+    let approve = router.handle(
+        authed("POST", &format!("/approvals/{approval_id}/approve")),
+        Some(json!({
+            "reviewer": "reviewer-alice",
+            "reason": "cited report render reviewed"
+        })),
+    );
+    let mut approved_body = body;
+    approved_body["approval_id"] = json!(approval_id);
+    let rendered = router.handle(authed("POST", "/reports/render"), Some(approved_body));
+    let queue_after_render = router.handle(authed("GET", "/approvals"), None);
+
+    assert_eq!(approve.status, 200);
+    assert_eq!(rendered.status, 200);
+    assert_eq!(rendered.body["operation"]["ok"], true);
+    assert_eq!(rendered.body["operation"]["data"]["preview"], false);
+    assert_eq!(rendered.body["side_effect_executed"], false);
+    assert_eq!(
+        queue_after_render.body["approvals"]
+            .as_array()
+            .expect("approval array")
+            .len(),
+        0
+    );
 }
 
 #[test]
@@ -751,4 +820,33 @@ fn local_api_server_preserves_state_across_requests_and_reads_split_body() {
         "{second_response}"
     );
     assert!(second_response.contains("runwarden.input.inspect"));
+}
+
+#[test]
+fn local_api_server_rejects_oversized_body_before_buffering() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().expect("local addr");
+    let handle = thread::spawn(move || {
+        serve_one_request(
+            listener,
+            LocalApiServerConfig {
+                launch_token: "launch-secret".to_string(),
+                allowed_host: addr.to_string(),
+                allowed_origin: format!("http://{addr}"),
+            },
+        )
+    });
+    let mut stream = TcpStream::connect(addr).expect("connect");
+    let request = format!(
+        "POST /sessions HTTP/1.1\r\nHost: {addr}\r\nOrigin: http://{addr}\r\nAuthorization: Bearer launch-secret\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        1_048_577
+    );
+    stream.write_all(request.as_bytes()).expect("write request");
+    stream
+        .shutdown(std::net::Shutdown::Write)
+        .expect("shutdown write");
+
+    let result = handle.join().expect("server thread");
+
+    assert!(result.is_err());
 }

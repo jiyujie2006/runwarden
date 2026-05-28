@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     env, fs,
     net::TcpListener,
     path::{Path, PathBuf},
@@ -1680,21 +1680,25 @@ fn evaluate_scenario_corpora(root: &Path) -> anyhow::Result<serde_json::Value> {
                         .and_then(serde_json::Value::as_f64)
                         .unwrap_or(1.0);
 
-            let denials = read_json_value(&scenario_path.join("expected/denials.json"))?;
+            let denials = read_json_array(&scenario_path.join("expected/denials.json"))?;
             let provider_calls =
-                read_json_value(&scenario_path.join("expected/provider-calls.json"))?;
-            let case_passed = baseline_passed && !obs_refs.is_empty();
+                read_json_array(&scenario_path.join("expected/provider-calls.json"))?;
+            let artifact_failures = scenario_expected_artifact_failures(&denials, &provider_calls);
+            let case_passed =
+                baseline_passed && !obs_refs.is_empty() && artifact_failures.is_empty();
             if !case_passed {
                 passed = false;
             }
+            let mut failures = eval.failures.clone();
+            failures.extend(artifact_failures);
             json!({
                 "id": scenario,
                 "passed": case_passed,
                 "obs_refs": obs_refs,
-                "denial_count": denials.as_array().map_or(0, Vec::len),
-                "provider_call_count": provider_calls.as_array().map_or(0, Vec::len),
+                "denial_count": denials.len(),
+                "provider_call_count": provider_calls.len(),
                 "metrics": eval.metrics,
-                "failures": eval.failures
+                "failures": failures
             })
         } else {
             passed = false;
@@ -1753,6 +1757,124 @@ fn read_obs_refs(path: &Path) -> anyhow::Result<Vec<String>> {
 fn read_json_value(path: &Path) -> anyhow::Result<serde_json::Value> {
     let body = fs::read_to_string(path)?;
     Ok(serde_json::from_str(&body)?)
+}
+
+fn read_json_array(path: &Path) -> anyhow::Result<Vec<serde_json::Value>> {
+    let value = read_json_value(path)?;
+    value
+        .as_array()
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("{} must contain a JSON array", path.display()))
+}
+
+fn scenario_expected_artifact_failures(
+    denials: &[serde_json::Value],
+    provider_calls: &[serde_json::Value],
+) -> Vec<String> {
+    let mut failures = Vec::new();
+    if denials.is_empty() {
+        failures.push("expected_denials_empty".to_string());
+    }
+    if provider_calls.is_empty() {
+        failures.push("expected_provider_calls_empty".to_string());
+    }
+
+    let mut denied_providers = BTreeSet::new();
+    for denial in denials {
+        let provider = denial.get("provider").and_then(serde_json::Value::as_str);
+        let decision = denial.get("decision").and_then(serde_json::Value::as_str);
+        if provider.unwrap_or_default().is_empty() {
+            failures.push("expected_denial_missing_provider".to_string());
+        }
+        if decision != Some("denied") {
+            failures.push(format!(
+                "expected_denial_decision_not_denied:{}",
+                provider.unwrap_or("<unknown>")
+            ));
+        }
+        if denial
+            .get("reason")
+            .and_then(serde_json::Value::as_str)
+            .is_none_or(|value| value.trim().is_empty())
+            && denial
+                .get("error_kind")
+                .and_then(serde_json::Value::as_str)
+                .is_none_or(|value| value.trim().is_empty())
+        {
+            failures.push(format!(
+                "expected_denial_missing_reason_or_error:{}",
+                provider.unwrap_or("<unknown>")
+            ));
+        }
+        if let Some(provider) = provider {
+            denied_providers.insert(provider.to_string());
+        }
+    }
+
+    let mut non_allowed_call_providers = BTreeSet::new();
+    for call in provider_calls {
+        let provider = call.get("provider").and_then(serde_json::Value::as_str);
+        let action = call.get("action").and_then(serde_json::Value::as_str);
+        let decision = call.get("decision").and_then(serde_json::Value::as_str);
+        let execution_status = call
+            .get("execution_status")
+            .and_then(serde_json::Value::as_str);
+        if provider.unwrap_or_default().is_empty() {
+            failures.push("expected_provider_call_missing_provider".to_string());
+        }
+        if action.unwrap_or_default().is_empty() {
+            failures.push(format!(
+                "expected_provider_call_missing_action:{}",
+                provider.unwrap_or("<unknown>")
+            ));
+        }
+        if !matches!(decision, Some("allowed" | "denied" | "requires_review")) {
+            failures.push(format!(
+                "expected_provider_call_invalid_decision:{}",
+                provider.unwrap_or("<unknown>")
+            ));
+        }
+        if !matches!(
+            execution_status,
+            Some("completed" | "failed" | "not_executed" | "incomplete")
+        ) {
+            failures.push(format!(
+                "expected_provider_call_invalid_execution_status:{}",
+                provider.unwrap_or("<unknown>")
+            ));
+        }
+        if decision == Some("requires_review") && execution_status != Some("not_executed") {
+            failures.push(format!(
+                "expected_review_provider_call_executed:{}",
+                provider.unwrap_or("<unknown>")
+            ));
+        }
+        if matches!(decision, Some("denied" | "requires_review")) {
+            if execution_status != Some("not_executed") {
+                let is_completed_denial =
+                    decision == Some("denied") && execution_status == Some("completed");
+                if !is_completed_denial {
+                    failures.push(format!(
+                        "expected_non_allowed_provider_call_status_invalid:{}",
+                        provider.unwrap_or("<unknown>")
+                    ));
+                }
+            }
+            if let Some(provider) = provider {
+                non_allowed_call_providers.insert(provider.to_string());
+            }
+        }
+    }
+
+    for provider in denied_providers {
+        if !non_allowed_call_providers.contains(&provider) {
+            failures.push(format!("expected_denial_missing_provider_call:{provider}"));
+        }
+    }
+
+    failures.sort();
+    failures.dedup();
+    failures
 }
 
 fn expectation_for_config_path(path: &Path) -> AgentNativeExpectation {

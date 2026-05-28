@@ -20,10 +20,11 @@ use runwarden_assurance::report::{
 use runwarden_kernel::artifact::ArtifactManifest;
 use runwarden_kernel::authority::{ApprovalBinding, ApprovalRecord, ApprovalState};
 use runwarden_kernel::contracts::{
-    ErrorKind, ExecutionStatus, PolicyDecision, ProviderCall, ProviderClass, SideEffectKind,
+    ErrorKind, ExecutionStatus, PolicyDecision, ProviderCall, ProviderClass, ProviderOutcome,
+    SideEffectKind,
 };
 use runwarden_kernel::evidence::{InMemoryTraceStore, TraceEvent, TraceQuery, hex_sha256};
-use runwarden_kernel::kernel::KernelEnforcer;
+use runwarden_kernel::kernel::{KernelEnforcer, KernelPolicy};
 use runwarden_kernel::manifest::{AssessmentManifest, SessionManifest};
 use runwarden_providers::catalog::{
     EXTERNAL_PROVIDER_IDS, FIRST_PARTY_PROVIDER_IDS, full_provider_registry,
@@ -34,6 +35,8 @@ use serde_json::{Value, json};
 
 pub const LOCAL_API_SECURITY_MODEL: &str =
     "launch token + host/origin checks + kernel-owned decisions";
+const MAX_LOCAL_API_REQUEST_BODY_BYTES: usize = 1_048_576;
+const MAX_LOCAL_API_REQUEST_HEADER_BYTES: usize = 16 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct LocalApiRequest {
@@ -443,24 +446,7 @@ impl LocalApiRouter {
             && outcome.envelope.approval_id.is_none()
         {
             let binding = enforcer.approval_binding_for_call(&call);
-            let approval_id = pending_approval_id_for_binding(&binding);
-            if !self.security.approvals.contains_key(&approval_id) {
-                self.security
-                    .insert_approval(ApprovalRecord::new(&approval_id, binding));
-            }
-            let approval = self
-                .security
-                .approvals
-                .get(&approval_id)
-                .cloned()
-                .expect("pending approval was inserted");
-            outcome.envelope.approval_id = Some(approval_id.clone());
-            outcome.output = json!({
-                "approval": approval,
-                "approval_id": approval_id,
-                "side_effect_executed": false
-            });
-            outcome.next_actions.push("review_approval".to_string());
+            self.enqueue_pending_approval(&mut outcome, binding);
         }
         if outcome.decision == PolicyDecision::Allowed {
             if call
@@ -659,27 +645,84 @@ impl LocalApiRouter {
     }
 
     fn report_render(
-        &self,
+        &mut self,
         request: &LocalApiRequest,
         body: Option<Value>,
         preview: bool,
     ) -> LocalApiResponse {
+        let authorization = self.security.authorize_control_plane(request);
+        if authorization.status != 200 {
+            return authorization;
+        }
+        let authorization_headers = authorization.headers;
         let Some(body) = body else {
-            return self.operation_error(
-                request,
+            return operation_error_with_headers(
                 400,
+                authorization_headers,
                 "failed",
                 "argument_schema_invalid",
                 "report render body is required",
                 false,
             );
         };
+        if !preview {
+            let call = local_api_report_render_call(&body);
+            let policy = match string_field(&body, "session_id") {
+                Some(session_id) => match self.security.sessions.get(&session_id) {
+                    Some(session) => session.to_kernel_policy(),
+                    None => {
+                        return operation_error_with_headers(
+                            404,
+                            authorization_headers,
+                            "denied",
+                            "manifest_invalid",
+                            "session was not found",
+                            false,
+                        );
+                    }
+                },
+                None => local_api_default_report_render_policy(),
+            };
+            let mut enforcer = KernelEnforcer::new(full_provider_registry(), policy);
+            for approval in self.security.approvals.values().cloned() {
+                enforcer.add_approval(approval);
+            }
+            let mut outcome = enforcer.evaluate_call(&call);
+            if outcome.decision == PolicyDecision::RequiresReview
+                && outcome.envelope.approval_id.is_none()
+            {
+                let binding = enforcer.approval_binding_for_call(&call);
+                self.enqueue_pending_approval(&mut outcome, binding);
+            }
+            if outcome.decision != PolicyDecision::Allowed {
+                return operation_response_with_headers(
+                    200,
+                    authorization_headers,
+                    json!({
+                        "outcome": outcome,
+                        "api_owns_security_decision": false,
+                        "kernel_enforcement_required": true
+                    }),
+                    false,
+                    ["review_approval"],
+                );
+            }
+            if call
+                .approval_id
+                .as_deref()
+                .and_then(|approval_id| enforcer.approval_state(approval_id))
+                == Some(ApprovalState::Consumed)
+            {
+                self.security
+                    .persist_consumed_approval(&call, &enforcer.approval_binding_for_call(&call));
+            }
+        }
         let (report, trace) = match read_report_and_trace_from_body(&body) {
             Ok(values) => values,
             Err(message) => {
-                return self.operation_error(
-                    request,
+                return operation_error_with_headers(
                     400,
+                    authorization_headers,
                     "failed",
                     "argument_schema_invalid",
                     message,
@@ -694,9 +737,9 @@ impl LocalApiRouter {
         ) {
             Ok(format) => format,
             Err(message) => {
-                return self.operation_error(
-                    request,
+                return operation_error_with_headers(
                     400,
+                    authorization_headers,
                     "failed",
                     "argument_schema_invalid",
                     message,
@@ -705,20 +748,52 @@ impl LocalApiRouter {
             }
         };
         match render_report(&report, &trace, format) {
-            Ok(rendered) => self.operation_response(
-                request,
+            Ok(rendered) => operation_response_with_headers(
+                200,
+                authorization_headers,
                 json!({ "preview": preview, "rendered": rendered }),
                 false,
                 ["download_rendered_artifact_with_token"],
             ),
-            Err(err) => self.operation_error(
-                request,
+            Err(err) => operation_error_with_headers(
                 422,
+                authorization_headers,
                 "denied",
                 "report_citation_invalid",
                 err.message,
                 false,
             ),
+        }
+    }
+
+    fn enqueue_pending_approval(
+        &mut self,
+        outcome: &mut ProviderOutcome,
+        binding: ApprovalBinding,
+    ) {
+        let approval_id = pending_approval_id_for_binding(&binding);
+        if !self.security.approvals.contains_key(&approval_id) {
+            self.security
+                .insert_approval(ApprovalRecord::new(&approval_id, binding));
+        }
+        let approval = self
+            .security
+            .approvals
+            .get(&approval_id)
+            .cloned()
+            .expect("pending approval was inserted");
+        outcome.envelope.approval_id = Some(approval_id.clone());
+        outcome.output = json!({
+            "approval": approval,
+            "approval_id": approval_id,
+            "side_effect_executed": false
+        });
+        if !outcome
+            .next_actions
+            .iter()
+            .any(|action| action == "review_approval")
+        {
+            outcome.next_actions.push("review_approval".to_string());
         }
     }
 
@@ -1227,6 +1302,36 @@ fn string_field(body: &Value, name: &str) -> Option<String> {
     body.get(name)
         .and_then(Value::as_str)
         .map(ToString::to_string)
+}
+
+fn local_api_default_report_render_policy() -> KernelPolicy {
+    let mut policy = KernelPolicy::default();
+    policy.allow_provider("runwarden.report.render");
+    policy.active_assessment = true;
+    policy
+}
+
+fn local_api_report_render_call(body: &Value) -> ProviderCall {
+    ProviderCall {
+        session_id: string_field(body, "session_id")
+            .unwrap_or_else(|| "local-api-report-render".to_string()),
+        provider: "runwarden.report.render".to_string(),
+        action: "render".to_string(),
+        arguments: provider_arguments_from_local_api_body(body),
+        actor_id: string_field(body, "actor_id"),
+        authz_id: string_field(body, "authz_id"),
+        approval_id: string_field(body, "approval_id"),
+    }
+}
+
+fn provider_arguments_from_local_api_body(body: &Value) -> Value {
+    let mut arguments = body.clone();
+    if let Some(object) = arguments.as_object_mut() {
+        for key in ["session_id", "actor_id", "authz_id", "approval_id"] {
+            object.remove(key);
+        }
+    }
+    arguments
 }
 
 fn number_field(body: &Value, name: &str) -> Option<usize> {
@@ -1816,22 +1921,32 @@ fn read_http_request_bytes(stream: &mut impl Read) -> std::io::Result<Vec<u8>> {
             break;
         }
         bytes.extend_from_slice(&buffer[..read]);
-        if let Some(expected_len) = expected_http_request_len(&bytes) {
+        if let Some((header_end, content_length)) = http_request_lengths(&bytes)? {
+            if content_length > MAX_LOCAL_API_REQUEST_BODY_BYTES {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "local API request body exceeds limit",
+                ));
+            }
+            let expected_len = header_end + content_length;
             if bytes.len() >= expected_len {
                 break;
             }
-        } else if bytes.len() > 16 * 1024 {
+        } else if bytes.len() > MAX_LOCAL_API_REQUEST_HEADER_BYTES {
             break;
         }
     }
     Ok(bytes)
 }
 
-fn expected_http_request_len(bytes: &[u8]) -> Option<usize> {
-    let header_end = bytes
+fn http_request_lengths(bytes: &[u8]) -> std::io::Result<Option<(usize, usize)>> {
+    let Some(header_end) = bytes
         .windows(4)
         .position(|window| window == b"\r\n\r\n")
-        .map(|position| position + 4)?;
+        .map(|position| position + 4)
+    else {
+        return Ok(None);
+    };
     let head = String::from_utf8_lossy(&bytes[..header_end]);
     let content_length = head.lines().find_map(|line| {
         let (name, value) = line.split_once(':')?;
@@ -1839,7 +1954,7 @@ fn expected_http_request_len(bytes: &[u8]) -> Option<usize> {
             .then(|| value.trim().parse::<usize>().ok())
             .flatten()
     });
-    Some(header_end + content_length.unwrap_or(0))
+    Ok(Some((header_end, content_length.unwrap_or(0))))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
