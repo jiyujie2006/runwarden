@@ -63,6 +63,6 @@ fn bench_workspace_reports_provider_mediation_metrics() {
 
     assert!(report.passed, "{report:#?}");
     assert!(report.metrics.provider_mediation_rate >= 1.0);
-    assert!(report.metrics.expected_denial_cases >= 1);
+    assert!(report.metrics.expected_denial_cases >= report.metrics.scenario_count);
     assert!(!report.side_effect_executed);
 }

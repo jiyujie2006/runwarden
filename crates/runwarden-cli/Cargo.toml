@@ -19,6 +19,7 @@ runwarden-kernel = { path = "../runwarden-kernel" }
 runwarden-providers = { path = "../runwarden-providers" }
 serde.workspace = true
 serde_json.workspace = true
+time.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]

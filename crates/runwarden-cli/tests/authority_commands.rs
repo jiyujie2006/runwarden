@@ -1,6 +1,6 @@
 use std::{fs, process::Command};
 
-use runwarden_kernel::authority::{ApprovalBinding, ApprovalRecord};
+use runwarden_kernel::authority::{ApprovalBinding, ApprovalRecord, ApprovalState};
 use runwarden_kernel::evidence::hex_sha256;
 use tempfile::tempdir;
 
@@ -197,8 +197,15 @@ enabled = true
     approval
         .approve("reviewer-alice", "reviewed stdio adapter execution")
         .expect("approval can be approved");
+    let mut stale_approval = ApprovalRecord::new("approval-0", approval.binding.clone());
+    stale_approval.state = ApprovalState::Consumed;
     let approval_dir = dir.path().join(".runwarden/approvals");
     fs::create_dir_all(&approval_dir).expect("approval dir");
+    fs::write(
+        approval_dir.join("approval-0.json"),
+        serde_json::to_string_pretty(&stale_approval).expect("stale approval json"),
+    )
+    .expect("write stale approval");
     fs::write(
         approval_dir.join("approval-1.json"),
         serde_json::to_string_pretty(&approval).expect("approval json"),

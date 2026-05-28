@@ -134,7 +134,19 @@ fn trace_export_command_supports_paged_provider_filters_and_compact_refs() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    let export: serde_json::Value = serde_json::from_str(&stdout).expect("trace export json");
+
     assert!(stdout.contains(r#""total_matching": 2"#));
     assert!(stdout.contains(r#""obs_id": "obs_2""#));
     assert!(stdout.contains(r#""compact_refs": ["#));
+    assert_eq!(export["event_count"], 1);
+    assert_eq!(
+        export["events"]
+            .as_array()
+            .expect("events array")
+            .iter()
+            .map(|event| event["obs_id"].as_str().expect("obs id"))
+            .collect::<Vec<_>>(),
+        vec!["obs_2"]
+    );
 }

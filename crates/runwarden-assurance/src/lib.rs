@@ -1273,7 +1273,7 @@ pub mod bench {
                 .filter(|case| {
                     case.get("provider")
                         .and_then(Value::as_str)
-                        .is_some_and(|provider| provider.starts_with("external."))
+                        .is_some_and(|provider| !provider.trim().is_empty())
                 })
                 .count() as f64
                 / expected_denial_cases as f64
@@ -1300,9 +1300,24 @@ pub mod bench {
     }
 
     fn read_expected_denials(root: &Path) -> std::io::Result<Vec<Value>> {
-        let body = fs::read_to_string(
-            root.join("scenarios/enterprise-agent-security/expected/denials.json"),
-        )?;
-        Ok(serde_json::from_str(&body).unwrap_or_default())
+        let scenarios_dir = root.join("scenarios");
+        let mut entries = fs::read_dir(scenarios_dir)?.collect::<Result<Vec<_>, _>>()?;
+        entries.sort_by_key(|entry| entry.file_name());
+
+        let mut denials = Vec::new();
+        for entry in entries {
+            let scenario_dir = entry.path();
+            if !scenario_dir.is_dir() {
+                continue;
+            }
+            let denials_path = scenario_dir.join("expected/denials.json");
+            if !denials_path.exists() {
+                continue;
+            }
+            let body = fs::read_to_string(denials_path)?;
+            let values: Vec<Value> = serde_json::from_str(&body).unwrap_or_default();
+            denials.extend(values);
+        }
+        Ok(denials)
     }
 }

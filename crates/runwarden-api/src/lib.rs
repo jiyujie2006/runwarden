@@ -765,7 +765,18 @@ impl LocalApiRouter {
         binding: ApprovalBinding,
     ) {
         let approval_id = pending_approval_id_for_binding(&binding);
-        if !self.security.approvals.contains_key(&approval_id) {
+        let should_insert = self
+            .security
+            .approvals
+            .get(&approval_id)
+            .map(|approval| {
+                !matches!(
+                    approval.state,
+                    ApprovalState::Pending | ApprovalState::Approved
+                )
+            })
+            .unwrap_or(true);
+        if should_insert {
             self.security
                 .insert_approval(ApprovalRecord::new(&approval_id, binding));
         }

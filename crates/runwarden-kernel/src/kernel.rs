@@ -110,8 +110,11 @@ impl KernelPolicy {
     }
 
     pub fn add_scoped_root(&mut self, root: ScopedRoot) {
-        self.scoped_roots
-            .insert(root.name, normalize_path(&root.path));
+        let normalized = normalize_path(&root.path);
+        if normalized.as_os_str().is_empty() {
+            return;
+        }
+        self.scoped_roots.insert(root.name, normalized);
     }
 
     pub fn allow_egress_host(&mut self, host: impl Into<String>) {

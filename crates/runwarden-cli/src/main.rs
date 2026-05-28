@@ -41,6 +41,7 @@ use runwarden_providers::runtime::{
 };
 use serde::Deserialize;
 use serde_json::json;
+use time::OffsetDateTime;
 
 #[derive(Debug, Parser)]
 #[command(name = "runwarden")]
@@ -889,10 +890,12 @@ fn run() -> anyhow::Result<()> {
                 } else {
                     serde_json::Value::Null
                 };
+                let page_event_count = page.events.len();
+                let page_events = page.events.clone();
                 let export = json!({
                     "verified": true,
-                    "event_count": events.len(),
-                    "events": events,
+                    "event_count": page_event_count,
+                    "events": page_events,
                     "page": page,
                     "compact_refs": compact_refs,
                     "side_effect_executed": false
@@ -900,7 +903,7 @@ fn run() -> anyhow::Result<()> {
                 if json {
                     println!("{}", serde_json::to_string_pretty(&export)?);
                 } else {
-                    println!("exported {} trace events", events.len());
+                    println!("exported {} trace events", page_event_count);
                 }
             }
         },
@@ -1415,11 +1418,18 @@ fn attach_matching_approval(call: &mut ProviderCall) -> anyhow::Result<()> {
     let binding = cli_approval_binding(call)?;
     if let Some(approval) = read_all_approvals()?
         .into_iter()
-        .find(|approval| approval.binding == binding)
+        .find(|approval| approval.binding == binding && approval_is_usable_for_cli(approval))
     {
         call.approval_id = Some(approval.approval_id);
     }
     Ok(())
+}
+
+fn approval_is_usable_for_cli(approval: &ApprovalRecord) -> bool {
+    approval.state == ApprovalState::Approved
+        && approval
+            .expires_at
+            .is_none_or(|expires_at| expires_at > OffsetDateTime::now_utc())
 }
 
 fn persist_consumed_cli_approval(

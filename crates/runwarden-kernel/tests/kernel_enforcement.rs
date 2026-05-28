@@ -148,6 +148,30 @@ fn root_escape_is_denied_before_side_effect() {
     assert!(!outcome.envelope.side_effect_executed);
 }
 
+#[test]
+fn empty_normalized_scoped_root_is_rejected_before_scope_checks() {
+    let provider_id = "runwarden.evidence.inspect";
+    let registry = registry_with(provider(
+        provider_id,
+        ProviderRisk::Low,
+        vec![SideEffectKind::FileRead],
+    ));
+    let mut policy = KernelPolicy::default();
+    policy.allow_provider(provider_id);
+    policy.add_scoped_root(ScopedRoot::new("workspace", "."));
+    policy.active_assessment = true;
+    let mut enforcer = KernelEnforcer::new(registry, policy);
+
+    let outcome = enforcer.evaluate_call(&call(
+        provider_id,
+        json!({"root":"workspace","target_path":"/etc/passwd"}),
+    ));
+
+    assert_eq!(outcome.decision, PolicyDecision::Denied);
+    assert_eq!(outcome.envelope.error_kind, Some(ErrorKind::ScopeViolation));
+    assert!(!outcome.envelope.side_effect_executed);
+}
+
 #[cfg(unix)]
 #[test]
 fn symlink_escape_inside_scoped_root_is_denied_before_side_effect() {

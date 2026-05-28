@@ -494,10 +494,12 @@ fn local_api_report_render_enqueues_pending_approval_before_rendering() {
             "reason": "cited report render reviewed"
         })),
     );
-    let mut approved_body = body;
+    let mut approved_body = body.clone();
     approved_body["approval_id"] = json!(approval_id);
     let rendered = router.handle(authed("POST", "/reports/render"), Some(approved_body));
     let queue_after_render = router.handle(authed("GET", "/approvals"), None);
+    let repeated = router.handle(authed("POST", "/reports/render"), Some(body));
+    let queue_after_repeated = router.handle(authed("GET", "/approvals"), None);
 
     assert_eq!(approve.status, 200);
     assert_eq!(rendered.status, 200);
@@ -510,6 +512,18 @@ fn local_api_report_render_enqueues_pending_approval_before_rendering() {
             .expect("approval array")
             .len(),
         0
+    );
+    assert_eq!(
+        repeated.body["operation"]["data"]["outcome"]["decision"],
+        "requires_review"
+    );
+    assert_eq!(
+        queue_after_repeated.body["approvals"][0]["approval_id"],
+        approval_id
+    );
+    assert_eq!(
+        queue_after_repeated.body["approvals"][0]["state"],
+        "pending"
     );
 }
 
