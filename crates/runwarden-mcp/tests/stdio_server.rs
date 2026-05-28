@@ -26,6 +26,23 @@ fn stdio_server_responds_to_framed_request_without_waiting_for_eof() {
     assert!(response.contains("runwarden-mcp"));
 }
 
+#[test]
+fn stdio_server_rejects_oversized_headers_before_body_allocation() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_runwarden-mcp"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()
+        .expect("spawn runwarden-mcp");
+    let mut stdin = child.stdin.take().expect("stdin");
+    let frame = format!("Content-Length: {}{}\r\n\r\n{{}}", 2, " ".repeat(17 * 1024));
+
+    stdin.write_all(frame.as_bytes()).expect("write frame");
+    drop(stdin);
+    let status = child.wait().expect("wait");
+
+    assert!(!status.success());
+}
+
 fn read_frame<R: BufRead>(reader: &mut R) -> String {
     let mut content_length = None;
     let mut line = String::new();

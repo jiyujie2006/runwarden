@@ -31,7 +31,7 @@ fn trace_events(obs_ids: &[&str]) -> Vec<TraceEvent> {
 fn report_lint_accepts_claims_with_known_obs_refs() {
     let trace_events = trace_events(&["obs_1", "obs_2"]);
     let report = ReportDraft::new(vec![
-        ReportClaim::new("finding-1", "Shell was denied", ["obs_1"]),
+        ReportClaim::new("finding-1", "Evidence inspection completed", ["obs_1"]),
         ReportClaim::new("finding-2", "Trace verified", ["obs_2"]),
     ]);
 
@@ -39,6 +39,26 @@ fn report_lint_accepts_claims_with_known_obs_refs() {
 
     assert!(result.ok);
     assert!(result.errors.is_empty());
+}
+
+#[test]
+fn report_lint_rejects_claims_citing_unrelated_observations() {
+    let trace_events = vec![trace("obs_1")];
+    let report = ReportDraft::new(vec![ReportClaim::new(
+        "finding-1",
+        "Shell command was denied before execution",
+        ["obs_1"],
+    )]);
+
+    let result = lint_report_against_trace(&report, &trace_events);
+
+    assert!(!result.ok);
+    assert_eq!(
+        result.errors[0].kind,
+        ReportLintErrorKind::UnsupportedObservation
+    );
+    assert_eq!(result.errors[0].claim_id, "finding-1");
+    assert_eq!(result.errors[0].obs_ref.as_deref(), Some("obs_1"));
 }
 
 #[test]

@@ -956,7 +956,20 @@ impl LocalApiRouter {
                 );
             }
         };
-        match write_submission_bundle(&root, Path::new(&output_path), full) {
+        let output_path = match resolve_local_artifact_output_path(&root, &output_path) {
+            Ok(path) => path,
+            Err(message) => {
+                return operation_error_with_headers(
+                    400,
+                    authorization_headers,
+                    "failed",
+                    "argument_schema_invalid",
+                    message,
+                    false,
+                );
+            }
+        };
+        match write_submission_bundle(&root, &output_path, full) {
             Ok(result) => operation_response_with_headers(
                 200,
                 authorization_headers,
@@ -1055,7 +1068,35 @@ impl LocalApiRouter {
         let port = number_field(&body, "port").unwrap_or(8088);
         let artifacts_path =
             string_field(&body, "artifacts_path").unwrap_or_else(|| "artifacts".to_string());
-        match write_ui_launch_bundle(&bind, port as u16, Path::new(&artifacts_path)) {
+        let root = match find_workspace_root(
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        ) {
+            Ok(root) => root,
+            Err(message) => {
+                return operation_error_with_headers(
+                    500,
+                    authorization_headers,
+                    "failed",
+                    "internal",
+                    message,
+                    false,
+                );
+            }
+        };
+        let artifacts_path = match resolve_local_artifact_output_path(&root, &artifacts_path) {
+            Ok(path) => path,
+            Err(message) => {
+                return operation_error_with_headers(
+                    400,
+                    authorization_headers,
+                    "failed",
+                    "argument_schema_invalid",
+                    message,
+                    false,
+                );
+            }
+        };
+        match write_ui_launch_bundle(&bind, port as u16, &artifacts_path) {
             Ok(result) => {
                 operation_response_with_headers(200, authorization_headers, result, true, [])
             }
@@ -1564,23 +1605,122 @@ fn resolve_session_path_arguments(
     let Some(object) = resolved.as_object_mut() else {
         return Ok(resolved);
     };
-    for field in ["input_path", "trace_path", "report_path"] {
+    for field in ["input_path", "trace_path", "report_path", "root_path"] {
         let Some(path) = object.get(field).and_then(Value::as_str) else {
             continue;
         };
         let path = PathBuf::from(path);
         if path.is_absolute() {
+            if !session_path_is_allowed(session, arguments, &path)? {
+                return Err(format!("{field} is outside the session scope"));
+            }
             continue;
         }
         let Some(resolved_path) = resolve_session_relative_path(session, arguments, &path)? else {
             continue;
         };
+        if !session_path_is_allowed(session, arguments, &resolved_path)? {
+            return Err(format!("{field} is outside the session scope"));
+        }
         object.insert(
             field.to_string(),
             Value::String(resolved_path.to_string_lossy().into_owned()),
         );
     }
     Ok(resolved)
+}
+
+fn session_path_is_allowed(
+    session: Option<&SessionManifest>,
+    arguments: &Value,
+    path: &Path,
+) -> Result<bool, String> {
+    let Some(session) = session else {
+        return Ok(true);
+    };
+    if let Some(root_name) = string_field(arguments, "root") {
+        let root = session
+            .roots
+            .iter()
+            .find(|root| root.name == root_name)
+            .ok_or_else(|| "requested root is outside the session scope".to_string())?;
+        return Ok(path_is_within_root(path, &root.path));
+    }
+    Ok(session
+        .roots
+        .iter()
+        .any(|root| path_is_within_root(path, &root.path)))
+}
+
+fn path_is_within_root(path: &Path, root: &Path) -> bool {
+    let candidate = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    };
+    let Ok(canonical_root) = root.canonicalize() else {
+        return normalize_path(&candidate).starts_with(normalize_path(root));
+    };
+    match candidate.canonicalize() {
+        Ok(canonical_candidate) => canonical_candidate.starts_with(&canonical_root),
+        Err(_) => canonical_existing_parent(&candidate)
+            .map(|parent| parent.starts_with(&canonical_root))
+            .unwrap_or_else(|| normalize_path(&candidate).starts_with(normalize_path(root))),
+    }
+}
+
+fn canonical_existing_parent(path: &Path) -> Option<PathBuf> {
+    let mut current = path.parent()?.to_path_buf();
+    loop {
+        if fs::symlink_metadata(&current).is_ok() {
+            return current.canonicalize().ok();
+        }
+        if !current.pop() {
+            return None;
+        }
+    }
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            std::path::Component::RootDir => normalized.push(component.as_os_str()),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            std::path::Component::Normal(part) => normalized.push(part),
+        }
+    }
+    normalized
+}
+
+fn resolve_local_artifact_output_path(root: &Path, requested: &str) -> Result<PathBuf, String> {
+    let requested = Path::new(requested);
+    if requested.as_os_str().is_empty()
+        || requested.is_absolute()
+        || requested.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir
+                    | std::path::Component::Prefix(_)
+                    | std::path::Component::RootDir
+            )
+        })
+    {
+        return Err(
+            "artifact output path must be a relative path inside the workspace".to_string(),
+        );
+    }
+    let output_path = root.join(requested);
+    if !path_is_within_root(&output_path, root) {
+        return Err(
+            "artifact output path must be a relative path inside the workspace".to_string(),
+        );
+    }
+    Ok(output_path)
 }
 
 fn resolve_session_relative_path(
@@ -1841,6 +1981,7 @@ fn write_ui_launch_bundle(bind: &str, port: u16, artifact_root: &Path) -> Result
 }
 
 fn reviewer_console_html(bind: &str, port: u16) -> String {
+    let escaped_bind = escape_html_text(bind);
     r##"<!doctype html>
 <html lang="en">
 <head>
@@ -1928,8 +2069,23 @@ fn reviewer_console_html(bind: &str, port: u16) -> String {
 </body>
 </html>
 "##
-    .replace("__BIND__", bind)
+    .replace("__BIND__", &escaped_bind)
     .replace("__PORT__", &port.to_string())
+}
+
+fn escape_html_text(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&#39;"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
 }
 
 fn find_workspace_root(mut current: PathBuf) -> Result<PathBuf, String> {

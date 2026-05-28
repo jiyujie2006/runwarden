@@ -208,7 +208,7 @@ fn provider_call_runs_report_lint_from_report_and_trace() {
     .expect("trace");
     fs::write(
         &report_path,
-        r#"{"claims":[{"id":"finding-1","text":"Shell denied","obs_refs":["obs_1"]}]}"#,
+        r#"{"claims":[{"id":"finding-1","text":"Evidence inspection completed","obs_refs":["obs_1"]}]}"#,
     )
     .expect("report");
 

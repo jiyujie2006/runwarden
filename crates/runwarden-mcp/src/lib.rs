@@ -53,6 +53,7 @@ const RUNWARDEN_TOOLS: &[(&str, &str)] = &[
         "Render a cited report through the citation enforcement boundary.",
     ),
 ];
+const MAX_STDIO_FRAME_BYTES: usize = 1_048_576;
 
 pub fn handle_stdio_payload(payload: &str) -> anyhow::Result<String> {
     let body = decode_stdio_body(payload)?;
@@ -114,7 +115,13 @@ pub fn handle_jsonrpc_message(body: &str) -> anyhow::Result<Option<Value>> {
 }
 
 fn decode_stdio_body(payload: &str) -> anyhow::Result<&str> {
+    if payload.len() > MAX_STDIO_FRAME_BYTES + 64 * 1024 {
+        bail!("MCP frame exceeds maximum size");
+    }
     if !payload.starts_with("Content-Length:") {
+        if payload.len() > MAX_STDIO_FRAME_BYTES {
+            bail!("MCP raw payload exceeds maximum size");
+        }
         return Ok(payload.trim());
     }
 
@@ -128,6 +135,10 @@ fn decode_stdio_body(payload: &str) -> anyhow::Result<&str> {
         .trim()
         .parse::<usize>()
         .context("parse Content-Length")?;
+
+    if length > MAX_STDIO_FRAME_BYTES {
+        bail!("MCP frame Content-Length exceeds maximum size");
+    }
 
     if body.len() < length {
         bail!("MCP frame body is shorter than Content-Length");
