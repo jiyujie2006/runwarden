@@ -1793,71 +1793,95 @@ fn write_ui_launch_bundle(
 }
 
 fn reviewer_console_html(bind: &str, port: u16) -> String {
-    format!(
-        r##"<!doctype html>
+    r##"<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Runwarden Reviewer Console</title>
   <style>
-    body {{ margin: 0; font-family: "IBM Plex Sans", system-ui, sans-serif; background: #f7f8f4; color: #20241f; }}
-    main {{ display: grid; grid-template-columns: 220px minmax(0, 1fr) 320px; min-height: 100vh; }}
-    nav {{ background: #151813; color: #f3faf5; padding: 24px; }}
-    nav a {{ color: inherit; display: block; margin: 0 0 14px; padding: 9px 10px; border-radius: 6px; text-decoration: none; }}
-    nav a:hover {{ background: #262d24; }}
-    section {{ padding: 24px; min-width: 0; }}
-    .strip {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 24px; }}
-    .pill, .module {{ border: 1px solid #d8d1c5; background: white; border-radius: 6px; padding: 14px; }}
-    .grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }}
-    .actions {{ display: flex; gap: 8px; margin-top: 12px; }}
-    button {{ border: 1px solid #cdd5c8; background: white; border-radius: 6px; min-height: 44px; padding: 8px 12px; }}
-    button:hover {{ border-color: #2f6f4e; background: #eef1ea; }}
-    button:focus-visible, nav a:focus-visible {{ outline: 2px solid #2f6f4e; outline-offset: 2px; }}
-    aside {{ border-left: 1px solid #cdd5c8; background: white; padding: 24px; min-width: 0; }}
-    textarea {{ width: 100%; min-height: 88px; box-sizing: border-box; }}
-    code {{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }}
-    @media (max-width: 980px) {{
-      main {{ grid-template-columns: 1fr; }}
-      nav {{ display: flex; gap: 6px; overflow-x: auto; }}
-      .strip, .grid {{ grid-template-columns: 1fr; }}
-      aside {{ border-left: 0; border-top: 1px solid #cdd5c8; }}
-    }}
+    :root { color-scheme: light; font-family: "IBM Plex Sans", system-ui, sans-serif; }
+    body { margin: 0; background: #f7f8f4; color: #20241f; }
+    .runwarden-workbench { min-height: 100vh; display: grid; grid-template-columns: 220px minmax(0, 1fr) 340px; }
+    .left-nav { background: #151813; color: #f3faf5; padding: 18px; display: flex; flex-direction: column; gap: 6px; }
+    .left-nav strong { padding: 9px 10px; }
+    .left-nav a { color: inherit; text-decoration: none; padding: 9px 10px; border-radius: 6px; min-height: 44px; box-sizing: border-box; display: flex; align-items: center; }
+    .left-nav a:hover { background: #262d24; }
+    .workbench-main { padding: 18px; min-width: 0; }
+    .top-status-strip { display: grid; grid-template-columns: repeat(6, minmax(110px, 1fr)); gap: 8px; margin-bottom: 14px; }
+    .status-pill, .module { border: 1px solid #cdd5c8; background: #ffffff; border-radius: 6px; padding: 14px; min-width: 0; }
+    .status-pill span { display: block; font-size: 12px; color: #687064; }
+    .status-pill strong { display: block; overflow-wrap: anywhere; font-size: 14px; }
+    .tone-review { border-color: #a76716; }
+    .workspace-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .module h2, .details-drawer h2 { font-size: 16px; margin: 0 0 10px; }
+    .module p, .details-drawer p { margin: 0; }
+    .module code, .status-pill code { font-family: "JetBrains Mono", ui-monospace, monospace; overflow-wrap: anywhere; }
+    .approval-module { grid-column: 1 / -1; }
+    button { border: 1px solid #cdd5c8; background: #ffffff; border-radius: 6px; min-height: 44px; padding: 8px 12px; }
+    button:hover { border-color: #2f6f4e; background: #eef1ea; }
+    button:focus-visible, .left-nav a:focus-visible { outline: 2px solid #2f6f4e; outline-offset: 2px; }
+    .details-drawer { border-left: 1px solid #cdd5c8; background: #ffffff; padding: 18px; min-width: 0; }
+    @media (max-width: 1199px) {
+      .runwarden-workbench { grid-template-columns: 76px minmax(0, 1fr); }
+      .left-nav a { font-size: 12px; }
+      .details-drawer { grid-column: 1 / -1; border-left: 0; border-top: 1px solid #cdd5c8; }
+      .top-status-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 768px) {
+      .runwarden-workbench { display: block; padding-bottom: 76px; }
+      .left-nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; flex-direction: row; overflow-x: auto; padding: 8px 10px; border-top: 1px solid #cdd5c8; }
+      .left-nav a { white-space: nowrap; }
+      .top-status-strip, .workspace-grid { grid-template-columns: 1fr; }
+      .details-drawer { min-height: calc(100vh - 76px); border-left: 0; border-top: 1px solid #cdd5c8; }
+    }
   </style>
 </head>
 <body>
-<main>
-  <nav aria-label="Runwarden sections">
+<main class="runwarden-workbench">
+  <nav class="left-nav" aria-label="Runwarden sections">
     <strong>Runwarden</strong>
     <a href="#dashboard">Dashboard</a>
-    <a href="#approvals">Approval Queue</a>
+    <a href="#agent-boundary">Agent Boundary</a>
+    <a href="#provider-registry">Provider Registry</a>
+    <a href="#approval-queue">Approval Queue</a>
     <a href="#trace">Trace Explorer</a>
+    <a href="#accountability">Accountability</a>
+    <a href="#reports">Reports</a>
     <a href="#artifacts">Artifacts</a>
+    <a href="#settings">Settings</a>
   </nav>
-  <section id="dashboard">
-    <div class="strip">
-      <div class="pill"><span>Local API</span><br><strong>{bind}:{port}</strong></div>
-      <div class="pill"><span>Risk</span><br><strong>incomplete</strong></div>
-      <div class="pill"><span>Trace</span><br><strong>missing</strong></div>
-      <div class="pill"><span>Approvals</span><br><strong>unknown</strong></div>
-    </div>
-    <div class="grid">
-      <article class="module" id="approvals"><h2>Approval Queue</h2><p>No actions waiting for review</p><div class="actions"><button data-action="approve">Approve</button><button data-action="deny">Deny</button></div></article>
+  <section class="workbench-main" id="dashboard" aria-label="Reviewer workspace">
+    <header class="top-status-strip" role="status" aria-label="Assessment status">
+      <div class="status-pill"><span>Session</span><strong>No assessment loaded</strong></div>
+      <div class="status-pill"><span>Local API</span><strong><code>__BIND__:__PORT__</code></strong></div>
+      <div class="status-pill tone-review"><span>Risk</span><strong>incomplete</strong></div>
+      <div class="status-pill tone-review"><span>Trace</span><strong>missing</strong></div>
+      <div class="status-pill"><span>Approvals</span><strong>unknown</strong></div>
+      <div class="status-pill tone-review"><span>Gates</span><strong>missing</strong></div>
+    </header>
+    <div class="workspace-grid">
+      <article class="module" id="agent-boundary"><h2>Agent Boundary</h2><p>No agent config checked</p></article>
+      <article class="module" id="provider-registry"><h2>Provider Registry</h2><p>No providers allowed for this session</p></article>
+      <article class="module approval-module" id="approval-queue"><h2>Approval Queue</h2><p>No actions waiting for review</p></article>
       <article class="module" id="trace"><h2>Trace Explorer</h2><p>No trace events yet</p></article>
-      <article class="module"><h2>Reports</h2><p>No report rendered</p></article>
+      <article class="module" id="accountability"><h2>Accountability</h2><p>No accountability chain reconstructed</p></article>
+      <article class="module" id="reports"><h2>Reports</h2><p>No report rendered</p></article>
       <article class="module" id="artifacts"><h2>Artifacts</h2><p>No artifacts generated</p></article>
+      <article class="module" id="assurance"><h2>Assurance</h2><p>No eval run yet</p></article>
+      <article class="module" id="settings"><h2>Settings</h2><p>Local API token, artifact paths, and debug visibility are not loaded.</p></article>
     </div>
   </section>
-  <aside aria-label="Approval details">
+  <aside class="details-drawer" aria-label="Approval details">
     <h2>Approval Details</h2>
-    <p>Select an approval to inspect provider, action, authz, actor, argument hash, and obs refs.</p>
-    <label>Reason<textarea name="reason"></textarea></label>
+    <p>Select an approval to inspect provider, risk, target, side effects, actor, authz, argument hash, and obs refs before a reviewer decision.</p>
   </aside>
 </main>
 </body>
 </html>
 "##
-    )
+    .replace("__BIND__", bind)
+    .replace("__PORT__", &port.to_string())
 }
 
 fn resolve_launch_token(configured: Option<String>) -> (String, bool) {

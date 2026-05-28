@@ -40,9 +40,11 @@ export interface ReviewerConsoleViewModel {
     providers: WorkbenchModule;
     approvals: WorkbenchModule;
     trace: WorkbenchModule;
+    accountability: WorkbenchModule;
     reports: WorkbenchModule;
     artifacts: WorkbenchModule;
     assurance: WorkbenchModule;
+    settings: WorkbenchModule;
   };
 }
 
@@ -61,9 +63,11 @@ export type WorkbenchModuleId =
   | "providers"
   | "approvals"
   | "trace"
+  | "accountability"
   | "reports"
   | "artifacts"
-  | "assurance";
+  | "assurance"
+  | "settings";
 
 export interface WorkbenchModuleStateInput {
   state: ModuleState;
@@ -224,6 +228,12 @@ export function createReviewerConsoleViewModel(
         null,
         input.moduleStates?.trace
       ),
+      accountability: module(
+        "Accountability",
+        "No accountability chain reconstructed",
+        null,
+        input.moduleStates?.accountability
+      ),
       reports: module("Reports", "No report rendered", null, input.moduleStates?.reports),
       artifacts: module(
         "Artifacts",
@@ -231,7 +241,13 @@ export function createReviewerConsoleViewModel(
         null,
         input.moduleStates?.artifacts
       ),
-      assurance: module("Assurance", "No eval run yet", null, input.moduleStates?.assurance)
+      assurance: module("Assurance", "No eval run yet", null, input.moduleStates?.assurance),
+      settings: module(
+        "Settings",
+        "No local settings changed",
+        null,
+        input.moduleStates?.settings
+      )
     }
   };
 }
@@ -292,7 +308,7 @@ export function renderReviewerConsoleHtml(
     "<body>",
     "<main class=\"runwarden-workbench\">",
     renderNav(),
-    "<section class=\"workbench-main\" aria-label=\"Reviewer workspace\">",
+    "<section class=\"workbench-main\" id=\"dashboard\" aria-label=\"Reviewer workspace\">",
     renderStatusStrip(viewModel.statusStrip),
     renderModules(viewModel, rows),
     "</section>",
@@ -320,9 +336,10 @@ function renderNav(): string {
   const items = [
     "Dashboard",
     "Agent Boundary",
-    "Providers",
+    "Provider Registry",
     "Approval Queue",
     "Trace Explorer",
+    "Accountability",
     "Reports",
     "Artifacts",
     "Settings"
@@ -353,11 +370,17 @@ function renderModules(
   )}${renderModule("providers", viewModel.modules.providers)}${renderApprovalModule(
     approvals
   )}${renderModule("trace", viewModel.modules.trace)}${renderModule(
+    "accountability",
+    viewModel.modules.accountability
+  )}${renderModule(
     "reports",
     viewModel.modules.reports
   )}${renderModule("artifacts", viewModel.modules.artifacts)}${renderModule(
     "assurance",
     viewModel.modules.assurance
+  )}${renderModule(
+    "settings",
+    viewModel.modules.settings
   )}</section>`;
 }
 
@@ -391,7 +414,7 @@ function renderModule(id: string, module: WorkbenchModule): string {
 
 function renderDetailsDrawer(row: ApprovalQueueRow | undefined): string {
   if (!row) {
-    return '<aside class="details-drawer" aria-label="Details"><h2>Details</h2><p>Select an approval to review context.</p></aside>';
+    return '<aside class="details-drawer" aria-label="Approval details"><h2>Approval Details</h2><p>Select an approval to review context.</p></aside>';
   }
   return `<aside class="details-drawer" aria-label="Approval details"><h2>${escapeHtml(
     row.provider
@@ -433,7 +456,7 @@ function workbenchCss(): string {
     body { margin: 0; background: #f7f8f4; color: #20241f; }
     .runwarden-workbench { min-height: 100vh; display: grid; grid-template-columns: 220px minmax(0, 1fr) 340px; }
     .left-nav { background: #151813; color: #f3faf5; padding: 18px; display: flex; flex-direction: column; gap: 6px; }
-    .left-nav a { color: inherit; text-decoration: none; padding: 9px 10px; border-radius: 6px; }
+    .left-nav a { color: inherit; text-decoration: none; padding: 9px 10px; border-radius: 6px; min-height: 44px; box-sizing: border-box; display: flex; align-items: center; }
     .left-nav a:hover { background: #262d24; }
     .workbench-main { padding: 18px; min-width: 0; }
     .top-status-strip { display: grid; grid-template-columns: repeat(6, minmax(110px, 1fr)); gap: 8px; margin-bottom: 14px; }
@@ -461,12 +484,19 @@ function workbenchCss(): string {
     button:focus-visible, .left-nav a:focus-visible { outline: 2px solid #2f6f4e; outline-offset: 2px; }
     .details-drawer { border-left: 1px solid #cdd5c8; background: #ffffff; padding: 18px; min-width: 0; }
     textarea { width: 100%; min-height: 82px; margin-top: 8px; box-sizing: border-box; }
-    @media (max-width: 980px) {
-      .runwarden-workbench { grid-template-columns: 1fr; }
-      .left-nav { flex-direction: row; overflow-x: auto; }
+    @media (max-width: 1199px) {
+      .runwarden-workbench { grid-template-columns: 76px minmax(0, 1fr); }
+      .left-nav a { font-size: 12px; }
+      .details-drawer { grid-column: 1 / -1; border-left: 0; border-top: 1px solid #cdd5c8; }
+      .top-status-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 768px) {
+      .runwarden-workbench { display: block; padding-bottom: 76px; }
+      .left-nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; flex-direction: row; overflow-x: auto; padding: 8px 10px; border-top: 1px solid #cdd5c8; }
+      .left-nav a { white-space: nowrap; }
       .top-status-strip, .workspace-grid { grid-template-columns: 1fr; }
       .approval-row { grid-template-columns: 1fr; }
-      .details-drawer { border-left: 0; border-top: 1px solid #cdd5c8; }
+      .details-drawer { min-height: calc(100vh - 76px); border-left: 0; border-top: 1px solid #cdd5c8; }
     }
   `;
 }

@@ -56,7 +56,11 @@ describe("createReviewerConsoleViewModel", () => {
     expect(viewModel.modules.agentBoundary.emptyState).toBe("No agent config checked");
     expect(viewModel.modules.providers.emptyState).toBe("No providers allowed for this session");
     expect(viewModel.modules.trace.emptyState).toBe("No trace events yet");
+    expect(viewModel.modules.accountability.emptyState).toBe(
+      "No accountability chain reconstructed"
+    );
     expect(viewModel.modules.assurance.emptyState).toBe("No eval run yet");
+    expect(viewModel.modules.settings.emptyState).toBe("No local settings changed");
     expect(viewModel.modules.approvals.count).toBeNull();
   });
 
@@ -67,6 +71,7 @@ describe("createReviewerConsoleViewModel", () => {
         providers: { state: "partial", count: 12, message: "Showing allowlisted providers" },
         approvals: { state: "loading" },
         trace: { state: "error", message: "Trace verification failed", sideEffectExecuted: false },
+        accountability: { state: "success", message: "requester -> agent -> reviewer" },
         reports: { state: "empty" },
         artifacts: { state: "success", count: 6 },
         assurance: { state: "partial", message: "Fast gate passed, full gate missing" }
@@ -79,6 +84,7 @@ describe("createReviewerConsoleViewModel", () => {
     expect(viewModel.modules.trace.state).toBe("error");
     expect(viewModel.modules.trace.errorIncludesSideEffectState).toBe(true);
     expect(viewModel.modules.trace.sideEffectExecuted).toBe(false);
+    expect(viewModel.modules.accountability.message).toBe("requester -> agent -> reviewer");
     expect(viewModel.modules.assurance.message).toBe("Fast gate passed, full gate missing");
   });
 });
@@ -205,12 +211,24 @@ describe("renderReviewerConsoleHtml", () => {
     expect(html).toContain("runwarden-workbench");
     expect(html).toContain("Agent Boundary");
     expect(html).toContain("Provider Registry");
+    expect(html).toContain("Accountability");
+    expect(html).toContain("Assurance");
+    expect(html).toContain("Settings");
     expect(html).toContain("Approval Queue");
     expect(html).toContain("details-drawer");
     expect(html).toContain("runwarden.report.render");
     expect(html).toContain("arg_hash_1");
     expect(html).toContain("data-action=\"approve\"");
     expect(html).not.toContain("<script");
+  });
+
+  it("does not expose approve or deny actions when no approval is selected", () => {
+    const html = renderReviewerConsoleHtml({});
+
+    expect(html).toContain("No actions waiting for review");
+    expect(html).not.toContain('data-action="approve"');
+    expect(html).not.toContain('data-action="deny"');
+    expect(html).toContain('aria-label="Approval details"');
   });
 
   it("renders with the approved Runwarden design tokens", () => {

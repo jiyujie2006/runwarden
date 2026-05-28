@@ -31,7 +31,7 @@ describe("reviewer console browser contract", () => {
     expect(html).toContain('aria-label="Runwarden sections"');
     expect(html).toContain('aria-label="Approval details"');
     expect(html).toContain("details-drawer");
-    expect(html).toContain("@media (max-width: 980px)");
+    expect(html).toContain("@media (max-width: 768px)");
     expect(html).toContain("min-height: 44px");
     expect(html).toContain(":focus-visible");
     expect(html).not.toContain("<script");

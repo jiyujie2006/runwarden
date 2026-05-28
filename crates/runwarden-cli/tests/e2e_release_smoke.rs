@@ -103,8 +103,17 @@ fn ui_launch_bundle_contains_responsive_accessibility_contract() {
     assert!(html.contains("name=\"viewport\""));
     assert!(html.contains("aria-label=\"Runwarden sections\""));
     assert!(html.contains("aria-label=\"Approval details\""));
-    assert!(html.contains("@media (max-width: 980px)"));
+    assert!(html.contains("role=\"status\""));
+    assert!(html.contains("Agent Boundary"));
+    assert!(html.contains("Provider Registry"));
+    assert!(html.contains("Accountability"));
+    assert!(html.contains("Assurance"));
+    assert!(html.contains("Settings"));
+    assert!(html.contains("@media (max-width: 768px)"));
+    assert!(html.contains("position: fixed"));
     assert!(html.contains("min-height: 44px"));
     assert!(html.contains(":focus-visible"));
+    assert!(!html.contains("data-action=\"approve\""));
+    assert!(!html.contains("data-action=\"deny\""));
     assert!(!html.contains("<script"));
 }

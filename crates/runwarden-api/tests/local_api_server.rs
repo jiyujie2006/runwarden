@@ -1,3 +1,4 @@
+use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::thread;
@@ -140,6 +141,40 @@ fn local_api_router_covers_webui_and_sdk_endpoint_surface() {
             "{method} {path} should declare side effect state"
         );
     }
+}
+
+#[test]
+fn local_api_ui_launch_writes_full_reviewer_console_contract() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let artifacts = dir.path().join("artifacts");
+    let mut router = router();
+
+    let response = router.handle(
+        authed("POST", "/ui/launch"),
+        Some(json!({
+            "bind": "127.0.0.1",
+            "port": 8092,
+            "artifacts_path": artifacts.to_string_lossy()
+        })),
+    );
+
+    assert_eq!(response.status, 200);
+    let html = fs::read_to_string(artifacts.join("reviewer-console.html")).expect("read ui bundle");
+    assert!(html.contains("aria-label=\"Runwarden sections\""));
+    assert!(html.contains("role=\"status\""));
+    assert!(html.contains("Agent Boundary"));
+    assert!(html.contains("Provider Registry"));
+    assert!(html.contains("Approval Queue"));
+    assert!(html.contains("Trace Explorer"));
+    assert!(html.contains("Accountability"));
+    assert!(html.contains("Reports"));
+    assert!(html.contains("Artifacts"));
+    assert!(html.contains("Assurance"));
+    assert!(html.contains("Settings"));
+    assert!(html.contains("@media (max-width: 768px)"));
+    assert!(!html.contains("data-action=\"approve\""));
+    assert!(!html.contains("data-action=\"deny\""));
+    assert!(!html.contains("<script"));
 }
 
 #[test]
