@@ -117,3 +117,33 @@ fn ui_launch_bundle_contains_responsive_accessibility_contract() {
     assert!(!html.contains("data-action=\"deny\""));
     assert!(!html.contains("<script"));
 }
+
+#[test]
+fn ui_launch_bundle_escapes_bind_in_generated_html() {
+    let dir = tempdir().expect("tempdir");
+    let artifacts = dir.path().join("artifacts");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_runwarden"))
+        .current_dir(workspace_root())
+        .args([
+            "ui",
+            "--bind",
+            "<img src=x onerror=alert(1)>",
+            "--port",
+            "8088",
+            "--artifacts",
+        ])
+        .arg(&artifacts)
+        .arg("--json")
+        .output()
+        .expect("run ui command");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let html = fs::read_to_string(artifacts.join("reviewer-console.html")).expect("read ui bundle");
+    assert!(!html.contains("<img src=x onerror=alert(1)>"));
+    assert!(html.contains("&lt;img src=x onerror=alert(1)&gt;"));
+}

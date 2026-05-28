@@ -127,3 +127,24 @@ fn evidence_inspect_rejects_in_root_symlink_before_reading_target() {
             .any(|violation| violation.kind == EvidenceViolationKind::SymlinkEscape)
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn evidence_inspect_rejects_non_regular_files_before_reading() {
+    use std::os::unix::net::UnixListener;
+
+    let dir = tempdir().expect("tempdir");
+    let socket_path = dir.path().join("control.sock");
+    let _listener = UnixListener::bind(&socket_path).expect("unix socket");
+
+    let result =
+        inspect_evidence_root(dir.path(), EvidenceInspectPolicy::default()).expect("inspect");
+
+    assert!(result.files.is_empty());
+    assert!(
+        result
+            .violations
+            .iter()
+            .any(|violation| violation.kind == EvidenceViolationKind::NonRegularFile)
+    );
+}

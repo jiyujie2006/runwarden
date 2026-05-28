@@ -142,6 +142,7 @@ export interface RunwardenClientOptions {
   launchToken?: string;
   origin?: string;
   fetch?: FetchFn;
+  allowRemoteLaunchToken?: boolean;
 }
 
 export class RunwardenClient {
@@ -150,8 +151,16 @@ export class RunwardenClient {
   private readonly fetchFn: FetchFn;
 
   constructor(private readonly baseUrl: string, options: RunwardenClientOptions = {}) {
+    const parsedBaseUrl = new URL(baseUrl);
+    if (
+      options.launchToken &&
+      !options.allowRemoteLaunchToken &&
+      !isLocalApiOrigin(parsedBaseUrl)
+    ) {
+      throw new Error("launchToken may only be used with local Runwarden API origins");
+    }
     this.launchToken = options.launchToken;
-    this.origin = options.origin ?? new URL(baseUrl).origin;
+    this.origin = options.origin ?? parsedBaseUrl.origin;
     this.fetchFn = options.fetch ?? defaultFetch();
   }
 
@@ -273,6 +282,17 @@ export class RunwardenClient {
     }
     return payload;
   }
+}
+
+function isLocalApiOrigin(url: URL): boolean {
+  const host = url.hostname.toLowerCase();
+  return (
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host === "127.0.0.1" ||
+    host === "::1" ||
+    host === "[::1]"
+  );
 }
 
 function defaultFetch(): FetchFn {

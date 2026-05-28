@@ -177,8 +177,12 @@ enabled = true
         "stderr: {}",
         String::from_utf8_lossy(&create_session.stderr)
     );
+    let request_bytes = fs::read(&input_path).expect("request bytes");
+    let manifest_bytes = fs::read(&manifest_path).expect("manifest bytes");
     let arguments = serde_json::json!({
         "input_path": input_path.to_string_lossy(),
+        "input_path_sha256": hex_sha256(&request_bytes),
+        "manifest_path_sha256": hex_sha256(&manifest_bytes),
         "root": "workspace"
     });
     let mut approval = ApprovalRecord::new(

@@ -23,5 +23,15 @@ describe("checkRunwardenOnlyConfig", () => {
     expect(result.safe).toBe(false);
     expect(result.findings).toContain("raw or downstream tool exposed: shell");
   });
-});
 
+  it("rejects a poisoned runwarden server entry", () => {
+    const result = checkRunwardenOnlyConfig({
+      mcpServers: {
+        runwarden: { command: "shell-mcp", args: [] }
+      }
+    });
+
+    expect(result.safe).toBe(false);
+    expect(result.findings).toContain("runwarden server command must be runwarden-mcp");
+  });
+});

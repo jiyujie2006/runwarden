@@ -2,6 +2,7 @@ use runwarden_kernel::authority::{ApprovalRecord, ApprovalState};
 use runwarden_kernel::kernel::{
     AuthzState, KernelEnforcer, KernelPolicy, ProviderRegistry, ScopedRoot,
 };
+use runwarden_kernel::manifest::{AssessmentManifest, SessionManifest};
 use runwarden_kernel::{
     ErrorKind, ExecutionStatus, KernelProvider, PolicyDecision, ProviderCall, ProviderClass,
     ProviderKind, ProviderRisk, SideEffectKind,
@@ -103,6 +104,44 @@ fn provider_policy_outcome_includes_observation_id_and_trace_event() {
         outcome.envelope.trace_event.as_deref(),
         Some("provider_policy_evaluated")
     );
+}
+
+#[test]
+fn authz_bound_to_session_actor_rejects_different_actor() {
+    let assessment = AssessmentManifest::from_toml_str(
+        r#"
+version = "1"
+name = "actor-bound authz"
+mode = "audit"
+provider_allowlist = ["runwarden.evidence.inspect"]
+
+[authorization]
+id = "authz-active"
+state = "active"
+
+[actor]
+id = "agent-1"
+
+[active_assessment]
+enabled = true
+"#,
+    )
+    .expect("assessment manifest");
+    let session = SessionManifest::from_assessment("session-1", &assessment);
+    let registry = registry_with(provider(
+        "runwarden.evidence.inspect",
+        ProviderRisk::Low,
+        vec![SideEffectKind::None],
+    ));
+    let mut enforcer = KernelEnforcer::new(registry, session.to_kernel_policy());
+    let mut forged = call("runwarden.evidence.inspect", json!({}));
+    forged.actor_id = Some("agent-2".to_string());
+
+    let outcome = enforcer.evaluate_call(&forged);
+
+    assert_eq!(outcome.decision, PolicyDecision::Denied);
+    assert_eq!(outcome.envelope.error_kind, Some(ErrorKind::AuthzInvalid));
+    assert!(!outcome.envelope.side_effect_executed);
 }
 
 #[test]

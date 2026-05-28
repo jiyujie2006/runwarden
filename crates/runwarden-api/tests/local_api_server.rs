@@ -21,6 +21,15 @@ fn router() -> LocalApiRouter {
     ))
 }
 
+fn workspace_root() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("crates dir")
+        .parent()
+        .expect("workspace root")
+        .to_path_buf()
+}
+
 fn authed(method: &str, path: &str) -> LocalApiRequest {
     LocalApiRequest::new(method, path)
         .header("Host", "127.0.0.1:0")
@@ -177,8 +186,9 @@ fn local_api_router_covers_webui_and_sdk_endpoint_surface() {
 
 #[test]
 fn local_api_ui_launch_writes_full_reviewer_console_contract() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let artifacts = dir.path().join("artifacts");
+    let artifacts = format!("target/local-api-ui-{}", uuid::Uuid::now_v7().simple());
+    let artifact_path = workspace_root().join(&artifacts);
+    let _ = fs::remove_dir_all(&artifact_path);
     let mut router = router();
 
     let response = router.handle(
@@ -186,12 +196,13 @@ fn local_api_ui_launch_writes_full_reviewer_console_contract() {
         Some(json!({
             "bind": "127.0.0.1",
             "port": 8092,
-            "artifacts_path": artifacts.to_string_lossy()
+            "artifacts_path": artifacts
         })),
     );
 
     assert_eq!(response.status, 200);
-    let html = fs::read_to_string(artifacts.join("reviewer-console.html")).expect("read ui bundle");
+    let html =
+        fs::read_to_string(artifact_path.join("reviewer-console.html")).expect("read ui bundle");
     assert!(html.contains("aria-label=\"Runwarden sections\""));
     assert!(html.contains("role=\"status\""));
     assert!(html.contains("Agent Boundary"));
@@ -207,6 +218,95 @@ fn local_api_ui_launch_writes_full_reviewer_console_contract() {
     assert!(!html.contains("data-action=\"approve\""));
     assert!(!html.contains("data-action=\"deny\""));
     assert!(!html.contains("<script"));
+    let _ = fs::remove_dir_all(&artifact_path);
+}
+
+#[test]
+fn local_api_ui_launch_escapes_bind_before_writing_html() {
+    let artifacts = format!("target/local-api-ui-xss-{}", uuid::Uuid::now_v7().simple());
+    let artifact_path = workspace_root().join(&artifacts);
+    let _ = fs::remove_dir_all(&artifact_path);
+    let mut router = router();
+
+    let response = router.handle(
+        authed("POST", "/ui/launch"),
+        Some(json!({
+            "bind": "<img src=x onerror=alert(1)>",
+            "port": 8092,
+            "artifacts_path": artifacts
+        })),
+    );
+
+    assert_eq!(response.status, 200);
+    let html =
+        fs::read_to_string(artifact_path.join("reviewer-console.html")).expect("read ui bundle");
+    assert!(!html.contains("<img src=x onerror=alert(1)>"));
+    assert!(html.contains("&lt;img src=x onerror=alert(1)&gt;"));
+    let _ = fs::remove_dir_all(&artifact_path);
+}
+
+#[test]
+fn local_api_ui_launch_rejects_absolute_artifacts_path_before_writing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let artifacts = dir.path().join("outside-artifacts");
+    let mut router = router();
+
+    let response = router.handle(
+        authed("POST", "/ui/launch"),
+        Some(json!({
+            "bind": "127.0.0.1",
+            "port": 8092,
+            "artifacts_path": artifacts.to_string_lossy()
+        })),
+    );
+
+    assert_eq!(response.status, 400);
+    assert_eq!(response.body["side_effect_executed"], false);
+    assert!(!artifacts.join("reviewer-console.html").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn local_api_ui_launch_rejects_symlink_artifacts_path_before_writing() {
+    use std::os::unix::fs::symlink;
+
+    let outside = tempfile::tempdir().expect("tempdir");
+    let artifacts = format!("target/local-api-ui-link-{}", uuid::Uuid::now_v7().simple());
+    let link_path = workspace_root().join(&artifacts);
+    let _ = fs::remove_file(&link_path);
+    let _ = fs::remove_dir_all(&link_path);
+    symlink(outside.path(), &link_path).expect("symlink");
+    let mut router = router();
+
+    let response = router.handle(
+        authed("POST", "/ui/launch"),
+        Some(json!({
+            "bind": "127.0.0.1",
+            "port": 8092,
+            "artifacts_path": artifacts
+        })),
+    );
+
+    assert_eq!(response.status, 400);
+    assert_eq!(response.body["side_effect_executed"], false);
+    assert!(!outside.path().join("reviewer-console.html").exists());
+    let _ = fs::remove_file(&link_path);
+}
+
+#[test]
+fn local_api_artifact_submission_rejects_parent_output_path_before_writing() {
+    let mut router = router();
+
+    let response = router.handle(
+        authed("POST", "/artifacts/submission"),
+        Some(json!({
+            "output_path": "../runwarden-outside-artifacts",
+            "full": false
+        })),
+    );
+
+    assert_eq!(response.status, 400);
+    assert_eq!(response.body["side_effect_executed"], false);
 }
 
 #[test]

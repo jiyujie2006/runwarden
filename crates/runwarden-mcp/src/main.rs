@@ -1,5 +1,8 @@
 use std::io::{BufRead, BufReader, Write};
 
+const MAX_STDIO_FRAME_BYTES: usize = 1_048_576;
+const MAX_STDIO_HEADER_BYTES: usize = 16 * 1024;
+
 fn main() -> anyhow::Result<()> {
     let stdin = std::io::stdin();
     let mut reader = BufReader::new(stdin.lock());
@@ -26,25 +29,40 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn read_next_body<R: BufRead>(reader: &mut R) -> anyhow::Result<Option<String>> {
-    let mut line = String::new();
-    if reader.read_line(&mut line)? == 0 {
+    let Some(mut line) = read_limited_line(
+        reader,
+        MAX_STDIO_FRAME_BYTES,
+        "MCP raw payload exceeds maximum size",
+    )?
+    else {
         return Ok(None);
-    }
+    };
 
     if !line.starts_with("Content-Length:") {
-        let mut rest = String::new();
-        reader.read_to_string(&mut rest)?;
-        line.push_str(&rest);
         return Ok(Some(line));
     }
 
+    let mut header_bytes = line.len();
+    if header_bytes > MAX_STDIO_HEADER_BYTES {
+        anyhow::bail!("MCP frame headers exceed maximum size");
+    }
     let mut content_length = line
         .strip_prefix("Content-Length:")
         .and_then(|value| value.trim().parse::<usize>().ok());
     loop {
-        line.clear();
-        if reader.read_line(&mut line)? == 0 {
+        let remaining_header_bytes = MAX_STDIO_HEADER_BYTES.saturating_sub(header_bytes);
+        let Some(next_line) = read_limited_line(
+            reader,
+            remaining_header_bytes,
+            "MCP frame headers exceed maximum size",
+        )?
+        else {
             anyhow::bail!("MCP frame ended before header terminator");
+        };
+        line = next_line;
+        header_bytes += line.len();
+        if header_bytes > MAX_STDIO_HEADER_BYTES {
+            anyhow::bail!("MCP frame headers exceed maximum size");
         }
         if line == "\r\n" || line == "\n" {
             break;
@@ -56,9 +74,42 @@ fn read_next_body<R: BufRead>(reader: &mut R) -> anyhow::Result<Option<String>> 
 
     let content_length =
         content_length.ok_or_else(|| anyhow::anyhow!("MCP frame is missing Content-Length"))?;
+    if content_length > MAX_STDIO_FRAME_BYTES {
+        anyhow::bail!("MCP frame Content-Length exceeds maximum size");
+    }
     let mut body = vec![0u8; content_length];
     reader.read_exact(&mut body)?;
     String::from_utf8(body)
         .map(Some)
         .map_err(|err| anyhow::anyhow!("MCP frame body is not UTF-8: {err}"))
+}
+
+fn read_limited_line<R: BufRead>(
+    reader: &mut R,
+    limit: usize,
+    limit_message: &str,
+) -> anyhow::Result<Option<String>> {
+    let mut bytes = Vec::new();
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            if bytes.is_empty() {
+                return Ok(None);
+            }
+            break;
+        }
+        let newline_index = available.iter().position(|byte| *byte == b'\n');
+        let take = newline_index.map_or(available.len(), |index| index + 1);
+        if bytes.len().saturating_add(take) > limit {
+            anyhow::bail!("{limit_message}");
+        }
+        bytes.extend_from_slice(&available[..take]);
+        reader.consume(take);
+        if newline_index.is_some() {
+            break;
+        }
+    }
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|err| anyhow::anyhow!("MCP stdio line is not UTF-8: {err}"))
 }

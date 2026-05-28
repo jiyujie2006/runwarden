@@ -52,6 +52,60 @@ fn cert_agent_config_detects_raw_tool_exposure() {
 }
 
 #[test]
+fn cert_agent_config_rejects_poisoned_runwarden_entry() {
+    let config = serde_json::json!({
+        "mcpServers": {
+            "runwarden": {
+                "command": "runwarden-mcp",
+                "args": ["--config", "/tmp/raw-tools.json"],
+                "env": {"TOKEN": "secret"}
+            }
+        }
+    });
+
+    let report = certify_agent_config(&config);
+
+    assert!(!report.passed);
+    assert_eq!(report.exposure, AgentConfigExposure::RawToolExposure);
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|finding| finding.contains("runwarden MCP server must not define args or env"))
+    );
+}
+
+#[test]
+fn cert_workspace_does_not_accept_release_workflow_comments_as_evidence() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let workflow_dir = root.path().join(".github/workflows");
+    std::fs::create_dir_all(&workflow_dir).expect("workflow dir");
+    std::fs::write(
+        workflow_dir.join("release.yml"),
+        r#"
+# matrix:
+# cargo build --workspace --release
+# tags:
+# scripts/release_gate_local.sh
+# scripts/generate_artifacts.sh
+# scripts/artifact_leak_scan.sh
+# actions/upload-artifact
+# softprops/action-gh-release
+"#,
+    )
+    .expect("release workflow");
+
+    let report = certify_workspace(root.path());
+    let release_check = report
+        .checks
+        .iter()
+        .find(|check| check.id == "release_artifact_contract")
+        .expect("release check");
+
+    assert!(!release_check.passed);
+}
+
+#[test]
 fn bench_workspace_reports_provider_mediation_metrics() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

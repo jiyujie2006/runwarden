@@ -71,6 +71,42 @@ fn artifact_verify_rejects_redaction_sidecar_mismatch() {
     );
 }
 
+#[test]
+fn artifact_verify_rejects_semantically_mismatched_redaction_sidecar() {
+    let dir = tempdir().expect("tempdir");
+    let mut manifest = seal_artifact(
+        dir.path(),
+        "report-md",
+        "reports/report.md",
+        "finding cites obs_1\n",
+    )
+    .expect("artifact sealed");
+    let sidecar_path = dir.path().join("reports/report.md.redaction.json");
+    let sidecar_body = serde_json::json!({
+        "artifact_id": "other-artifact",
+        "redaction_applied": false,
+        "redacted_patterns": [],
+        "original_sha256": "wrong",
+        "redacted_sha256": "wrong"
+    })
+    .to_string()
+        + "\n";
+    fs::write(&sidecar_path, &sidecar_body).expect("write semantic mismatch sidecar");
+    manifest.artifacts[0].redaction_sidecar_sha256 = Some(runwarden_kernel::evidence::hex_sha256(
+        sidecar_body.as_bytes(),
+    ));
+
+    let verification = verify_artifact_manifest(dir.path(), &manifest);
+
+    assert_eq!(verification.status, ArtifactVerificationStatus::Failed);
+    assert!(
+        verification
+            .findings
+            .iter()
+            .any(|finding| finding.kind == ArtifactErrorKind::RedactionSidecarMismatch)
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn artifact_verify_rejects_redaction_sidecar_symlink_escape() {
