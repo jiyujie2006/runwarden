@@ -549,6 +549,14 @@ pub mod report {
 
     fn observation_supports_claim(claim: &ReportClaim, event: &TraceEvent) -> bool {
         let text = claim.text.to_ascii_lowercase();
+        if text.contains("completed") {
+            return event.event_type.contains("completed")
+                || event
+                    .payload
+                    .get("decision")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|decision| matches!(decision, "allowed" | "completed"));
+        }
         if text.contains("denied") || text.contains("blocked") || text.contains("rejected") {
             return event.event_type.contains("denied")
                 || event.event_type.contains("blocked")
@@ -558,14 +566,6 @@ pub mod report {
                     .get("decision")
                     .and_then(serde_json::Value::as_str)
                     .is_some_and(|decision| matches!(decision, "denied" | "blocked" | "rejected"));
-        }
-        if text.contains("completed") {
-            return event.event_type.contains("completed")
-                || event
-                    .payload
-                    .get("decision")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|decision| matches!(decision, "allowed" | "completed"));
         }
         true
     }
@@ -1195,17 +1195,17 @@ pub mod cert {
                 ));
                 continue;
             }
-            let has_args = server
+            let invalid_args = server
                 .get("args")
-                .and_then(Value::as_array)
-                .is_some_and(|args| !args.is_empty());
-            let has_env = server
-                .get("env")
-                .and_then(Value::as_object)
-                .is_some_and(|env| !env.is_empty());
-            if has_args || has_env || server.get("cwd").is_some() || server.get("url").is_some() {
+                .is_some_and(|args| !args.as_array().is_some_and(|args| args.is_empty()));
+            if invalid_args
+                || server.get("env").is_some()
+                || server.get("cwd").is_some()
+                || server.get("url").is_some()
+                || server.get("transport").is_some()
+            {
                 findings.push(
-                    "runwarden MCP server must not define args or env/cwd/url overrides"
+                    "runwarden MCP server must not define args/env/cwd/url/transport overrides"
                         .to_string(),
                 );
             }

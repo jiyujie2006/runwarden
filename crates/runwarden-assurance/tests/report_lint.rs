@@ -62,6 +62,21 @@ fn report_lint_rejects_claims_citing_unrelated_observations() {
 }
 
 #[test]
+fn report_lint_accepts_completed_claim_with_negated_denial_keyword() {
+    let trace_events = vec![trace("obs_1")];
+    let report = ReportDraft::new(vec![ReportClaim::new(
+        "finding-1",
+        "Provider call completed and was not denied",
+        ["obs_1"],
+    )]);
+
+    let result = lint_report_against_trace(&report, &trace_events);
+
+    assert!(result.ok, "{result:#?}");
+    assert!(result.errors.is_empty());
+}
+
+#[test]
 fn report_lint_rejects_uncited_claim() {
     let trace_events = vec![trace("obs_1")];
     let report = ReportDraft::new(vec![ReportClaim::new(

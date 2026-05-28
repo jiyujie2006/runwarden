@@ -802,6 +802,7 @@ fn run() -> anyhow::Result<()> {
                         }
                         return Ok(());
                     }
+                    verify_cli_file_digests(call)?;
                     if call
                         .approval_id
                         .as_deref()
@@ -813,9 +814,6 @@ fn run() -> anyhow::Result<()> {
                             &enforcer.approval_binding_for_call(call),
                         )?;
                     }
-                }
-                if let Some(call) = provider_call.as_ref() {
-                    verify_cli_file_digests(call)?;
                 }
                 let execution_root = resolve_cli_execution_root(session_manifest.as_ref(), root);
                 let result = if provider.starts_with("external.") {
@@ -2712,6 +2710,20 @@ fn check_runwarden_only_config(client: &str, config: &AgentConfig) -> AgentConfi
                 findings.push(format!(
                     "runwarden MCP server must execute runwarden-mcp, got: {command}"
                 ));
+            }
+            let invalid_args = server
+                .get("args")
+                .is_some_and(|args| !args.as_array().is_some_and(|args| args.is_empty()));
+            if invalid_args
+                || server.get("env").is_some()
+                || server.get("cwd").is_some()
+                || server.get("url").is_some()
+                || server.get("transport").is_some()
+            {
+                findings.push(
+                    "runwarden MCP server must not define args/env/cwd/url/transport overrides"
+                        .to_string(),
+                );
             }
         }
         None => findings.push("missing runwarden MCP server".to_string()),

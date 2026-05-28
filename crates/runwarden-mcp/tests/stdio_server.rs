@@ -27,6 +27,36 @@ fn stdio_server_responds_to_framed_request_without_waiting_for_eof() {
 }
 
 #[test]
+fn stdio_server_accepts_multiline_raw_payload_until_eof() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_runwarden-mcp"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("spawn runwarden-mcp");
+    let mut stdin = child.stdin.take().expect("stdin");
+    let stdout = child.stdout.take().expect("stdout");
+    let mut stdout = BufReader::new(stdout);
+    let request = r#"{
+  "jsonrpc": "2.0",
+  "id": 7,
+  "method": "initialize",
+  "params": {}
+}
+"#;
+
+    stdin.write_all(request.as_bytes()).expect("write request");
+    drop(stdin);
+
+    let response = read_frame(&mut stdout);
+    let status = child.wait().expect("wait");
+
+    assert!(status.success());
+    assert!(response.contains(r#""jsonrpc":"2.0""#));
+    assert!(response.contains(r#""id":7"#));
+    assert!(response.contains("runwarden-mcp"));
+}
+
+#[test]
 fn stdio_server_rejects_oversized_headers_before_body_allocation() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_runwarden-mcp"))
         .stdin(Stdio::piped())

@@ -39,7 +39,10 @@ fn read_next_body<R: BufRead>(reader: &mut R) -> anyhow::Result<Option<String>> 
     };
 
     if !line.starts_with("Content-Length:") {
-        return Ok(Some(line));
+        if serde_json::from_str::<serde_json::Value>(&line).is_ok() {
+            return Ok(Some(line));
+        }
+        return read_remaining_raw_body(reader, line).map(Some);
     }
 
     let mut header_bytes = line.len();
@@ -82,6 +85,26 @@ fn read_next_body<R: BufRead>(reader: &mut R) -> anyhow::Result<Option<String>> 
     String::from_utf8(body)
         .map(Some)
         .map_err(|err| anyhow::anyhow!("MCP frame body is not UTF-8: {err}"))
+}
+
+fn read_remaining_raw_body<R: BufRead>(
+    reader: &mut R,
+    first_line: String,
+) -> anyhow::Result<String> {
+    let mut body = first_line.into_bytes();
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            break;
+        }
+        if body.len().saturating_add(available.len()) > MAX_STDIO_FRAME_BYTES {
+            anyhow::bail!("MCP raw payload exceeds maximum size");
+        }
+        let consumed = available.len();
+        body.extend_from_slice(available);
+        reader.consume(consumed);
+    }
+    String::from_utf8(body).map_err(|err| anyhow::anyhow!("MCP raw payload is not UTF-8: {err}"))
 }
 
 fn read_limited_line<R: BufRead>(

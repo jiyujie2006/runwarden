@@ -245,4 +245,23 @@ enabled = true
     assert!(stdout.contains(r#""execution_status": "completed""#));
     assert!(stdout.contains(r#""side_effect_executed": true"#));
     assert!(stdout.contains("Content-Length:"));
+    let saved_approval =
+        fs::read_to_string(approval_dir.join("approval-1.json")).expect("saved approval");
+    assert!(saved_approval.contains(r#""state": "consumed""#));
+}
+
+#[test]
+fn provider_call_verifies_bound_files_before_persisting_consumed_approval() {
+    let source = include_str!("../src/main.rs");
+    let verify_index = source
+        .find("verify_cli_file_digests(call)?;")
+        .expect("provider call digest verification");
+    let persist_index = source
+        .find("persist_consumed_cli_approval(")
+        .expect("approval persistence");
+
+    assert!(
+        verify_index < persist_index,
+        "bound file digests must be verified before approval consumption is persisted"
+    );
 }

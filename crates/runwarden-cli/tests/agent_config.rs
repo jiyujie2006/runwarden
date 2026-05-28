@@ -71,3 +71,25 @@ fn check_config_rejects_runwarden_entry_pointing_at_downstream_server() {
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
     assert!(stdout.contains("runwarden MCP server must execute runwarden-mcp"));
 }
+
+#[test]
+fn check_config_rejects_runwarden_override_fields() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("unsafe-overrides.json");
+    fs::write(
+        &path,
+        r#"{"mcpServers":{"runwarden":{"command":"runwarden-mcp","args":"--raw","transport":"stdio"}}}"#,
+    )
+    .expect("write config");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_runwarden"))
+        .args(["agent", "check-config", "--client", "claude", "--input"])
+        .arg(&path)
+        .arg("--json")
+        .output()
+        .expect("run command");
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    assert!(stdout.contains("args/env/cwd/url/transport"));
+}

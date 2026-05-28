@@ -71,7 +71,54 @@ fn cert_agent_config_rejects_poisoned_runwarden_entry() {
         report
             .findings
             .iter()
-            .any(|finding| finding.contains("runwarden MCP server must not define args or env"))
+            .any(|finding| finding.contains("args/env/cwd/url/transport"))
+    );
+}
+
+#[test]
+fn cert_agent_config_rejects_malformed_args_override() {
+    let config = serde_json::json!({
+        "mcpServers": {
+            "runwarden": {
+                "command": "runwarden-mcp",
+                "args": "--config /tmp/raw-tools.json"
+            }
+        }
+    });
+
+    let report = certify_agent_config(&config);
+
+    assert!(!report.passed);
+    assert_eq!(report.exposure, AgentConfigExposure::RawToolExposure);
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|finding| finding.contains("args/env/cwd/url/transport"))
+    );
+}
+
+#[test]
+fn cert_agent_config_rejects_transport_override() {
+    let config = serde_json::json!({
+        "mcpServers": {
+            "runwarden": {
+                "command": "runwarden-mcp",
+                "args": [],
+                "transport": "stdio"
+            }
+        }
+    });
+
+    let report = certify_agent_config(&config);
+
+    assert!(!report.passed);
+    assert_eq!(report.exposure, AgentConfigExposure::RawToolExposure);
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|finding| finding.contains("args/env/cwd/url/transport"))
     );
 }
 
