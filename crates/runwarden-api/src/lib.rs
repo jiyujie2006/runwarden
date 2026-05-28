@@ -20,7 +20,7 @@ use runwarden_assurance::report::{
 use runwarden_kernel::artifact::ArtifactManifest;
 use runwarden_kernel::authority::{ApprovalBinding, ApprovalRecord, ApprovalState};
 use runwarden_kernel::contracts::{
-    ErrorKind, ExecutionStatus, PolicyDecision, ProviderCall, ProviderClass,
+    ErrorKind, ExecutionStatus, PolicyDecision, ProviderCall, ProviderClass, SideEffectKind,
 };
 use runwarden_kernel::evidence::{InMemoryTraceStore, TraceEvent, TraceQuery, hex_sha256};
 use runwarden_kernel::kernel::KernelEnforcer;
@@ -439,6 +439,29 @@ impl LocalApiRouter {
             enforcer.add_approval(approval);
         }
         let mut outcome = enforcer.evaluate_call(&call);
+        if outcome.decision == PolicyDecision::RequiresReview
+            && outcome.envelope.approval_id.is_none()
+        {
+            let binding = enforcer.approval_binding_for_call(&call);
+            let approval_id = pending_approval_id_for_binding(&binding);
+            if !self.security.approvals.contains_key(&approval_id) {
+                self.security
+                    .insert_approval(ApprovalRecord::new(&approval_id, binding));
+            }
+            let approval = self
+                .security
+                .approvals
+                .get(&approval_id)
+                .cloned()
+                .expect("pending approval was inserted");
+            outcome.envelope.approval_id = Some(approval_id.clone());
+            outcome.output = json!({
+                "approval": approval,
+                "approval_id": approval_id,
+                "side_effect_executed": false
+            });
+            outcome.next_actions.push("review_approval".to_string());
+        }
         if outcome.decision == PolicyDecision::Allowed {
             if call
                 .approval_id
@@ -451,6 +474,8 @@ impl LocalApiRouter {
             }
             match execute_first_party_provider_call(&call, Some(&session)) {
                 Ok(output) => {
+                    let side_effect_executed =
+                        provider_output_side_effect_executed(&call.provider, &output);
                     outcome.execution_status = if output
                         .get("external_adapter_required")
                         .and_then(Value::as_bool)
@@ -460,6 +485,7 @@ impl LocalApiRouter {
                     } else {
                         ExecutionStatus::Completed
                     };
+                    outcome.envelope.side_effect_executed = side_effect_executed;
                     outcome.output = output;
                 }
                 Err(message) => {
@@ -472,6 +498,7 @@ impl LocalApiRouter {
             }
         }
 
+        let side_effect_executed = outcome.envelope.side_effect_executed;
         operation_response_with_headers(
             200,
             authorization_headers,
@@ -480,7 +507,7 @@ impl LocalApiRouter {
                 "api_owns_security_decision": false,
                 "kernel_enforcement_required": true
             }),
-            false,
+            side_effect_executed,
             ["inspect_provider_outcome"],
         )
     }
@@ -1092,6 +1119,26 @@ fn query_param(path: &str, name: &str) -> Option<String> {
     query.split('&').find_map(|pair| {
         let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
         (key == name).then(|| value.to_string())
+    })
+}
+
+fn pending_approval_id_for_binding(binding: &ApprovalBinding) -> String {
+    let digest = hex_sha256(&serde_json::to_vec(binding).expect("approval binding serializes"));
+    format!("approval_{}", &digest[..16])
+}
+
+fn provider_output_side_effect_executed(provider_id: &str, output: &Value) -> bool {
+    if let Some(side_effect_executed) = output.get("side_effect_executed").and_then(Value::as_bool)
+    {
+        return side_effect_executed;
+    }
+
+    let registry = full_provider_registry();
+    registry.get(provider_id).is_some_and(|provider| {
+        provider
+            .side_effects
+            .iter()
+            .any(|side_effect| side_effect != &SideEffectKind::None)
     })
 }
 

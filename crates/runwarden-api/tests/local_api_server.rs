@@ -531,6 +531,52 @@ fn local_api_provider_call_persists_approval_consumption_and_rejects_replay() {
 }
 
 #[test]
+fn local_api_provider_call_enqueues_pending_approval_when_review_required() {
+    let session_id = "review_session";
+    let provider = "runwarden.report.render";
+    let action = "render";
+    let arguments = json!({
+        "report": {
+            "claims": [
+                {"id": "finding-1", "text": "cited finding", "obs_refs": ["obs_1"]}
+            ]
+        },
+        "trace": [trace_event()],
+        "format": "markdown"
+    });
+    let mut router = router();
+    let create_session = router.handle(
+        authed("POST", "/sessions"),
+        Some(manifest_body(session_id, &[provider])),
+    );
+    assert_eq!(create_session.status, 200);
+
+    let response = router.handle(
+        authed("POST", "/provider-calls"),
+        Some(json!({
+            "session_id": session_id,
+            "provider": provider,
+            "action": action,
+            "arguments": arguments
+        })),
+    );
+    let approval_id = response.body["operation"]["data"]["outcome"]["envelope"]["approval_id"]
+        .as_str()
+        .expect("approval id")
+        .to_string();
+    let queue = router.handle(authed("GET", "/approvals"), None);
+
+    assert_eq!(response.status, 200);
+    assert_eq!(
+        response.body["operation"]["data"]["outcome"]["decision"],
+        "requires_review"
+    );
+    assert_eq!(response.body["side_effect_executed"], false);
+    assert_eq!(queue.body["approvals"][0]["approval_id"], approval_id);
+    assert_eq!(queue.body["approvals"][0]["state"], "pending");
+}
+
+#[test]
 fn local_api_external_provider_without_adapter_is_incomplete_not_completed() {
     let session_id = "external_session";
     let provider = "external.shell.command";
@@ -617,6 +663,11 @@ fn local_api_provider_call_resolves_scoped_root_names_before_execution() {
         response.body["operation"]["data"]["outcome"]["output"]["files"][0]["relative_path"],
         "finding.txt"
     );
+    assert_eq!(
+        response.body["operation"]["data"]["outcome"]["envelope"]["side_effect_executed"],
+        true
+    );
+    assert_eq!(response.body["side_effect_executed"], true);
 }
 
 #[test]

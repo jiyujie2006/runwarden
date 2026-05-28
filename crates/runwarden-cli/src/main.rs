@@ -2410,8 +2410,19 @@ struct AgentConfigCheckResult {
 
 fn check_runwarden_only_config(client: &str, config: &AgentConfig) -> AgentConfigCheckResult {
     let mut findings = Vec::new();
-    if !config.mcp_servers.contains_key("runwarden") {
-        findings.push("missing runwarden MCP server".to_string());
+    match config.mcp_servers.get("runwarden") {
+        Some(server) => {
+            let command = server
+                .get("command")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            if command != "runwarden-mcp" {
+                findings.push(format!(
+                    "runwarden MCP server must execute runwarden-mcp, got: {command}"
+                ));
+            }
+        }
+        None => findings.push("missing runwarden MCP server".to_string()),
     }
     for name in config.mcp_servers.keys() {
         if name != "runwarden" {

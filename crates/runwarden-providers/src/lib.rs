@@ -1,5 +1,6 @@
 pub mod runtime {
     use std::collections::{BTreeMap, BTreeSet};
+    use std::env;
     use std::path::{Component, Path, PathBuf};
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,7 +25,7 @@ pub mod runtime {
     impl ProviderRuntimePolicy {
         pub fn locked_to_root(root: impl Into<PathBuf>) -> Self {
             Self {
-                cwd_root: normalize_path(&root.into()),
+                cwd_root: root.into(),
                 ..Self::default()
             }
         }
@@ -282,7 +283,11 @@ pub mod runtime {
                 Component::Normal(part) => normalized.push(part),
             }
         }
-        normalized
+        if normalized.as_os_str().is_empty() && path.is_relative() {
+            env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+        } else {
+            normalized
+        }
     }
 }
 

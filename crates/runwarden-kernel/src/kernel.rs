@@ -594,20 +594,25 @@ fn is_private_or_local_host(host: &str) -> bool {
     };
 
     match ip {
-        IpAddr::V4(addr) => {
-            addr.is_private()
-                || addr.is_loopback()
-                || addr.is_link_local()
-                || addr.is_unspecified()
-                || is_carrier_grade_nat(addr)
-        }
+        IpAddr::V4(addr) => is_private_or_local_ipv4(addr),
         IpAddr::V6(addr) => {
+            if let Some(mapped) = addr.to_ipv4_mapped() {
+                return is_private_or_local_ipv4(mapped);
+            }
             addr.is_loopback()
                 || addr.is_unspecified()
                 || addr.is_unique_local()
                 || addr.is_unicast_link_local()
         }
     }
+}
+
+fn is_private_or_local_ipv4(addr: Ipv4Addr) -> bool {
+    addr.is_private()
+        || addr.is_loopback()
+        || addr.is_link_local()
+        || addr.is_unspecified()
+        || is_carrier_grade_nat(addr)
 }
 
 fn is_carrier_grade_nat(addr: Ipv4Addr) -> bool {

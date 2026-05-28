@@ -175,8 +175,8 @@ fn handle_tools_call(id: Value, params: Option<&Value>) -> Value {
         "runwarden.provider.list" => handle_provider_list(id, params),
         "runwarden.provider.status" => handle_provider_status(id, params),
         "runwarden.session.create_from_manifest" => handle_session_create_from_manifest(id, params),
-        "runwarden.trace.verify" => handle_trace_verify(id, params),
-        "runwarden.trace.export" => handle_trace_export(id, params),
+        "runwarden.trace.verify" => handle_trace_verify(id, tool_arguments(params)),
+        "runwarden.trace.export" => handle_trace_export(id, tool_arguments(params)),
         "runwarden.report.lint" => handle_report_lint(id, params),
         "runwarden.report.render" => handle_report_render(id, params),
         _ => jsonrpc_error(
@@ -348,6 +348,12 @@ fn kernel_policy_from_arguments(provider: &str, arguments: &Value) -> KernelPoli
     policy
 }
 
+fn tool_arguments(params: Option<&Value>) -> &Value {
+    params
+        .and_then(|params| params.get("arguments"))
+        .unwrap_or(&Value::Null)
+}
+
 fn provider_outcome_payload(outcome: &ProviderOutcome) -> Value {
     let mut payload = serde_json::to_value(outcome).expect("provider outcome serializes");
     payload["provider"] = json!(&outcome.envelope.provider);
@@ -368,10 +374,7 @@ fn inline_trace_events(arguments: &Value) -> Vec<TraceEvent> {
     .unwrap_or_default()
 }
 
-fn handle_trace_verify(id: Value, params: Option<&Value>) -> Value {
-    let arguments = params
-        .and_then(|params| params.get("arguments"))
-        .unwrap_or(&Value::Null);
+fn handle_trace_verify(id: Value, arguments: &Value) -> Value {
     let trace_events = inline_trace_events(arguments);
     let verification = verify_inline_trace(&trace_events);
     tool_result(
@@ -385,10 +388,7 @@ fn handle_trace_verify(id: Value, params: Option<&Value>) -> Value {
     )
 }
 
-fn handle_trace_export(id: Value, params: Option<&Value>) -> Value {
-    let arguments = params
-        .and_then(|params| params.get("arguments"))
-        .unwrap_or(&Value::Null);
+fn handle_trace_export(id: Value, arguments: &Value) -> Value {
     let trace_events = inline_trace_events(arguments);
     let verification = verify_inline_trace(&trace_events);
     if verification["verified"].as_bool() != Some(true) {

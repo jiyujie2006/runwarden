@@ -54,6 +54,17 @@ fn cwd_symlink_escape_is_denied_before_process_spawn() {
 }
 
 #[test]
+fn relative_runtime_root_does_not_allow_arbitrary_absolute_cwd() {
+    let policy = ProviderRuntimePolicy::locked_to_root(".");
+    let request = ProviderRuntimeRequest::new("runwarden-provider").cwd("/tmp");
+
+    let denial = ProviderRuntime::prepare(&policy, &request).expect_err("cwd escape denied");
+
+    assert_eq!(denial.kind, ProviderRuntimeDenialKind::CwdEscape);
+    assert!(!denial.side_effect_executed);
+}
+
+#[test]
 fn parent_environment_inheritance_is_denied_when_scrubbed() {
     let request = request().inherit_parent_env(true);
 

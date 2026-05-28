@@ -188,6 +188,29 @@ fn private_network_egress_is_denied_even_when_host_allowlisted() {
 }
 
 #[test]
+fn ipv4_mapped_private_egress_is_denied_before_side_effect() {
+    let provider_id = "runwarden.http.replay";
+    let registry = registry_with(provider(
+        provider_id,
+        ProviderRisk::NetworkActive,
+        vec![SideEffectKind::Network],
+    ));
+    let policy = base_policy(provider_id);
+    let mut enforcer = KernelEnforcer::new(registry, policy);
+
+    let outcome = enforcer.evaluate_call(&call(
+        provider_id,
+        json!({
+            "url": "http://[::ffff:127.0.0.1]/latest/meta-data"
+        }),
+    ));
+
+    assert_eq!(outcome.decision, PolicyDecision::Denied);
+    assert_eq!(outcome.envelope.error_kind, Some(ErrorKind::EgressDenied));
+    assert!(!outcome.envelope.side_effect_executed);
+}
+
+#[test]
 fn argument_budget_exceeded_is_denied_before_side_effect() {
     let provider_id = "runwarden.evidence.inspect";
     let registry = registry_with(provider(
