@@ -202,6 +202,10 @@ target/debug/runwarden ui \
   --json
 ```
 
+`launch_url` 指向生成的 `reviewer-console.html` 文件；`local_api_url` 才是
+WebUI 提交审批时调用的本地 API 地址。浏览器审批表单需要 Local API 正在运行，
+并由 reviewer 在 Settings 中输入 launch token。
+
 ### Local API
 
 Local API 给 WebUI / SDK / 本地集成使用：
@@ -218,6 +222,7 @@ Local API 具备：
 
 - launch token
 - Host / Origin 检查
+- generated `file://` Reviewer Console origin support with launch-token checks
 - approval queue
 - approval mutation
 - provider calls

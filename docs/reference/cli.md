@@ -57,3 +57,10 @@ persisting consumed approval state or executing the provider.
 Artifact and UI output arguments (`--output`, `--artifacts`) must be relative
 workspace paths. Absolute paths, parent traversal, and symlink escapes are
 rejected before writing bundles.
+
+`runwarden ui` writes a dependency-free static `reviewer-console.html` bundle
+with a local `reviewer-console.js` companion script. The JSON response includes
+file `launch_url` and `script_path` values plus a separate `local_api_url` for
+the configured API origin. The generated console snapshots pending approval
+records from `.runwarden/approvals`, sessions from `.runwarden/sessions`, and
+report/artifact/assurance summaries from the artifact root.

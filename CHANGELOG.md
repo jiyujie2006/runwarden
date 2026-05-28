@@ -6,6 +6,9 @@ All notable changes to Runwarden are documented in this file.
 
 ### Fixed
 
+- Fixed Reviewer Console launch bundles to use file `launch_url` values, reject
+  artifact path escapes, render pending approval state, and submit browser
+  approve/deny decisions through the token-protected Local API.
 - Preserved EOF-terminated multiline raw JSON support in `runwarden-mcp` while
   keeping bounded stdio frame reads.
 - Aligned Rust and CLI agent-config certification with TypeScript config tools

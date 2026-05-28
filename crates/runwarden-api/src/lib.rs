@@ -37,6 +37,7 @@ pub const LOCAL_API_SECURITY_MODEL: &str =
     "launch token + host/origin checks + kernel-owned decisions";
 const MAX_LOCAL_API_REQUEST_BODY_BYTES: usize = 1_048_576;
 const MAX_LOCAL_API_REQUEST_HEADER_BYTES: usize = 16 * 1024;
+const REVIEWER_CONSOLE_SCRIPT_NAME: &str = "reviewer-console.js";
 
 #[derive(Debug, Clone)]
 pub struct LocalApiRequest {
@@ -1096,7 +1097,11 @@ impl LocalApiRouter {
                 );
             }
         };
-        match write_ui_launch_bundle(&bind, port as u16, &artifacts_path) {
+        let snapshot = UiLaunchSnapshot {
+            approvals: self.security.approvals.values().cloned().collect(),
+            sessions: self.security.sessions.values().cloned().collect(),
+        };
+        match write_ui_launch_bundle(&bind, port as u16, &artifacts_path, snapshot) {
             Ok(result) => {
                 operation_response_with_headers(200, authorization_headers, result, true, [])
             }
@@ -1962,33 +1967,395 @@ fn release_smoke_report(root: &Path) -> Result<Value, String> {
     }))
 }
 
-fn write_ui_launch_bundle(bind: &str, port: u16, artifact_root: &Path) -> Result<Value, String> {
+#[derive(Debug, Clone, Default)]
+pub struct UiLaunchSnapshot {
+    pub approvals: Vec<ApprovalRecord>,
+    pub sessions: Vec<SessionManifest>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct UiArtifactSummary {
+    report_files: Vec<String>,
+    artifact_ids: Vec<String>,
+    assurance_files: Vec<String>,
+}
+
+pub fn write_ui_launch_bundle(
+    bind: &str,
+    port: u16,
+    artifact_root: &Path,
+    snapshot: UiLaunchSnapshot,
+) -> Result<Value, String> {
+    let artifact_summary = collect_ui_artifact_summary(artifact_root);
     fs::create_dir_all(artifact_root)
         .map_err(|err| format!("failed to create {}: {err}", artifact_root.display()))?;
     let html_path = artifact_root.join("reviewer-console.html");
-    fs::write(&html_path, reviewer_console_html(bind, port))
-        .map_err(|err| format!("failed to write {}: {err}", html_path.display()))?;
+    fs::write(
+        &html_path,
+        reviewer_console_html(bind, port, &snapshot, &artifact_summary),
+    )
+    .map_err(|err| format!("failed to write {}: {err}", html_path.display()))?;
+    let script_path = artifact_root.join(REVIEWER_CONSOLE_SCRIPT_NAME);
+    fs::write(&script_path, reviewer_console_js())
+        .map_err(|err| format!("failed to write {}: {err}", script_path.display()))?;
+    let launch_path = html_path
+        .canonicalize()
+        .unwrap_or_else(|_| html_path.clone());
 
     Ok(json!({
         "bind": bind,
         "port": port,
         "artifact_root": artifact_root.to_string_lossy(),
         "html_path": html_path.to_string_lossy(),
-        "launch_url": format!("http://{bind}:{port}/"),
+        "script_path": script_path.to_string_lossy(),
+        "launch_url": file_url_for_path(&launch_path),
+        "local_api_url": format!("http://{bind}:{port}/"),
         "mode": "static_reviewer_console_bundle",
         "side_effect_executed": true
     }))
 }
 
-fn reviewer_console_html(bind: &str, port: u16) -> String {
-    let escaped_bind = escape_html_text(bind);
-    r##"<!doctype html>
+fn reviewer_console_html(
+    bind: &str,
+    port: u16,
+    snapshot: &UiLaunchSnapshot,
+    artifacts: &UiArtifactSummary,
+) -> String {
+    let mut pending: Vec<_> = snapshot
+        .approvals
+        .iter()
+        .filter(|approval| approval.state == ApprovalState::Pending)
+        .collect();
+    pending.sort_by(|left, right| left.approval_id.cmp(&right.approval_id));
+
+    let session_label = match snapshot.sessions.len() {
+        0 => "No assessment loaded".to_string(),
+        1 => snapshot.sessions[0].session_id.clone(),
+        count => format!("{count} sessions loaded"),
+    };
+    let provider_message = snapshot
+        .sessions
+        .first()
+        .map(|session| {
+            let providers = join_preview(&session.allowed_providers, 4);
+            format!(
+                "{} allowed {}: {}",
+                session.allowed_providers.len(),
+                plural(session.allowed_providers.len(), "provider", "providers"),
+                providers
+            )
+        })
+        .unwrap_or_else(|| "No providers allowed for this session".to_string());
+    let approvals_message = if pending.is_empty() {
+        "No actions waiting for review".to_string()
+    } else {
+        format!(
+            "{} {} waiting for review",
+            pending.len(),
+            plural(pending.len(), "action", "actions")
+        )
+    };
+    let report_message = if artifacts.report_files.is_empty() {
+        "No report rendered".to_string()
+    } else {
+        format!(
+            "{} {}: {}",
+            artifacts.report_files.len(),
+            plural(artifacts.report_files.len(), "report file", "report files"),
+            join_preview(&artifacts.report_files, 4)
+        )
+    };
+    let artifact_message = if artifacts.artifact_ids.is_empty() {
+        "No artifacts generated".to_string()
+    } else {
+        format!(
+            "{} {}: {}",
+            artifacts.artifact_ids.len(),
+            plural(
+                artifacts.artifact_ids.len(),
+                "sealed artifact",
+                "sealed artifacts"
+            ),
+            join_preview(&artifacts.artifact_ids, 4)
+        )
+    };
+    let assurance_message = if artifacts.assurance_files.is_empty() {
+        "No eval run yet".to_string()
+    } else {
+        format!(
+            "{} {}: {}",
+            artifacts.assurance_files.len(),
+            plural(
+                artifacts.assurance_files.len(),
+                "assurance result",
+                "assurance results"
+            ),
+            join_preview(&artifacts.assurance_files, 4)
+        )
+    };
+    let approval_rows = if pending.is_empty() {
+        "<p>No actions waiting for review</p>".to_string()
+    } else {
+        pending
+            .iter()
+            .map(|approval| render_approval_row(approval))
+            .collect::<Vec<_>>()
+            .join("")
+    };
+    let details = pending
+        .first()
+        .map(|approval| render_approval_details(approval))
+        .unwrap_or_else(render_empty_approval_details);
+
+    format!(
+        r##"<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Runwarden Reviewer Console</title>
-  <style>
+  <style>{}</style>
+  <script src="{}" defer></script>
+</head>
+<body>
+<main class="runwarden-workbench" data-local-api-url="{}">
+  {}
+  <section class="workbench-main" id="dashboard" aria-label="Reviewer workspace">
+    <header class="top-status-strip" role="status" aria-label="Assessment status">
+      {}
+    </header>
+    <div class="workspace-grid">
+      {}
+      {}
+      <article class="module approval-module" id="approval-queue"><h2>Approval Queue</h2><p>{}</p>{}</article>
+      {}
+      {}
+      {}
+      {}
+      {}
+      {}
+    </div>
+  </section>
+  {}
+</main>
+</body>
+</html>
+"##,
+        reviewer_console_css(),
+        REVIEWER_CONSOLE_SCRIPT_NAME,
+        escape_attr(&format!("http://{bind}:{port}")),
+        render_nav(),
+        [
+            render_status_pill("Session", &session_label, "neutral"),
+            render_status_pill("Local API", &format!("{bind}:{port}"), "neutral"),
+            render_status_pill(
+                "Risk",
+                if pending.is_empty() {
+                    "incomplete"
+                } else {
+                    "requires_review"
+                },
+                if pending.is_empty() {
+                    "review"
+                } else {
+                    "danger"
+                },
+            ),
+            render_status_pill("Trace", "missing", "review"),
+            render_status_pill(
+                "Approvals",
+                &pending.len().to_string(),
+                if pending.is_empty() {
+                    "neutral"
+                } else {
+                    "review"
+                }
+            ),
+            render_status_pill("Gates", "missing", "review"),
+        ]
+        .join(""),
+        render_module(
+            "agent-boundary",
+            "Agent Boundary",
+            "No agent config checked"
+        ),
+        render_module("provider-registry", "Provider Registry", &provider_message),
+        escape_html_text(&approvals_message),
+        approval_rows,
+        render_module("trace", "Trace Explorer", "No trace events yet"),
+        render_module(
+            "accountability",
+            "Accountability",
+            "No accountability chain reconstructed"
+        ),
+        render_module("reports", "Reports", &report_message),
+        render_module("artifacts", "Artifacts", &artifact_message),
+        render_module("assurance", "Assurance", &assurance_message),
+        render_settings_module(),
+        details,
+    )
+}
+
+fn collect_ui_artifact_summary(artifact_root: &Path) -> UiArtifactSummary {
+    let mut summary = UiArtifactSummary {
+        report_files: direct_child_file_names(&artifact_root.join("reports"), |name| {
+            !name.ends_with(".redaction.json")
+                && (name.ends_with(".md")
+                    || name.ends_with(".html")
+                    || name.ends_with(".json")
+                    || name.ends_with(".sarif"))
+        }),
+        artifact_ids: Vec::new(),
+        assurance_files: direct_child_file_names(&artifact_root.join("release"), |name| {
+            !name.ends_with(".redaction.json")
+                && name.ends_with(".json")
+                && (name.contains("eval") || name.contains("bench") || name.contains("cert"))
+        }),
+    };
+
+    let manifest_path = artifact_root.join("artifact-manifest.json");
+    if let Ok(body) = fs::read_to_string(&manifest_path)
+        && let Ok(manifest) = serde_json::from_str::<ArtifactManifest>(&body)
+    {
+        summary.artifact_ids = manifest
+            .artifacts
+            .into_iter()
+            .map(|entry| entry.artifact_id)
+            .collect();
+        summary.artifact_ids.sort();
+    }
+
+    summary
+}
+
+fn direct_child_file_names(dir: &Path, include: fn(&str) -> bool) -> Vec<String> {
+    let mut names = fs::read_dir(dir)
+        .ok()
+        .into_iter()
+        .flat_map(|entries| entries.filter_map(Result::ok))
+        .filter_map(|entry| {
+            let metadata = entry.metadata().ok()?;
+            if !metadata.is_file() {
+                return None;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            include(&name).then_some(name)
+        })
+        .collect::<Vec<_>>();
+    names.sort();
+    names
+}
+
+fn render_nav() -> String {
+    let items = [
+        ("dashboard", "Dashboard"),
+        ("agent-boundary", "Agent Boundary"),
+        ("provider-registry", "Provider Registry"),
+        ("approval-queue", "Approval Queue"),
+        ("trace", "Trace Explorer"),
+        ("accountability", "Accountability"),
+        ("reports", "Reports"),
+        ("artifacts", "Artifacts"),
+        ("assurance", "Assurance"),
+        ("settings", "Settings"),
+    ]
+    .into_iter()
+    .map(|(id, label)| format!(r##"<a href="#{}">{}</a>"##, id, escape_html_text(label)))
+    .collect::<Vec<_>>()
+    .join("");
+    format!(
+        r#"<nav class="left-nav" aria-label="Runwarden sections"><strong>Runwarden</strong>{items}</nav>"#
+    )
+}
+
+fn render_status_pill(label: &str, value: &str, tone: &str) -> String {
+    format!(
+        r#"<div class="status-pill tone-{}"><span>{}</span><strong>{}</strong></div>"#,
+        escape_attr(tone),
+        escape_html_text(label),
+        escape_html_text(value)
+    )
+}
+
+fn render_module(id: &str, title: &str, message: &str) -> String {
+    format!(
+        r#"<article class="module" id="{}"><h2>{}</h2><p>{}</p></article>"#,
+        escape_attr(id),
+        escape_html_text(title),
+        escape_html_text(message)
+    )
+}
+
+fn render_approval_row(approval: &ApprovalRecord) -> String {
+    format!(
+        r#"<article class="approval-row" data-approval-id="{}"><div><h3>{}</h3><p>{}</p></div><dl>{}{}{}{}{}{}</dl>{}</article>"#,
+        escape_attr(&approval.approval_id),
+        escape_html_text(&approval.binding.provider),
+        escape_html_text(&approval.binding.action),
+        render_field("Approval", &approval.approval_id),
+        render_field("Risk", "requires_review"),
+        render_field(
+            "Actor",
+            approval.binding.actor_id.as_deref().unwrap_or("unknown")
+        ),
+        render_field(
+            "Authz",
+            approval.binding.authz_id.as_deref().unwrap_or("none")
+        ),
+        render_field("Argument", &approval.binding.argument_hash),
+        render_field("Action", &approval.binding.action),
+        render_approval_decision_form(&approval.approval_id),
+    )
+}
+
+fn render_approval_details(approval: &ApprovalRecord) -> String {
+    format!(
+        r#"<aside class="details-drawer" aria-label="Approval details"><h2>{}</h2><dl>{}{}{}{}{}{}{}{}{}</dl>{}</aside>"#,
+        escape_html_text(&approval.binding.provider),
+        render_field("Approval", &approval.approval_id),
+        render_field("Provider", &approval.binding.provider),
+        render_field("Action", &approval.binding.action),
+        render_field("Risk", "requires_review"),
+        render_field("Target", &approval.binding.action),
+        render_field("Side effects", "pending provider side effect"),
+        render_field(
+            "Actor",
+            approval.binding.actor_id.as_deref().unwrap_or("unknown")
+        ),
+        render_field(
+            "Authz",
+            approval.binding.authz_id.as_deref().unwrap_or("none")
+        ),
+        render_field("Argument hash", &approval.binding.argument_hash),
+        render_approval_decision_form(&approval.approval_id),
+    )
+}
+
+fn render_empty_approval_details() -> String {
+    "<aside class=\"details-drawer\" aria-label=\"Approval details\"><h2>Approval Details</h2><p>Select an approval to inspect provider, risk, target, side effects, actor, authz, argument hash, and obs refs before a reviewer decision.</p></aside>".to_string()
+}
+
+fn render_field(label: &str, value: &str) -> String {
+    format!(
+        r#"<div><dt>{}</dt><dd>{}</dd></div>"#,
+        escape_html_text(label),
+        escape_html_text(value)
+    )
+}
+
+fn render_approval_decision_form(approval_id: &str) -> String {
+    format!(
+        r#"<form class="approval-decision-form" data-approval-id="{}"><label>Reviewer<input name="reviewer" autocomplete="off" required></label><label>Reason<textarea name="reason" required></textarea></label><div class="decision-actions"><button type="submit" name="decision" value="approve" data-action="approve">Approve</button><button type="submit" name="decision" value="deny" data-action="deny">Deny</button></div><p class="decision-status" role="status" data-decision-status></p></form>"#,
+        escape_attr(approval_id)
+    )
+}
+
+fn render_settings_module() -> String {
+    r#"<article class="module" id="settings"><h2>Settings</h2><p>Local API token not loaded.</p><label>Local API Token<input id="local-api-token" name="local_api_token" type="password" autocomplete="off" spellcheck="false"></label></article>"#.to_string()
+}
+
+fn reviewer_console_css() -> &'static str {
+    r#"
     :root { color-scheme: light; font-family: "IBM Plex Sans", system-ui, sans-serif; }
     body { margin: 0; background: #f7f8f4; color: #20241f; }
     .runwarden-workbench { min-height: 100vh; display: grid; grid-template-columns: 220px minmax(0, 1fr) 340px; }
@@ -2001,16 +2368,34 @@ fn reviewer_console_html(bind: &str, port: u16) -> String {
     .status-pill, .module { border: 1px solid #cdd5c8; background: #ffffff; border-radius: 6px; padding: 14px; min-width: 0; }
     .status-pill span { display: block; font-size: 12px; color: #687064; }
     .status-pill strong { display: block; overflow-wrap: anywhere; font-size: 14px; }
+    .tone-success { border-color: #1f7a4d; }
     .tone-review { border-color: #a76716; }
+    .tone-danger { border-color: #b42318; }
     .workspace-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
     .module h2, .details-drawer h2 { font-size: 16px; margin: 0 0 10px; }
     .module p, .details-drawer p { margin: 0; }
     .module code, .status-pill code { font-family: "JetBrains Mono", ui-monospace, monospace; overflow-wrap: anywhere; }
     .approval-module { grid-column: 1 / -1; }
+    .approval-row { border-top: 1px solid #cdd5c8; padding-top: 12px; margin-top: 12px; display: grid; grid-template-columns: minmax(180px, 1fr) minmax(260px, 2fr) auto; gap: 12px; align-items: start; }
+    .approval-row h3 { margin: 0 0 4px; font-size: 15px; overflow-wrap: anywhere; }
+    .approval-row p { margin: 0; color: #687064; overflow-wrap: anywhere; }
+    dl { display: grid; gap: 7px; margin: 0; }
+    dl div { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 8px; }
+    dt { color: #687064; font-size: 12px; }
+    dd { margin: 0; font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12px; overflow-wrap: anywhere; }
+    .row-actions, .decision-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+    .approval-decision-form { display: grid; gap: 8px; }
     button { border: 1px solid #cdd5c8; background: #ffffff; border-radius: 6px; min-height: 44px; padding: 8px 12px; }
     button:hover { border-color: #2f6f4e; background: #eef1ea; }
-    button:focus-visible, .left-nav a:focus-visible { outline: 2px solid #2f6f4e; outline-offset: 2px; }
+    button:focus-visible, input:focus-visible, textarea:focus-visible, .left-nav a:focus-visible { outline: 2px solid #2f6f4e; outline-offset: 2px; }
     .details-drawer { border-left: 1px solid #cdd5c8; background: #ffffff; padding: 18px; min-width: 0; }
+    label { display: block; margin: 12px 0 6px; font-size: 12px; color: #687064; }
+    input, textarea { width: 100%; box-sizing: border-box; border: 1px solid #cdd5c8; border-radius: 6px; padding: 8px; }
+    textarea { min-height: 82px; resize: vertical; }
+    .decision-status { min-height: 20px; color: #20241f; overflow-wrap: anywhere; }
+    .decision-status[data-state="error"] { color: #b42318; }
+    .decision-status[data-state="success"] { color: #1f7a4d; }
+    .decision-complete { opacity: 0.78; }
     @media (max-width: 1199px) {
       .runwarden-workbench { grid-template-columns: 76px minmax(0, 1fr); }
       .left-nav a { font-size: 12px; }
@@ -2022,55 +2407,141 @@ fn reviewer_console_html(bind: &str, port: u16) -> String {
       .left-nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; flex-direction: row; overflow-x: auto; padding: 8px 10px; border-top: 1px solid #cdd5c8; }
       .left-nav a { white-space: nowrap; }
       .top-status-strip, .workspace-grid { grid-template-columns: 1fr; }
+      .approval-row { grid-template-columns: 1fr; }
       .details-drawer { min-height: calc(100vh - 76px); border-left: 0; border-top: 1px solid #cdd5c8; }
     }
-  </style>
-</head>
-<body>
-<main class="runwarden-workbench">
-  <nav class="left-nav" aria-label="Runwarden sections">
-    <strong>Runwarden</strong>
-    <a href="#dashboard">Dashboard</a>
-    <a href="#agent-boundary">Agent Boundary</a>
-    <a href="#provider-registry">Provider Registry</a>
-    <a href="#approval-queue">Approval Queue</a>
-    <a href="#trace">Trace Explorer</a>
-    <a href="#accountability">Accountability</a>
-    <a href="#reports">Reports</a>
-    <a href="#artifacts">Artifacts</a>
-    <a href="#settings">Settings</a>
-  </nav>
-  <section class="workbench-main" id="dashboard" aria-label="Reviewer workspace">
-    <header class="top-status-strip" role="status" aria-label="Assessment status">
-      <div class="status-pill"><span>Session</span><strong>No assessment loaded</strong></div>
-      <div class="status-pill"><span>Local API</span><strong><code>__BIND__:__PORT__</code></strong></div>
-      <div class="status-pill tone-review"><span>Risk</span><strong>incomplete</strong></div>
-      <div class="status-pill tone-review"><span>Trace</span><strong>missing</strong></div>
-      <div class="status-pill"><span>Approvals</span><strong>unknown</strong></div>
-      <div class="status-pill tone-review"><span>Gates</span><strong>missing</strong></div>
-    </header>
-    <div class="workspace-grid">
-      <article class="module" id="agent-boundary"><h2>Agent Boundary</h2><p>No agent config checked</p></article>
-      <article class="module" id="provider-registry"><h2>Provider Registry</h2><p>No providers allowed for this session</p></article>
-      <article class="module approval-module" id="approval-queue"><h2>Approval Queue</h2><p>No actions waiting for review</p></article>
-      <article class="module" id="trace"><h2>Trace Explorer</h2><p>No trace events yet</p></article>
-      <article class="module" id="accountability"><h2>Accountability</h2><p>No accountability chain reconstructed</p></article>
-      <article class="module" id="reports"><h2>Reports</h2><p>No report rendered</p></article>
-      <article class="module" id="artifacts"><h2>Artifacts</h2><p>No artifacts generated</p></article>
-      <article class="module" id="assurance"><h2>Assurance</h2><p>No eval run yet</p></article>
-      <article class="module" id="settings"><h2>Settings</h2><p>Local API token, artifact paths, and debug visibility are not loaded.</p></article>
-    </div>
-  </section>
-  <aside class="details-drawer" aria-label="Approval details">
-    <h2>Approval Details</h2>
-    <p>Select an approval to inspect provider, risk, target, side effects, actor, authz, argument hash, and obs refs before a reviewer decision.</p>
-  </aside>
-</main>
-</body>
-</html>
+  "#
+}
+
+fn reviewer_console_js() -> &'static str {
+    r##""use strict";
+(() => {
+  const root = document.querySelector(".runwarden-workbench");
+  const apiRoot = root?.dataset.localApiUrl?.replace(/\/$/, "");
+  const tokenInput = document.querySelector("#local-api-token");
+
+  function statusFor(form) {
+    return form.querySelector("[data-decision-status]");
+  }
+
+  function setStatus(form, text, state) {
+    const status = statusFor(form);
+    if (!status) {
+      return;
+    }
+    status.textContent = text;
+    if (state) {
+      status.dataset.state = state;
+    } else {
+      delete status.dataset.state;
+    }
+  }
+
+  function disableForm(form) {
+    for (const control of form.querySelectorAll("input, textarea, button")) {
+      control.disabled = true;
+    }
+    form.classList.add("decision-complete");
+  }
+
+  function matchingForms(approvalId) {
+    return Array.from(document.querySelectorAll("form.approval-decision-form")).filter((form) => form.dataset.approvalId === approvalId);
+  }
+
+  function markApprovalComplete(approvalId, message) {
+    for (const form of matchingForms(approvalId)) {
+      setStatus(form, message, "success");
+      disableForm(form);
+    }
+  }
+
+  async function submitDecision(form, decision) {
+    const approvalId = form.dataset.approvalId;
+    const reviewer = form.elements.reviewer?.value?.trim() ?? "";
+    const reason = form.elements.reason?.value?.trim() ?? "";
+    const token = tokenInput?.value?.trim() ?? "";
+    if (!apiRoot || !approvalId) {
+      setStatus(form, "Local API endpoint is unavailable.", "error");
+      return;
+    }
+    if (!token) {
+      setStatus(form, "Local API token is required.", "error");
+      tokenInput?.focus();
+      return;
+    }
+    if (!reviewer || !reason) {
+      setStatus(form, "Reviewer and reason are required.", "error");
+      return;
+    }
+    setStatus(form, "Submitting decision...", "");
+    const response = await fetch(`${apiRoot}/approvals/${encodeURIComponent(approvalId)}/${decision}`, {
+      method: "POST",
+      headers: {
+        "authorization": `Bearer ${token}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ reviewer, reason })
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setStatus(form, body.error ?? "Approval decision failed.", "error");
+      return;
+    }
+    markApprovalComplete(approvalId, `${decision === "approve" ? "Approval" : "Denial"} recorded.`);
+  }
+
+  document.addEventListener("submit", (event) => {
+    const form = event.target;
+    if (!(form instanceof HTMLFormElement) || !form.classList.contains("approval-decision-form")) {
+      return;
+    }
+    event.preventDefault();
+    const submitter = event.submitter;
+    const decision = submitter instanceof HTMLButtonElement ? submitter.value : "";
+    if (decision !== "approve" && decision !== "deny") {
+      setStatus(form, "Choose approve or deny.", "error");
+      return;
+    }
+    submitDecision(form, decision).catch((error) => {
+      setStatus(form, error instanceof Error ? error.message : "Approval decision failed.", "error");
+    });
+  });
+})();
 "##
-    .replace("__BIND__", &escaped_bind)
-    .replace("__PORT__", &port.to_string())
+}
+
+fn plural<'a>(count: usize, singular: &'a str, plural: &'a str) -> &'a str {
+    if count == 1 { singular } else { plural }
+}
+
+fn join_preview(values: &[String], limit: usize) -> String {
+    let mut preview = values.iter().take(limit).cloned().collect::<Vec<_>>();
+    if values.len() > limit {
+        preview.push(format!("+{} more", values.len() - limit));
+    }
+    preview.join(", ")
+}
+
+fn file_url_for_path(path: &Path) -> String {
+    format!("file://{}", percent_encode_path(&path.to_string_lossy()))
+}
+
+fn percent_encode_path(path: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut encoded = String::with_capacity(path.len());
+    for byte in path.as_bytes() {
+        match *byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+                encoded.push(*byte as char);
+            }
+            other => {
+                encoded.push('%');
+                encoded.push(HEX[(other >> 4) as usize] as char);
+                encoded.push(HEX[(other & 0x0f) as usize] as char);
+            }
+        }
+    }
+    encoded
 }
 
 fn escape_html_text(value: &str) -> String {
@@ -2086,6 +2557,10 @@ fn escape_html_text(value: &str) -> String {
         }
     }
     escaped
+}
+
+fn escape_attr(value: &str) -> String {
+    escape_html_text(value)
 }
 
 fn find_workspace_root(mut current: PathBuf) -> Result<PathBuf, String> {
@@ -2243,7 +2718,7 @@ impl LocalApiSecurity {
         let Some(origin) = request.header_value("origin") else {
             return denied(403, "missing Origin header", "origin");
         };
-        if !self.allowed_origins.contains(origin) {
+        if !self.origin_is_allowed(origin) {
             return denied(
                 403,
                 "Origin is not allowed for Runwarden Local API",
@@ -2276,7 +2751,7 @@ impl LocalApiSecurity {
         let Some(origin) = request.header_value("origin") else {
             return denied(403, "missing Origin header", "origin");
         };
-        if !self.allowed_origins.contains(origin) {
+        if !self.origin_is_allowed(origin) {
             return denied(
                 403,
                 "Origin is not allowed for Runwarden Local API",
@@ -2475,11 +2950,15 @@ impl LocalApiSecurity {
         let Some(origin) = request.header_value("origin") else {
             return BTreeMap::new();
         };
-        if host_allowed && self.allowed_origins.contains(origin) {
+        if host_allowed && self.origin_is_allowed(origin) {
             self.cors_headers(origin)
         } else {
             BTreeMap::new()
         }
+    }
+
+    fn origin_is_allowed(&self, origin: &str) -> bool {
+        self.allowed_origins.contains(origin) || origin == "null"
     }
 }
 

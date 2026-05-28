@@ -7,7 +7,10 @@ use std::{
 };
 
 use clap::{Parser, Subcommand};
-use runwarden_api::{LocalApiRouter, LocalApiServerConfig, serve_next_request, serve_one_request};
+use runwarden_api::{
+    LocalApiRouter, LocalApiServerConfig, UiLaunchSnapshot, serve_next_request, serve_one_request,
+    write_ui_launch_bundle,
+};
 use runwarden_assurance::accountability::accountability_summary;
 use runwarden_assurance::artifact::{seal_artifact, verify_artifact_manifest};
 use runwarden_assurance::audit::audit_summary;
@@ -1094,7 +1097,18 @@ fn run() -> anyhow::Result<()> {
             artifacts,
             json,
         } => {
-            let result = write_ui_launch_bundle(&bind, port, &artifacts)?;
+            let root = find_workspace_root(env::current_dir()?)?;
+            let artifacts = resolve_local_artifact_output_path(&root, &artifacts)?;
+            let result = write_ui_launch_bundle(
+                &bind,
+                port,
+                &artifacts,
+                UiLaunchSnapshot {
+                    approvals: read_all_approvals()?,
+                    sessions: read_all_sessions()?,
+                },
+            )
+            .map_err(anyhow::Error::msg)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
@@ -2217,134 +2231,6 @@ fn release_smoke_report(root: &Path) -> anyhow::Result<serde_json::Value> {
     }))
 }
 
-fn write_ui_launch_bundle(
-    bind: &str,
-    port: u16,
-    artifact_root: &Path,
-) -> anyhow::Result<serde_json::Value> {
-    fs::create_dir_all(artifact_root)?;
-    let html_path = artifact_root.join("reviewer-console.html");
-    fs::write(&html_path, reviewer_console_html(bind, port))?;
-
-    Ok(json!({
-        "bind": bind,
-        "port": port,
-        "artifact_root": artifact_root.to_string_lossy(),
-        "html_path": html_path.to_string_lossy(),
-        "launch_url": format!("http://{bind}:{port}/"),
-        "mode": "static_reviewer_console_bundle",
-        "side_effect_executed": true
-    }))
-}
-
-fn reviewer_console_html(bind: &str, port: u16) -> String {
-    let escaped_bind = escape_html_text(bind);
-    r##"<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Runwarden Reviewer Console</title>
-  <style>
-    :root { color-scheme: light; font-family: "IBM Plex Sans", system-ui, sans-serif; }
-    body { margin: 0; background: #f7f8f4; color: #20241f; }
-    .runwarden-workbench { min-height: 100vh; display: grid; grid-template-columns: 220px minmax(0, 1fr) 340px; }
-    .left-nav { background: #151813; color: #f3faf5; padding: 18px; display: flex; flex-direction: column; gap: 6px; }
-    .left-nav strong { padding: 9px 10px; }
-    .left-nav a { color: inherit; text-decoration: none; padding: 9px 10px; border-radius: 6px; min-height: 44px; box-sizing: border-box; display: flex; align-items: center; }
-    .left-nav a:hover { background: #262d24; }
-    .workbench-main { padding: 18px; min-width: 0; }
-    .top-status-strip { display: grid; grid-template-columns: repeat(6, minmax(110px, 1fr)); gap: 8px; margin-bottom: 14px; }
-    .status-pill, .module { border: 1px solid #cdd5c8; background: #ffffff; border-radius: 6px; padding: 14px; min-width: 0; }
-    .status-pill span { display: block; font-size: 12px; color: #687064; }
-    .status-pill strong { display: block; overflow-wrap: anywhere; font-size: 14px; }
-    .tone-review { border-color: #a76716; }
-    .workspace-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-    .module h2, .details-drawer h2 { font-size: 16px; margin: 0 0 10px; }
-    .module p, .details-drawer p { margin: 0; }
-    .module code, .status-pill code { font-family: "JetBrains Mono", ui-monospace, monospace; overflow-wrap: anywhere; }
-    .approval-module { grid-column: 1 / -1; }
-    button { border: 1px solid #cdd5c8; background: #ffffff; border-radius: 6px; min-height: 44px; padding: 8px 12px; }
-    button:hover { border-color: #2f6f4e; background: #eef1ea; }
-    button:focus-visible, .left-nav a:focus-visible { outline: 2px solid #2f6f4e; outline-offset: 2px; }
-    .details-drawer { border-left: 1px solid #cdd5c8; background: #ffffff; padding: 18px; min-width: 0; }
-    @media (max-width: 1199px) {
-      .runwarden-workbench { grid-template-columns: 76px minmax(0, 1fr); }
-      .left-nav a { font-size: 12px; }
-      .details-drawer { grid-column: 1 / -1; border-left: 0; border-top: 1px solid #cdd5c8; }
-      .top-status-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    }
-    @media (max-width: 768px) {
-      .runwarden-workbench { display: block; padding-bottom: 76px; }
-      .left-nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; flex-direction: row; overflow-x: auto; padding: 8px 10px; border-top: 1px solid #cdd5c8; }
-      .left-nav a { white-space: nowrap; }
-      .top-status-strip, .workspace-grid { grid-template-columns: 1fr; }
-      .details-drawer { min-height: calc(100vh - 76px); border-left: 0; border-top: 1px solid #cdd5c8; }
-    }
-  </style>
-</head>
-<body>
-<main class="runwarden-workbench">
-  <nav class="left-nav" aria-label="Runwarden sections">
-    <strong>Runwarden</strong>
-    <a href="#dashboard">Dashboard</a>
-    <a href="#agent-boundary">Agent Boundary</a>
-    <a href="#provider-registry">Provider Registry</a>
-    <a href="#approval-queue">Approval Queue</a>
-    <a href="#trace">Trace Explorer</a>
-    <a href="#accountability">Accountability</a>
-    <a href="#reports">Reports</a>
-    <a href="#artifacts">Artifacts</a>
-    <a href="#settings">Settings</a>
-  </nav>
-  <section class="workbench-main" id="dashboard" aria-label="Reviewer workspace">
-    <header class="top-status-strip" role="status" aria-label="Assessment status">
-      <div class="status-pill"><span>Session</span><strong>No assessment loaded</strong></div>
-      <div class="status-pill"><span>Local API</span><strong><code>__BIND__:__PORT__</code></strong></div>
-      <div class="status-pill tone-review"><span>Risk</span><strong>incomplete</strong></div>
-      <div class="status-pill tone-review"><span>Trace</span><strong>missing</strong></div>
-      <div class="status-pill"><span>Approvals</span><strong>unknown</strong></div>
-      <div class="status-pill tone-review"><span>Gates</span><strong>missing</strong></div>
-    </header>
-    <div class="workspace-grid">
-      <article class="module" id="agent-boundary"><h2>Agent Boundary</h2><p>No agent config checked</p></article>
-      <article class="module" id="provider-registry"><h2>Provider Registry</h2><p>No providers allowed for this session</p></article>
-      <article class="module approval-module" id="approval-queue"><h2>Approval Queue</h2><p>No actions waiting for review</p></article>
-      <article class="module" id="trace"><h2>Trace Explorer</h2><p>No trace events yet</p></article>
-      <article class="module" id="accountability"><h2>Accountability</h2><p>No accountability chain reconstructed</p></article>
-      <article class="module" id="reports"><h2>Reports</h2><p>No report rendered</p></article>
-      <article class="module" id="artifacts"><h2>Artifacts</h2><p>No artifacts generated</p></article>
-      <article class="module" id="assurance"><h2>Assurance</h2><p>No eval run yet</p></article>
-      <article class="module" id="settings"><h2>Settings</h2><p>Local API token, artifact paths, and debug visibility are not loaded.</p></article>
-    </div>
-  </section>
-  <aside class="details-drawer" aria-label="Approval details">
-    <h2>Approval Details</h2>
-    <p>Select an approval to inspect provider, risk, target, side effects, actor, authz, argument hash, and obs refs before a reviewer decision.</p>
-  </aside>
-</main>
-</body>
-</html>
-"##
-    .replace("__BIND__", &escaped_bind)
-    .replace("__PORT__", &port.to_string())
-}
-
-fn escape_html_text(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len());
-    for ch in value.chars() {
-        match ch {
-            '&' => escaped.push_str("&amp;"),
-            '<' => escaped.push_str("&lt;"),
-            '>' => escaped.push_str("&gt;"),
-            '"' => escaped.push_str("&quot;"),
-            '\'' => escaped.push_str("&#39;"),
-            _ => escaped.push(ch),
-        }
-    }
-    escaped
-}
-
 fn resolve_launch_token(configured: Option<String>) -> (String, bool) {
     if let Some(token) = configured.filter(|token| !token.trim().is_empty()) {
         return (token, false);
@@ -2437,6 +2323,27 @@ fn read_session(session_id: &str) -> anyhow::Result<SessionManifest> {
     Ok(serde_json::from_str(&body)?)
 }
 
+fn read_all_sessions() -> anyhow::Result<Vec<SessionManifest>> {
+    let dir = PathBuf::from(".runwarden").join("sessions");
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut sessions = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        if entry.path().extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let body = fs::read_to_string(entry.path())?;
+        sessions.push(serde_json::from_str(&body)?);
+    }
+    sessions.sort_by(|left: &SessionManifest, right: &SessionManifest| {
+        left.session_id.cmp(&right.session_id)
+    });
+    Ok(sessions)
+}
+
 fn safe_session_id(session_id: &str) -> anyhow::Result<&str> {
     if session_id.is_empty()
         || !session_id
@@ -2496,6 +2403,70 @@ fn argument_hash_from_json(arguments: &str) -> anyhow::Result<String> {
     let value: serde_json::Value = serde_json::from_str(arguments)?;
     let bytes = serde_json::to_vec(&value)?;
     Ok(hex_sha256(&bytes))
+}
+
+fn resolve_local_artifact_output_path(root: &Path, requested: &Path) -> anyhow::Result<PathBuf> {
+    if requested.as_os_str().is_empty()
+        || requested.is_absolute()
+        || requested.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir
+                    | std::path::Component::Prefix(_)
+                    | std::path::Component::RootDir
+            )
+        })
+    {
+        anyhow::bail!("artifact output path must be a relative path inside the workspace");
+    }
+
+    reject_symlink_components(root, requested)?;
+    let output_path = root.join(requested);
+    if !path_is_within_root(&output_path, root) {
+        anyhow::bail!("artifact output path must be a relative path inside the workspace");
+    }
+    Ok(output_path)
+}
+
+fn reject_symlink_components(root: &Path, requested: &Path) -> anyhow::Result<()> {
+    let mut current = root.to_path_buf();
+    for component in requested.components() {
+        let std::path::Component::Normal(part) = component else {
+            anyhow::bail!("artifact output path must be a relative path inside the workspace");
+        };
+        current.push(part);
+        if fs::symlink_metadata(&current)
+            .map(|metadata| metadata.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            anyhow::bail!("artifact output path must not contain symlink components");
+        }
+    }
+    Ok(())
+}
+
+fn path_is_within_root(candidate: &Path, root: &Path) -> bool {
+    let Ok(canonical_root) = root.canonicalize() else {
+        return false;
+    };
+    match candidate.canonicalize() {
+        Ok(canonical_candidate) => canonical_candidate.starts_with(&canonical_root),
+        Err(_) => canonical_existing_parent(candidate)
+            .map(|parent| parent.starts_with(&canonical_root))
+            .unwrap_or(false),
+    }
+}
+
+fn canonical_existing_parent(path: &Path) -> Option<PathBuf> {
+    let mut current = path.parent()?.to_path_buf();
+    loop {
+        if fs::symlink_metadata(&current).is_ok() {
+            return current.canonicalize().ok();
+        }
+        if !current.pop() {
+            return None;
+        }
+    }
 }
 
 fn safe_record_id(record_id: &str) -> anyhow::Result<&str> {

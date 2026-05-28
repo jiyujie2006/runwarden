@@ -131,6 +131,20 @@ fn approved_record(
     approval
 }
 
+fn pending_record(approval_id: &str) -> ApprovalRecord {
+    ApprovalRecord::new(
+        approval_id,
+        ApprovalBinding {
+            session_id: "session-1".to_string(),
+            provider: "runwarden.report.render".to_string(),
+            action: "render".to_string(),
+            argument_hash: "arg_hash_1".to_string(),
+            authz_id: Some("authz-1".to_string()),
+            actor_id: Some("agent-1".to_string()),
+        },
+    )
+}
+
 #[test]
 fn local_api_router_serves_sdk_provider_list_endpoint_without_security_decisions() {
     let request = authed("GET", "/providers");
@@ -203,6 +217,14 @@ fn local_api_ui_launch_writes_full_reviewer_console_contract() {
     assert_eq!(response.status, 200);
     let html =
         fs::read_to_string(artifact_path.join("reviewer-console.html")).expect("read ui bundle");
+    let script =
+        fs::read_to_string(artifact_path.join("reviewer-console.js")).expect("read ui script");
+    assert!(
+        response.body["operation"]["data"]["script_path"]
+            .as_str()
+            .expect("script path")
+            .ends_with("reviewer-console.js")
+    );
     assert!(html.contains("aria-label=\"Runwarden sections\""));
     assert!(html.contains("role=\"status\""));
     assert!(html.contains("Agent Boundary"));
@@ -213,11 +235,51 @@ fn local_api_ui_launch_writes_full_reviewer_console_contract() {
     assert!(html.contains("Reports"));
     assert!(html.contains("Artifacts"));
     assert!(html.contains("Assurance"));
+    assert!(html.contains("href=\"#assurance\""));
     assert!(html.contains("Settings"));
     assert!(html.contains("@media (max-width: 768px)"));
+    assert!(html.contains("<script src=\"reviewer-console.js\" defer></script>"));
     assert!(!html.contains("data-action=\"approve\""));
     assert!(!html.contains("data-action=\"deny\""));
-    assert!(!html.contains("<script"));
+    assert!(!html.contains("<script>"));
+    assert!(script.contains("fetch(`${apiRoot}/approvals/"));
+    let _ = fs::remove_dir_all(&artifact_path);
+}
+
+#[test]
+fn local_api_ui_launch_renders_pending_approval_controls() {
+    let artifacts = format!(
+        "target/local-api-ui-approval-{}",
+        uuid::Uuid::now_v7().simple()
+    );
+    let artifact_path = workspace_root().join(&artifacts);
+    let _ = fs::remove_dir_all(&artifact_path);
+    let mut security =
+        LocalApiSecurity::new("launch-secret", ["127.0.0.1:0"], ["http://127.0.0.1:0"]);
+    security.insert_approval(pending_record("approval-ui-1"));
+    let mut router = LocalApiRouter::new(security);
+
+    let response = router.handle(
+        authed("POST", "/ui/launch"),
+        Some(json!({
+            "bind": "127.0.0.1",
+            "port": 8092,
+            "artifacts_path": artifacts
+        })),
+    );
+
+    assert_eq!(response.status, 200);
+    let html =
+        fs::read_to_string(artifact_path.join("reviewer-console.html")).expect("read ui bundle");
+    assert!(html.contains("approval-ui-1"));
+    assert!(html.contains("runwarden.report.render"));
+    assert!(html.contains("arg_hash_1"));
+    assert!(html.contains("class=\"approval-decision-form\""));
+    assert!(html.contains("id=\"local-api-token\""));
+    assert!(html.contains("data-action=\"approve\""));
+    assert!(html.contains("data-action=\"deny\""));
+    assert!(html.contains("<textarea"));
+    assert!(!html.contains("No actions waiting for review"));
     let _ = fs::remove_dir_all(&artifact_path);
 }
 

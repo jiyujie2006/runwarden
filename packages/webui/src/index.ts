@@ -342,6 +342,7 @@ function renderNav(): string {
     "Accountability",
     "Reports",
     "Artifacts",
+    "Assurance",
     "Settings"
   ];
   return `<nav class="left-nav" aria-label="Runwarden sections">${items
@@ -403,7 +404,9 @@ function renderApprovalRow(row: ApprovalQueueRow): string {
   )}${field("Authz", row.authzId ?? "none")}${field(
     "Argument",
     row.argumentHash
-  )}${field("Obs", row.obsRefs.join(", "))}</dl><div class="row-actions"><button data-action="open_details">Open</button><button data-action="approve">Approve</button><button data-action="deny">Deny</button></div></article>`;
+  )}${field("Obs", row.obsRefs.join(", "))}</dl>${renderApprovalDecisionForm(
+    row.approvalId
+  )}</article>`;
 }
 
 function renderModule(id: string, module: WorkbenchModule): string {
@@ -427,11 +430,17 @@ function renderDetailsDrawer(row: ApprovalQueueRow | undefined): string {
   )}${field("Argument hash", row.argumentHash)}${field(
     "Obs refs",
     row.obsRefs.join(", ")
-  )}</dl><label>Reason<textarea name="reason"></textarea></label></aside>`;
+  )}</dl>${renderApprovalDecisionForm(row.approvalId)}</aside>`;
 }
 
 function field(label: string, value: string): string {
   return `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`;
+}
+
+function renderApprovalDecisionForm(approvalId: string): string {
+  return `<form class="approval-decision-form" data-approval-id="${escapeAttr(
+    approvalId
+  )}"><label>Reviewer<input name="reviewer" autocomplete="off" required></label><label>Reason<textarea name="reason" required></textarea></label><div class="decision-actions"><button type="submit" name="decision" value="approve" data-action="approve">Approve</button><button type="submit" name="decision" value="deny" data-action="deny">Deny</button></div><p class="decision-status" role="status" data-decision-status></p></form>`;
 }
 
 function slug(input: string): string {
@@ -478,12 +487,16 @@ function workbenchCss(): string {
     dl div { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 8px; }
     dt { color: #687064; font-size: 12px; }
     dd { margin: 0; font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12px; overflow-wrap: anywhere; }
-    .row-actions { display: flex; gap: 6px; }
+    .row-actions, .decision-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+    .approval-decision-form { display: grid; gap: 8px; }
     button { border: 1px solid #cdd5c8; background: #ffffff; border-radius: 6px; min-height: 44px; padding: 8px 12px; }
     button:hover { border-color: #2f6f4e; background: #eef1ea; }
-    button:focus-visible, .left-nav a:focus-visible { outline: 2px solid #2f6f4e; outline-offset: 2px; }
+    button:focus-visible, input:focus-visible, textarea:focus-visible, .left-nav a:focus-visible { outline: 2px solid #2f6f4e; outline-offset: 2px; }
     .details-drawer { border-left: 1px solid #cdd5c8; background: #ffffff; padding: 18px; min-width: 0; }
-    textarea { width: 100%; min-height: 82px; margin-top: 8px; box-sizing: border-box; }
+    label { display: block; font-size: 12px; color: #687064; }
+    input, textarea { width: 100%; min-height: 38px; margin-top: 8px; box-sizing: border-box; border: 1px solid #cdd5c8; border-radius: 6px; padding: 8px; }
+    textarea { min-height: 82px; resize: vertical; }
+    .decision-status { min-height: 20px; color: #20241f; overflow-wrap: anywhere; }
     @media (max-width: 1199px) {
       .runwarden-workbench { grid-template-columns: 76px minmax(0, 1fr); }
       .left-nav a { font-size: 12px; }

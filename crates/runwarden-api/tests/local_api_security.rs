@@ -85,6 +85,20 @@ fn control_plane_mutation_allows_matching_token_host_origin_without_wildcard_cor
 }
 
 #[test]
+fn control_plane_mutation_allows_generated_file_origin_with_launch_token() {
+    let request = approval_request().header("Origin", "null");
+
+    let response = api().authorize_control_plane(&request);
+
+    assert_eq!(response.status, 200);
+    assert_eq!(
+        response.headers.get("access-control-allow-origin"),
+        Some(&"null".to_string())
+    );
+    assert_eq!(response.body["side_effect_executed"], false);
+}
+
+#[test]
 fn approval_queue_lists_pending_records_after_security_gate() {
     let mut api = api();
     let pending = approval_record("approval-1");

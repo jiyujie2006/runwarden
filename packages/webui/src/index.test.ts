@@ -213,11 +213,13 @@ describe("renderReviewerConsoleHtml", () => {
     expect(html).toContain("Provider Registry");
     expect(html).toContain("Accountability");
     expect(html).toContain("Assurance");
+    expect(html).toContain('href="#assurance"');
     expect(html).toContain("Settings");
     expect(html).toContain("Approval Queue");
     expect(html).toContain("details-drawer");
     expect(html).toContain("runwarden.report.render");
     expect(html).toContain("arg_hash_1");
+    expect(html).toContain("approval-decision-form");
     expect(html).toContain("data-action=\"approve\"");
     expect(html).not.toContain("<script");
   });

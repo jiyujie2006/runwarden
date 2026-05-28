@@ -22,3 +22,7 @@ The TypeScript `RunwardenClient` accepts `launchToken` only for local API
 origins (`localhost`, `.localhost`, `127.0.0.1`, or `::1`) unless
 `allowRemoteLaunchToken` is explicitly set. Do not send launch tokens to remote
 origins by default.
+
+Generated Reviewer Console files may call the Local API from a `file://` browser
+origin. Local API control-plane routes still require the launch token plus the
+allowed Host check before any approval mutation or trusted side effect.

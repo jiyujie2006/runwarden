@@ -13,7 +13,8 @@ Reviewer workflow:
 4. Open a pending approval row.
 5. Review provider, risk, target, side effects, actor, authz, argument hash, and
    related `obs_*` references in the details drawer.
-6. Approve or deny with a reviewer reason.
+6. Enter the Local API launch token in Settings.
+7. Approve or deny with reviewer identity and reason.
 
 The WebUI must not mutate authority directly. Approval mutations go through the
 Local API launch-token, Host, and Origin checks, then update kernel-owned
@@ -24,6 +25,13 @@ For local review, generate the static launch bundle with:
 ```bash
 runwarden ui --bind 127.0.0.1 --port 8088 --artifacts artifacts --json
 ```
+
+Open the returned `launch_url`; it points to the generated
+`reviewer-console.html` file. The JSON also includes `script_path` for the local
+`reviewer-console.js` companion script and `local_api_url` for the API endpoint
+the browser forms submit to. `runwarden ui` writes the bundle but does not start
+the Local API server; run `runwarden api serve --bind 127.0.0.1 --port 8088`
+when browser approval submission is needed.
 
 `--artifacts` must be a relative workspace path. The launch writer rejects
 absolute paths, parent traversal, and symlink escapes before writing. The bind

@@ -14,3 +14,8 @@ runwarden artifact verify --artifacts artifacts --manifest artifacts/artifact-ma
 Verification rejects path escapes, symlink escapes, hash mismatches, missing
 sidecars, stale sidecar hashes, and sidecars whose `artifact_id` or
 `redacted_sha256` does not match the manifest entry and artifact bytes.
+
+The Reviewer Console summarizes `artifact-manifest.json` entries by
+`artifact_id` when generating a static UI bundle. Report and assurance module
+summaries are derived from files already present under `reports/` and `release/`
+inside the same relative workspace artifact root.
