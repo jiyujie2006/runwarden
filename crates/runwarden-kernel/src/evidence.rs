@@ -89,30 +89,29 @@ impl InMemoryTraceStore {
     }
 
     pub fn query(&self, query: TraceQuery) -> TracePage {
-        let matching: Vec<_> = self
-            .events
-            .iter()
-            .filter(|event| trace_event_matches(event, &query))
-            .collect();
-        let total_matching = matching.len();
+        let mut total_matching = 0usize;
         let mut events = Vec::new();
         let mut bytes_used = 0usize;
         let mut truncated_by_bytes = false;
 
-        for event in matching
+        for event in self
+            .events
             .iter()
-            .skip(query.offset)
-            .take(query.limit)
-            .copied()
+            .filter(|event| trace_event_matches(event, &query))
         {
+            let match_offset = total_matching;
+            total_matching += 1;
+            if match_offset < query.offset || events.len() >= query.limit || truncated_by_bytes {
+                continue;
+            }
             let event_bytes = serde_json::to_vec(event)
                 .expect("trace event should serialize")
                 .len();
             if let Some(max_bytes) = query.max_bytes
-                && bytes_used + event_bytes > max_bytes
+                && bytes_used.saturating_add(event_bytes) > max_bytes
             {
                 truncated_by_bytes = true;
-                break;
+                continue;
             }
             bytes_used += event_bytes;
             events.push(event.clone());

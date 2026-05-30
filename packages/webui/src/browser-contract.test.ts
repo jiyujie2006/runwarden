@@ -16,6 +16,7 @@ describe("reviewer console browser contract", () => {
         {
           approvalId: "approval-1",
           provider: "external.mcp.browser.open_page",
+          action: "open_page",
           risk: "network_active",
           target: "https://example.com",
           sideEffects: ["network"],

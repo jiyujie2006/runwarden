@@ -31,7 +31,7 @@ fn provider_manifest_models_external_provider_identity_and_schema_pin() {
     assert_eq!(contract.provider.kind, ProviderKind::Mcp);
     assert_eq!(contract.provider.risk, ProviderRisk::NetworkActive);
     assert_eq!(contract.schema_pin.digest, manifest.schema_pin.digest);
-    assert_eq!(contract.schema_rug_pull_detected, false);
+    assert!(!contract.schema_rug_pull_detected);
     assert!(contract.enforcement.requires_kernel_mediation);
     assert!(contract.enforcement.requires_trace);
     assert!(contract.enforcement.requires_redaction);

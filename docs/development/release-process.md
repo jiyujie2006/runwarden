@@ -13,13 +13,14 @@ The gate runs:
 3. `runwarden check --strict`.
 4. `runwarden cert all --json`.
 5. `runwarden eval all --json`.
-6. `runwarden eval agent-native --json`.
-7. `runwarden bench run --json`.
-8. `runwarden release smoke --json`.
-9. `runwarden artifact submission --full --output artifacts --json`.
-10. `runwarden artifact verify --artifacts artifacts --manifest
+6. `runwarden eval scenarios --json`.
+7. `runwarden eval agent-native --json`.
+8. `runwarden bench run --json`.
+9. `runwarden release smoke --json`.
+10. `runwarden artifact submission --full --output artifacts --json`.
+11. `runwarden artifact verify --artifacts artifacts --manifest
    artifacts/artifact-manifest.json --json`.
-11. `scripts/artifact_leak_scan.sh`.
+12. `scripts/artifact_leak_scan.sh`.
 
 CI is tiered:
 

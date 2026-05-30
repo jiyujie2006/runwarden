@@ -1,70 +1,30 @@
 import type {
+  ApprovalBinding,
+  ApprovalRecord,
   ApprovalState,
+  ArtifactRef,
+  DecisionEnvelope,
   ErrorKind,
   ExecutionMode,
   ExecutionStatus,
-  PolicyDecision
+  PolicyDecision,
+  ProviderCall,
+  ProviderOutcome
 } from "./generated/contracts";
 
 export type {
+  ApprovalBinding,
+  ApprovalRecord,
   ApprovalState,
+  ArtifactRef,
+  DecisionEnvelope,
   ErrorKind,
   ExecutionMode,
   ExecutionStatus,
-  PolicyDecision
+  PolicyDecision,
+  ProviderCall,
+  ProviderOutcome
 } from "./generated/contracts";
-
-export interface ProviderCall {
-  session_id: string;
-  provider: string;
-  action: string;
-  arguments: unknown;
-  actor_id?: string | null;
-  authz_id?: string | null;
-  approval_id?: string | null;
-}
-
-export interface ProviderOutcome {
-  decision: PolicyDecision;
-  execution_status: ExecutionStatus;
-  output: unknown;
-  envelope: DecisionEnvelope;
-  observation_id: string;
-  artifacts: ArtifactRef[];
-  next_actions: string[];
-}
-
-export interface DecisionEnvelope {
-  decision: PolicyDecision;
-  gate_id: string;
-  error_kind?: ErrorKind | null;
-  denied_by?: string | null;
-  reason: string;
-  provider: string;
-  action: string;
-  target: string;
-  authz_id?: string | null;
-  actor_id?: string | null;
-  approval_id?: string | null;
-  execution_mode: ExecutionMode;
-  side_effect_executed: boolean;
-  trace_event?: string | null;
-  suggestion?: string | null;
-}
-
-export interface ArtifactRef {
-  id: string;
-  path: string;
-  sha256?: string | null;
-}
-
-export interface ApprovalRecord {
-  approval_id: string;
-  state: ApprovalState;
-  binding?: unknown;
-  reviewer?: string | null;
-  reason?: string | null;
-}
 
 export interface ApprovalQueueResponse {
   approvals: ApprovalRecord[];
@@ -276,10 +236,10 @@ export class RunwardenClient {
     }
 
     const response = await this.fetchFn(this.endpoint(path), init);
-    const payload = (await response.json()) as T;
     if (!response.ok) {
       throw new Error(`Runwarden Local API request failed with status ${response.status}`);
     }
+    const payload = (await response.json()) as T;
     return payload;
   }
 }

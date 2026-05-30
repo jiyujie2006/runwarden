@@ -7,7 +7,7 @@
     },
     {
       "id": "raw-shell-denied",
-      "text": "Raw shell access was denied before side effects.",
+      "text": "Raw shell access was denied.",
       "obs_refs": ["obs_eval_2"]
     }
   ]

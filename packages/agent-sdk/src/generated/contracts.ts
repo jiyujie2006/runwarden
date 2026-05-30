@@ -46,3 +46,79 @@ export type ApprovalState =
   | "denied"
   | "expired"
   | "revoked";
+
+export interface ProviderCall {
+  action: string;
+  actor_id?: string | null;
+  approval_id?: string | null;
+  arguments: unknown;
+  authz_id?: string | null;
+  provider: string;
+  session_id: string;
+}
+
+export interface ArtifactRef {
+  id: string;
+  path: string;
+  sha256?: string | null;
+}
+
+export interface DecisionEnvelope {
+  action: string;
+  actor_id?: string | null;
+  approval_id?: string | null;
+  authz_id?: string | null;
+  decision: PolicyDecision;
+  denied_by?: string | null;
+  error_kind?: ErrorKind | null;
+  execution_mode: ExecutionMode;
+  gate_id: string;
+  provider: string;
+  reason: string;
+  side_effect_executed: boolean;
+  suggestion?: string | null;
+  target: string;
+  trace_event?: string | null;
+}
+
+export interface ProviderOutcome {
+  artifacts: ArtifactRef[];
+  decision: PolicyDecision;
+  envelope: DecisionEnvelope;
+  execution_status: ExecutionStatus;
+  next_actions: string[];
+  observation_id: string;
+  output: unknown;
+}
+
+export interface ApprovalBinding {
+  action: string;
+  actor_id?: string | null;
+  argument_hash: string;
+  authz_id?: string | null;
+  provider: string;
+  session_id: string;
+}
+
+export interface ApprovalRecord {
+  approval_id: string;
+  binding: ApprovalBinding;
+  expires_at?: string | null;
+  reason?: string | null;
+  reviewer?: string | null;
+  state: ApprovalState;
+}
+
+export interface ArtifactManifestEntry {
+  artifact_id: string;
+  obs_refs: string[];
+  redaction_sidecar_path?: string | null;
+  redaction_sidecar_sha256?: string | null;
+  relative_path: string;
+  sha256?: string | null;
+}
+
+export interface ArtifactManifest {
+  artifacts: ArtifactManifestEntry[];
+  schema_version: string;
+}

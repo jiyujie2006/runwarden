@@ -47,3 +47,7 @@ tools/call runwarden.report.render
 `runwarden.provider.call` supports inline safe providers such as
 `runwarden.input.inspect`, `runwarden.audit.summary`,
 `runwarden.accountability.summary`, and `runwarden.eval.agent-native`.
+
+External MCP HTTP/SSE adapter calls reject private, local, link-local,
+carrier-grade NAT, unique-local, unspecified, and IPv4-mapped local addresses
+before connecting, including when the URL contains the IP literal directly.

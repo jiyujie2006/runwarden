@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { RunwardenClient, type FetchInit, type ProviderOutcome } from "./index";
+import {
+  RunwardenClient,
+  type ApprovalRecord,
+  type FetchInit,
+  type ProviderOutcome
+} from "./index";
 
 describe("RunwardenClient", () => {
   it("advertises the agent-native security kernel boundary", async () => {
@@ -49,7 +54,18 @@ describe("RunwardenClient", () => {
           ok: true,
           status: 200,
           json: async () => ({
-            approvals: [{ approval_id: "approval-1", state: "pending" }],
+            approvals: [
+              {
+                approval_id: "approval-1",
+                state: "pending",
+                binding: {
+                  session_id: "session-1",
+                  provider: "runwarden.report.render",
+                  action: "render",
+                  argument_hash: "arg_hash_1"
+                }
+              }
+            ],
             side_effect_executed: false
           })
         };
@@ -67,6 +83,30 @@ describe("RunwardenClient", () => {
         }
       }
     });
+  });
+
+  it("models approval records with required binding context from Rust schemas", () => {
+    const approval: ApprovalRecord = {
+      approval_id: "approval-1",
+      state: "pending",
+      binding: {
+        session_id: "session-1",
+        provider: "runwarden.report.render",
+        action: "render",
+        argument_hash: "arg_hash_1",
+        actor_id: "agent-1",
+        authz_id: "authz-1"
+      }
+    };
+
+    expect(approval.binding.action).toBe("render");
+
+    // @ts-expect-error ApprovalRecord.binding is required by schemas/approval-record.schema.json.
+    const missingBinding: ApprovalRecord = {
+      approval_id: "approval-2",
+      state: "pending"
+    };
+    expect(missingBinding.approval_id).toBe("approval-2");
   });
 
   it("rejects launch tokens for non-local base URLs by default", () => {
@@ -112,6 +152,12 @@ describe("RunwardenClient", () => {
           json: async () => ({
             approval: {
               approval_id: "approval-1",
+              binding: {
+                session_id: "session-1",
+                provider: "runwarden.report.render",
+                action: "render",
+                argument_hash: "arg_hash_1"
+              },
               state: "approved",
               reviewer: "reviewer-alice",
               reason: "reviewed exact command"
@@ -195,5 +241,21 @@ describe("RunwardenClient", () => {
         "content-type": "application/json"
       }
     });
+  });
+
+  it("reports HTTP status even when an error response has no JSON body", async () => {
+    const client = new RunwardenClient("http://127.0.0.1:8088/", {
+      fetch: async () => ({
+        ok: false,
+        status: 503,
+        json: async () => {
+          throw new SyntaxError("empty response");
+        }
+      })
+    });
+
+    await expect(client.providerList()).rejects.toThrow(
+      "Runwarden Local API request failed with status 503"
+    );
   });
 });

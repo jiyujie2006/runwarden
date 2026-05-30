@@ -12,4 +12,8 @@ Primary threats:
 - trace tampering
 - artifact leakage
 
-The kernel mitigates these through allowlists, scoped roots, egress checks, schema pins, approval records, trace verification, report linting, and artifact redaction checks.
+The kernel mitigates these through allowlists, scoped roots, egress checks,
+schema pins, approval records, trace verification, report linting, and artifact
+redaction checks. External MCP HTTP/SSE adapters also deny private or local IP
+literals and resolutions before connecting so downstream tool endpoints cannot
+be used for loopback or metadata-service egress.

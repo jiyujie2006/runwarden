@@ -25,8 +25,8 @@ The provider registry currently exposes these mediated provider IDs:
 - `runwarden.bench.run`
 - `external.mcp.browser.open_page`
 - `external.mcp.filesystem.read_file`
-- `external.mcp.api.request`
-- `external.mcp.scanner.run`
+- `external.api.request`
+- `external.scanner.run`
 - `external.shell.command`
 - `external.plugin.security_scan`
 - `external.skill.assessment_helper`

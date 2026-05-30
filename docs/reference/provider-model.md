@@ -13,4 +13,8 @@ Provider records define:
 - evidence contract
 - authority requirements
 
+The `external.mcp.*` provider id prefix is reserved for external providers whose
+kind is `mcp`; other external families use their own prefixes such as
+`external.api.*`, `external.scanner.*`, or `external.shell.*`.
+
 High-risk, network-active, credential, destructive, and artifact-writing providers require approval before trusted side effects.

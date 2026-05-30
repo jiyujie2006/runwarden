@@ -71,3 +71,19 @@ fn external_catalog_declares_kernel_managed_external_provider_families() {
                 .contains(&SideEffectKind::ProcessSpawn)
     }));
 }
+
+#[test]
+fn external_mcp_prefix_is_reserved_for_mcp_kind() {
+    for provider in default_external_providers()
+        .into_iter()
+        .filter(|provider| provider.id.starts_with("external.mcp."))
+    {
+        assert_eq!(
+            provider.kind,
+            ProviderKind::Mcp,
+            "{} uses the external.mcp prefix but is {:?}",
+            provider.id,
+            provider.kind
+        );
+    }
+}

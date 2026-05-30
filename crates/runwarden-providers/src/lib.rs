@@ -1458,7 +1458,15 @@ pub mod external {
 
     fn certify_mcp_manifest(manifest: &ProviderManifest, findings: &mut Vec<String>) {
         match manifest.transport.as_deref() {
-            Some("stdio" | "http" | "sse" | "https") => {}
+            Some("stdio") => {
+                if manifest.command_allowlist.is_empty() {
+                    findings.push("stdio_command_allowlist_required".to_string());
+                }
+                if manifest.working_root.is_none() {
+                    findings.push("stdio_working_root_required".to_string());
+                }
+            }
+            Some("http" | "sse" | "https") => {}
             _ => findings.push("mcp_transport_required".to_string()),
         }
         if manifest.downstream_identity.is_none() {
@@ -1885,7 +1893,10 @@ pub mod external {
     }
 
     fn reject_private_resolved_addrs(host: &str, addrs: &[SocketAddr]) -> Result<(), String> {
-        if host.parse::<IpAddr>().is_ok() {
+        if let Ok(ip) = host.parse::<IpAddr>() {
+            if is_private_or_local_ip(ip) {
+                return Err("MCP adapter URL resolved to a private or local address".to_string());
+            }
             return Ok(());
         }
         if addrs.iter().any(|addr| is_private_or_local_ip(addr.ip())) {
@@ -1967,8 +1978,8 @@ pub mod catalog {
     pub const EXTERNAL_PROVIDER_IDS: &[&str] = &[
         "external.mcp.browser.open_page",
         "external.mcp.filesystem.read_file",
-        "external.mcp.api.request",
-        "external.mcp.scanner.run",
+        "external.api.request",
+        "external.scanner.run",
         "external.shell.command",
         "external.plugin.security_scan",
         "external.skill.assessment_helper",
@@ -2124,7 +2135,7 @@ pub mod catalog {
                 allowed_origins: vec![],
             },
             ExternalProviderSpec {
-                id: "external.mcp.api.request",
+                id: "external.api.request",
                 kind: ProviderKind::Api,
                 risk: ProviderRisk::NetworkActive,
                 side_effects: vec![SideEffectKind::Network],
@@ -2135,7 +2146,7 @@ pub mod catalog {
                 allowed_origins: vec!["https://api.example.com"],
             },
             ExternalProviderSpec {
-                id: "external.mcp.scanner.run",
+                id: "external.scanner.run",
                 kind: ProviderKind::Scanner,
                 risk: ProviderRisk::High,
                 side_effects: vec![SideEffectKind::FileRead],
@@ -2242,6 +2253,7 @@ pub mod catalog {
 
     fn external_provider_manifest(spec: ExternalProviderSpec) -> ProviderManifest {
         let schema = json!({"type":"object"});
+        let is_stdio_mcp = spec.kind == ProviderKind::Mcp && spec.transport == "stdio";
         ProviderManifest {
             schema_version: "1".to_string(),
             provider_id: spec.id.to_string(),
@@ -2264,10 +2276,12 @@ pub mod catalog {
                 .collect(),
             command_allowlist: if spec.id == "external.shell.command" {
                 vec!["git".to_string(), "cargo".to_string(), "pnpm".to_string()]
+            } else if is_stdio_mcp {
+                vec![spec.downstream_identity.to_string()]
             } else {
                 Vec::new()
             },
-            working_root: if spec.id == "external.shell.command" {
+            working_root: if spec.id == "external.shell.command" || is_stdio_mcp {
                 Some(".".to_string())
             } else {
                 None

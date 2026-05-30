@@ -24,5 +24,6 @@ Stdio MCP adapters require:
 
 HTTP and SSE adapters require allowed origins and deny hostname resolutions to
 private, loopback, link-local, carrier-grade NAT, unique-local, or unspecified
-addresses before connecting. Literal private IPs must still pass the kernel
-egress policy for mediated calls.
+addresses before connecting. Literal private or local IP hosts are denied by
+the adapter with the same egress-denied outcome before a socket connection is
+attempted.

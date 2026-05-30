@@ -126,6 +126,7 @@ describe("buildApprovalDetails", () => {
   it("requires visible context and reviewer reason for high-risk approvals", () => {
     const details = buildApprovalDetails({
       provider: "runwarden.report.render",
+      action: "render",
       risk: "report_claim",
       target: "artifact:report.html",
       sideEffects: ["artifact_write"],
@@ -138,6 +139,7 @@ describe("buildApprovalDetails", () => {
     expect(details.confirmation.requiresReviewerReason).toBe(true);
     expect(details.visibleFields).toEqual([
       "provider",
+      "action",
       "risk",
       "target",
       "side_effects",
@@ -155,6 +157,7 @@ describe("buildApprovalQueueRows", () => {
       {
         approvalId: "approval-1",
         provider: "runwarden.report.render",
+        action: "render",
         risk: "report_claim",
         target: "artifact:report.html",
         sideEffects: ["artifact_write"],
@@ -169,6 +172,7 @@ describe("buildApprovalQueueRows", () => {
     expect(row).toBeDefined();
     expect(row!.visibleFields).toEqual([
       "provider",
+      "action",
       "risk",
       "target",
       "side_effects",
@@ -197,6 +201,7 @@ describe("renderReviewerConsoleHtml", () => {
         {
           approvalId: "approval-1",
           provider: "runwarden.report.render",
+          action: "render",
           risk: "report_claim",
           target: "artifact:report.html",
           sideEffects: ["artifact_write"],
@@ -218,6 +223,7 @@ describe("renderReviewerConsoleHtml", () => {
     expect(html).toContain("Approval Queue");
     expect(html).toContain("details-drawer");
     expect(html).toContain("runwarden.report.render");
+    expect(html).toContain("render");
     expect(html).toContain("arg_hash_1");
     expect(html).toContain("approval-decision-form");
     expect(html).toContain("data-action=\"approve\"");
@@ -249,6 +255,7 @@ describe("renderReviewerConsoleHtml", () => {
         {
           approvalId: "approval-1",
           provider: "<img src=x onerror=alert(1)>",
+          action: "<svg onload=alert(1)>",
           risk: "high",
           target: "target",
           sideEffects: [],
@@ -259,6 +266,7 @@ describe("renderReviewerConsoleHtml", () => {
     );
 
     expect(html).toContain("&lt;img src=x onerror=alert(1)&gt;");
+    expect(html).toContain("&lt;svg onload=alert(1)&gt;");
     expect(html).toContain("obs_&lt;1&gt;");
     expect(html).not.toContain("<img src=x");
   });

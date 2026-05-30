@@ -108,6 +108,7 @@ export interface TraceExplorerStreamModel {
 export interface ApprovalDetailsInput {
   approvalId?: string;
   provider: string;
+  action: string;
   risk: string;
   target: string;
   sideEffects: string[];
@@ -128,6 +129,7 @@ export interface ApprovalDetailsViewModel {
   title: string;
   visibleFields: Array<
     | "provider"
+    | "action"
     | "risk"
     | "target"
     | "side_effects"
@@ -322,6 +324,7 @@ export function renderReviewerConsoleHtml(
 function approvalVisibleFields(): ApprovalDetailsViewModel["visibleFields"] {
   return [
     "provider",
+    "action",
     "risk",
     "target",
     "side_effects",
@@ -399,6 +402,9 @@ function renderApprovalRow(row: ApprovalQueueRow): string {
   )}"><div><h3>${escapeHtml(row.provider)}</h3><p>${escapeHtml(
     row.target
   )}</p></div><dl>${field("Risk", row.risk)}${field(
+    "Action",
+    row.action
+  )}${field(
     "Actor",
     row.actorId ?? "unknown"
   )}${field("Authz", row.authzId ?? "none")}${field(
@@ -421,7 +427,7 @@ function renderDetailsDrawer(row: ApprovalQueueRow | undefined): string {
   }
   return `<aside class="details-drawer" aria-label="Approval details"><h2>${escapeHtml(
     row.provider
-  )}</h2><dl>${field("Risk", row.risk)}${field("Target", row.target)}${field(
+  )}</h2><dl>${field("Action", row.action)}${field("Risk", row.risk)}${field("Target", row.target)}${field(
     "Side effects",
     row.sideEffects.join(", ") || "none"
   )}${field("Actor", row.actorId ?? "unknown")}${field(
