@@ -239,7 +239,11 @@ fn local_api_ui_launch_writes_full_reviewer_console_contract() {
         assert!(!launch_url.contains("%3A"), "{launch_url}");
         assert!(!launch_url.contains("\\\\"), "{launch_url}");
     }
+    assert!(html.contains("data-local-api-url=\"http://127.0.0.1:8092\""));
     assert!(html.contains("aria-label=\"Runwarden sections\""));
+    assert!(html.contains("class=\"nav-brand\""));
+    assert!(html.contains("class=\"command-bar\""));
+    assert!(html.contains("Trusted side effects"));
     assert!(html.contains("role=\"status\""));
     assert!(html.contains("Agent Boundary"));
     assert!(html.contains("Provider Registry"));
@@ -251,6 +255,13 @@ fn local_api_ui_launch_writes_full_reviewer_console_contract() {
     assert!(html.contains("Assurance"));
     assert!(html.contains("href=\"#assurance\""));
     assert!(html.contains("Settings"));
+    assert!(html.contains("class=\"state-badge\""));
+    assert!(html.contains("class=\"module-head\""));
+    assert!(html.contains("0 pending"));
+    assert_eq!(html.matches("No actions waiting for review").count(), 1);
+    assert!(html.contains("repeating-linear-gradient"));
+    assert!(!html.contains("radial-gradient"));
+    assert!(!html.contains("4vw"));
     assert!(html.contains("@media (max-width: 768px)"));
     assert!(html.contains("<script src=\"reviewer-console.js\" defer></script>"));
     assert!(!html.contains("data-action=\"approve\""));
@@ -288,6 +299,8 @@ fn local_api_ui_launch_renders_pending_approval_controls() {
     assert!(html.contains("approval-ui-1"));
     assert!(html.contains("runwarden.report.render"));
     assert!(html.contains("arg_hash_1"));
+    assert!(html.contains("class=\"risk-chip\""));
+    assert!(html.contains("1 pending"));
     assert!(html.contains("class=\"approval-decision-form\""));
     assert!(html.contains("id=\"local-api-token\""));
     assert!(html.contains("data-action=\"approve\""));

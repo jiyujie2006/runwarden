@@ -31,6 +31,11 @@ describe("reviewer console browser contract", () => {
     expect(html).toContain('name="viewport"');
     expect(html).toContain('aria-label="Runwarden sections"');
     expect(html).toContain('aria-label="Approval details"');
+    expect(html).toContain('role="status" aria-label="Assessment status"');
+    expect(html).toContain("nav-brand");
+    expect(html).toContain("command-bar");
+    expect(html).toContain("state-badge");
+    expect(html).toContain("risk-chip");
     expect(html).toContain("details-drawer");
     expect(html).toContain("@media (max-width: 768px)");
     expect(html).toContain("min-height: 44px");

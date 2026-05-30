@@ -99,9 +99,13 @@ fn ui_launch_bundle_contains_responsive_accessibility_contract() {
 
     let html = fs::read_to_string(dir.path().join("artifacts/reviewer-console.html"))
         .expect("read ui bundle");
+    assert!(html.contains("data-local-api-url=\"http://127.0.0.1:8088\""));
     assert!(html.contains("name=\"viewport\""));
     assert!(html.contains("aria-label=\"Runwarden sections\""));
     assert!(html.contains("aria-label=\"Approval details\""));
+    assert!(html.contains("class=\"nav-brand\""));
+    assert!(html.contains("class=\"command-bar\""));
+    assert!(html.contains("Trusted side effects"));
     assert!(html.contains("role=\"status\""));
     assert!(html.contains("Agent Boundary"));
     assert!(html.contains("Provider Registry"));
@@ -111,6 +115,13 @@ fn ui_launch_bundle_contains_responsive_accessibility_contract() {
     assert!(html.contains("Settings"));
     assert!(html.contains("@media (max-width: 768px)"));
     assert!(html.contains("<script src=\"reviewer-console.js\" defer></script>"));
+    assert!(html.contains("class=\"state-badge\""));
+    assert!(html.contains("class=\"module-head\""));
+    assert!(html.contains("0 pending"));
+    assert_eq!(html.matches("No actions waiting for review").count(), 1);
+    assert!(html.contains("repeating-linear-gradient"));
+    assert!(!html.contains("radial-gradient"));
+    assert!(!html.contains("4vw"));
     assert!(html.contains("position: fixed"));
     assert!(html.contains("min-height: 44px"));
     assert!(html.contains(":focus-visible"));
@@ -224,6 +235,8 @@ fn ui_command_renders_pending_approvals_with_reviewer_controls() {
     assert!(html.contains("arg_hash_1"));
     assert!(html.contains("agent-1"));
     assert!(html.contains("authz-1"));
+    assert!(html.contains("class=\"risk-chip\""));
+    assert!(html.contains("1 pending"));
     assert!(html.contains("class=\"approval-decision-form\""));
     assert!(html.contains("id=\"local-api-token\""));
     assert!(html.contains("data-action=\"approve\""));
@@ -275,6 +288,7 @@ fn ui_command_summarizes_existing_reports_artifacts_and_assurance_files() {
     assert!(html.contains("1 sealed artifact"));
     assert!(html.contains("2 assurance result"));
     assert!(html.contains("submission-report"));
+    assert!(html.contains("module-success"));
     assert!(!html.contains("No report rendered"));
     assert!(!html.contains("No artifacts generated"));
     assert!(!html.contains("No eval run yet"));

@@ -14,8 +14,9 @@ describe("reviewerConsoleLayout", () => {
     expect(reviewerConsoleLayout.shell).toBe("security-workbench");
     expect(reviewerConsoleLayout.regions).toEqual([
       "left-nav",
+      "command-bar",
       "top-status-strip",
-      "main-workspace",
+      "workbench-main",
       "details-drawer"
     ]);
     expect(reviewerConsoleLayout.approvalPolicy).toBe(
@@ -95,6 +96,7 @@ describe("reviewerAccessibilityContract", () => {
     expect(reviewerAccessibilityContract.keyboardFlows).toContain("details-drawer");
     expect(reviewerAccessibilityContract.focusOrder).toEqual([
       "left-nav",
+      "command-bar",
       "top-status-strip",
       "module-tabs",
       "approval-row",
@@ -214,6 +216,11 @@ describe("renderReviewerConsoleHtml", () => {
     );
 
     expect(html).toContain("runwarden-workbench");
+    expect(html).toContain("nav-brand");
+    expect(html).toContain("brand-mark\" aria-hidden=\"true\"");
+    expect(html).toContain("command-bar");
+    expect(html).toContain("Trusted side effects");
+    expect(html).toContain('role="status" aria-label="Assessment status"');
     expect(html).toContain("Agent Boundary");
     expect(html).toContain("Provider Registry");
     expect(html).toContain("Accountability");
@@ -226,6 +233,10 @@ describe("renderReviewerConsoleHtml", () => {
     expect(html).toContain("render");
     expect(html).toContain("arg_hash_1");
     expect(html).toContain("approval-decision-form");
+    expect(html).toContain("state-badge");
+    expect(html).toContain("risk-chip");
+    expect(html).toContain("module-partial");
+    expect(html).toContain("1 pending");
     expect(html).toContain("data-action=\"approve\"");
     expect(html).not.toContain("<script");
   });
@@ -233,7 +244,10 @@ describe("renderReviewerConsoleHtml", () => {
   it("does not expose approve or deny actions when no approval is selected", () => {
     const html = renderReviewerConsoleHtml({});
 
+    expect((html.match(/No actions waiting for review/g) ?? []).length).toBe(1);
     expect(html).toContain("No actions waiting for review");
+    expect(html).toContain("module-empty");
+    expect(html).toContain("0 pending");
     expect(html).not.toContain('data-action="approve"');
     expect(html).not.toContain('data-action="deny"');
     expect(html).toContain('aria-label="Approval details"');
@@ -246,6 +260,9 @@ describe("renderReviewerConsoleHtml", () => {
     expect(html).toContain("#2f6f4e");
     expect(html).toContain("#f7f8f4");
     expect(html).toContain("#20241f");
+    expect(html).toContain("repeating-linear-gradient");
+    expect(html).not.toContain("radial-gradient");
+    expect(html).not.toContain("4vw");
   });
 
   it("escapes dynamic approval content before rendering", () => {

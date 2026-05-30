@@ -2033,6 +2033,21 @@ fn reviewer_console_html(
         1 => snapshot.sessions[0].session_id.clone(),
         count => format!("{count} sessions loaded"),
     };
+    let session_count = snapshot.sessions.len();
+    let agent_message = if session_count == 0 {
+        "No agent config checked".to_string()
+    } else {
+        format!(
+            "{} {} loaded",
+            session_count,
+            plural(session_count, "session boundary", "session boundaries")
+        )
+    };
+    let provider_count = snapshot
+        .sessions
+        .first()
+        .map(|session| session.allowed_providers.len())
+        .unwrap_or(0);
     let provider_message = snapshot
         .sessions
         .first()
@@ -2094,7 +2109,7 @@ fn reviewer_console_html(
         )
     };
     let approval_rows = if pending.is_empty() {
-        "<p>No actions waiting for review</p>".to_string()
+        String::new()
     } else {
         pending
             .iter()
@@ -2121,13 +2136,14 @@ fn reviewer_console_html(
 <main class="runwarden-workbench" data-local-api-url="{}">
   {}
   <section class="workbench-main" id="dashboard" aria-label="Reviewer workspace">
+    {}
     <header class="top-status-strip" role="status" aria-label="Assessment status">
       {}
     </header>
     <div class="workspace-grid">
       {}
       {}
-      <article class="module approval-module" id="approval-queue"><h2>Approval Queue</h2><p>{}</p>{}</article>
+      <article class="module approval-module {}" id="approval-queue"><div class="module-head"><h2>Approval Queue</h2><span class="state-badge">{} pending</span></div><p>{}</p>{}</article>
       {}
       {}
       {}
@@ -2145,6 +2161,7 @@ fn reviewer_console_html(
         REVIEWER_CONSOLE_SCRIPT_NAME,
         escape_attr(&format!("http://{bind}:{port}")),
         render_nav(),
+        render_command_bar(),
         [
             render_status_pill("Session", &session_label, "neutral"),
             render_status_pill("Local API", &format!("{bind}:{port}"), "neutral"),
@@ -2177,20 +2194,60 @@ fn reviewer_console_html(
         render_module(
             "agent-boundary",
             "Agent Boundary",
-            "No agent config checked"
+            &agent_message,
+            module_state(!snapshot.sessions.is_empty()),
+            optional_count(snapshot.sessions.len()),
         ),
-        render_module("provider-registry", "Provider Registry", &provider_message),
+        render_module(
+            "provider-registry",
+            "Provider Registry",
+            &provider_message,
+            module_state(provider_count > 0),
+            optional_count(provider_count),
+        ),
+        if pending.is_empty() {
+            "module-empty"
+        } else {
+            "module-partial"
+        },
+        pending.len(),
         escape_html_text(&approvals_message),
         approval_rows,
-        render_module("trace", "Trace Explorer", "No trace events yet"),
+        render_module(
+            "trace",
+            "Trace Explorer",
+            "No trace events yet",
+            "empty",
+            None
+        ),
         render_module(
             "accountability",
             "Accountability",
-            "No accountability chain reconstructed"
+            "No accountability chain reconstructed",
+            "empty",
+            None,
         ),
-        render_module("reports", "Reports", &report_message),
-        render_module("artifacts", "Artifacts", &artifact_message),
-        render_module("assurance", "Assurance", &assurance_message),
+        render_module(
+            "reports",
+            "Reports",
+            &report_message,
+            module_state(!artifacts.report_files.is_empty()),
+            optional_count(artifacts.report_files.len()),
+        ),
+        render_module(
+            "artifacts",
+            "Artifacts",
+            &artifact_message,
+            module_state(!artifacts.artifact_ids.is_empty()),
+            optional_count(artifacts.artifact_ids.len()),
+        ),
+        render_module(
+            "assurance",
+            "Assurance",
+            &assurance_message,
+            module_state(!artifacts.assurance_files.is_empty()),
+            optional_count(artifacts.assurance_files.len()),
+        ),
         render_settings_module(),
         details,
     )
@@ -2264,31 +2321,55 @@ fn render_nav() -> String {
     .collect::<Vec<_>>()
     .join("");
     format!(
-        r#"<nav class="left-nav" aria-label="Runwarden sections"><strong>Runwarden</strong>{items}</nav>"#
+        r#"<nav class="left-nav" aria-label="Runwarden sections"><div class="nav-brand"><span class="brand-mark" aria-hidden="true">RW</span><strong>Runwarden</strong><small>review console</small></div>{items}</nav>"#
     )
+}
+
+fn render_command_bar() -> &'static str {
+    r#"<header class="command-bar"><div><p class="eyebrow">Kernel Review</p><h1>Reviewer Console</h1></div><div class="command-meter"><span>Trusted side effects</span><strong>approval-gated</strong></div></header>"#
 }
 
 fn render_status_pill(label: &str, value: &str, tone: &str) -> String {
     format!(
-        r#"<div class="status-pill tone-{}"><span>{}</span><strong>{}</strong></div>"#,
+        r#"<div class="status-pill tone-{}"><span class="status-label">{}</span><strong>{}</strong></div>"#,
         escape_attr(tone),
         escape_html_text(label),
         escape_html_text(value)
     )
 }
 
-fn render_module(id: &str, title: &str, message: &str) -> String {
+fn render_module(
+    id: &str,
+    title: &str,
+    message: &str,
+    state: &str,
+    count: Option<usize>,
+) -> String {
+    let count_badge = count
+        .map(|value| format!(r#"<span class="module-count">{value}</span>"#))
+        .unwrap_or_default();
     format!(
-        r#"<article class="module" id="{}"><h2>{}</h2><p>{}</p></article>"#,
+        r#"<article class="module module-{}" id="{}"><div class="module-head"><h2>{}</h2><span class="state-badge">{}</span>{}</div><p>{}</p></article>"#,
+        escape_attr(state),
         escape_attr(id),
         escape_html_text(title),
+        escape_html_text(state),
+        count_badge,
         escape_html_text(message)
     )
 }
 
+fn module_state(has_content: bool) -> &'static str {
+    if has_content { "success" } else { "empty" }
+}
+
+fn optional_count(count: usize) -> Option<usize> {
+    (count > 0).then_some(count)
+}
+
 fn render_approval_row(approval: &ApprovalRecord) -> String {
     format!(
-        r#"<article class="approval-row" data-approval-id="{}"><div><h3>{}</h3><p>{}</p></div><dl>{}{}{}{}{}{}</dl>{}</article>"#,
+        r#"<article class="approval-row" data-approval-id="{}"><div><span class="risk-chip">requires_review</span><h3>{}</h3><p>{}</p></div><dl>{}{}{}{}{}{}</dl>{}</article>"#,
         escape_attr(&approval.approval_id),
         escape_html_text(&approval.binding.provider),
         escape_html_text(&approval.binding.action),
@@ -2351,64 +2432,159 @@ fn render_approval_decision_form(approval_id: &str) -> String {
 }
 
 fn render_settings_module() -> String {
-    r#"<article class="module" id="settings"><h2>Settings</h2><p>Local API token not loaded.</p><label>Local API Token<input id="local-api-token" name="local_api_token" type="password" autocomplete="off" spellcheck="false"></label></article>"#.to_string()
+    r#"<article class="module module-empty" id="settings"><div class="module-head"><h2>Settings</h2><span class="state-badge">local</span></div><p>Local API token not loaded.</p><label>Local API Token<input id="local-api-token" name="local_api_token" type="password" autocomplete="off" spellcheck="false"></label></article>"#.to_string()
 }
 
 fn reviewer_console_css() -> &'static str {
     r#"
-    :root { color-scheme: light; font-family: "IBM Plex Sans", system-ui, sans-serif; }
-    body { margin: 0; background: #f7f8f4; color: #20241f; }
-    .runwarden-workbench { min-height: 100vh; display: grid; grid-template-columns: 220px minmax(0, 1fr) 340px; }
-    .left-nav { background: #151813; color: #f3faf5; padding: 18px; display: flex; flex-direction: column; gap: 6px; }
-    .left-nav strong { padding: 9px 10px; }
-    .left-nav a { color: inherit; text-decoration: none; padding: 9px 10px; border-radius: 6px; min-height: 44px; box-sizing: border-box; display: flex; align-items: center; }
-    .left-nav a:hover { background: #262d24; }
-    .workbench-main { padding: 18px; min-width: 0; }
-    .top-status-strip { display: grid; grid-template-columns: repeat(6, minmax(110px, 1fr)); gap: 8px; margin-bottom: 14px; }
-    .status-pill, .module { border: 1px solid #cdd5c8; background: #ffffff; border-radius: 6px; padding: 14px; min-width: 0; }
-    .status-pill span { display: block; font-size: 12px; color: #687064; }
+    :root {
+      color-scheme: light;
+      font-family: "IBM Plex Sans", "Aptos", sans-serif;
+      --ink: #20241f;
+      --muted: #626b61;
+      --paper: #f7f8f4;
+      --panel: #fffffb;
+      --line: #cdd5c8;
+      --rail: #151813;
+      --rail-soft: #262d24;
+      --green: #2f6f4e;
+      --amber: #a76716;
+      --red: #b42318;
+      --blue: #2866a8;
+      --shadow: 0 18px 48px rgba(32, 36, 31, 0.12);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background:
+        linear-gradient(90deg, rgba(21, 24, 19, 0.045) 1px, transparent 1px),
+        linear-gradient(0deg, rgba(21, 24, 19, 0.035) 1px, transparent 1px),
+        repeating-linear-gradient(135deg, rgba(47, 111, 78, 0.055) 0 1px, transparent 1px 18px),
+        #f7f8f4;
+      background-size: 28px 28px, 28px 28px, auto, auto;
+      color: #20241f;
+    }
+    .runwarden-workbench { min-height: 100vh; display: grid; grid-template-columns: 248px minmax(0, 1fr) minmax(320px, 360px); }
+    .left-nav {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      background: #151813;
+      color: #f3faf5;
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      border-right: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .nav-brand {
+      display: grid;
+      grid-template-columns: 44px minmax(0, 1fr);
+      gap: 10px;
+      align-items: center;
+      padding: 4px 0 18px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+      margin-bottom: 10px;
+    }
+    .brand-mark {
+      width: 44px;
+      height: 44px;
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(255, 255, 255, 0.28);
+      border-radius: 8px;
+      background: linear-gradient(145deg, rgba(47, 111, 78, 0.82), rgba(21, 24, 19, 0.55));
+      font-family: "JetBrains Mono", ui-monospace, monospace;
+      font-size: 13px;
+    }
+    .nav-brand strong, .nav-brand small { display: block; overflow-wrap: anywhere; }
+    .nav-brand small { color: #b9c6b8; font-size: 12px; }
+    .left-nav a { color: inherit; text-decoration: none; padding: 10px 12px; border-radius: 6px; min-height: 44px; display: flex; align-items: center; border: 1px solid transparent; }
+    .left-nav a:hover { background: #262d24; border-color: rgba(255, 255, 255, 0.14); }
+    .workbench-main { padding: 22px; min-width: 0; }
+    .command-bar {
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      align-items: end;
+      margin-bottom: 16px;
+      padding: 20px;
+      border: 1px solid rgba(205, 213, 200, 0.9);
+      border-radius: 8px;
+      background: rgba(255, 255, 251, 0.86);
+      box-shadow: var(--shadow);
+    }
+    .eyebrow { margin: 0 0 4px; color: #626b61; font-size: 12px; text-transform: uppercase; }
+    h1 { margin: 0; font-size: 40px; line-height: 1; }
+    .command-meter { min-width: 220px; border-left: 4px solid #2f6f4e; padding: 10px 12px; background: #f7f8f4; border-radius: 6px; }
+    .command-meter span { display: block; color: #626b61; font-size: 12px; }
+    .command-meter strong { display: block; font-size: 15px; overflow-wrap: anywhere; }
+    .top-status-strip { display: grid; grid-template-columns: repeat(6, minmax(116px, 1fr)); gap: 10px; margin-bottom: 14px; }
+    .status-pill {
+      border: 1px solid #cdd5c8;
+      border-top-width: 3px;
+      background: #fffffb;
+      border-radius: 8px;
+      padding: 11px 12px;
+      min-width: 0;
+      box-shadow: 0 1px 0 rgba(32, 36, 31, 0.05);
+    }
+    .status-label { display: block; font-size: 12px; color: #626b61; }
     .status-pill strong { display: block; overflow-wrap: anywhere; font-size: 14px; }
-    .tone-success { border-color: #1f7a4d; }
-    .tone-review { border-color: #a76716; }
-    .tone-danger { border-color: #b42318; }
-    .workspace-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-    .module h2, .details-drawer h2 { font-size: 16px; margin: 0 0 10px; }
-    .module p, .details-drawer p { margin: 0; }
-    .module code, .status-pill code { font-family: "JetBrains Mono", ui-monospace, monospace; overflow-wrap: anywhere; }
+    .tone-success { border-top-color: #1f7a4d; }
+    .tone-review { border-top-color: #a76716; }
+    .tone-danger { border-top-color: #b42318; }
+    .tone-info { border-top-color: #2866a8; }
+    .workspace-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .module { background: rgba(255, 255, 251, 0.94); border: 1px solid #cdd5c8; border-radius: 8px; padding: 15px; min-width: 0; box-shadow: 0 10px 30px rgba(32, 36, 31, 0.07); }
+    .module-head { display: flex; align-items: center; gap: 8px; justify-content: space-between; margin-bottom: 10px; }
+    .module h2, .details-drawer h2 { font-size: 16px; margin: 0; }
+    .module p, .details-drawer p { margin: 0; color: #626b61; overflow-wrap: anywhere; }
+    .state-badge, .module-count, .risk-chip { border: 1px solid #cdd5c8; border-radius: 999px; padding: 4px 8px; color: #626b61; background: #f7f8f4; font-size: 12px; white-space: nowrap; }
+    .module-success .state-badge { color: #1f7a4d; border-color: #1f7a4d; }
+    .module-error .state-badge { color: #b42318; border-color: #b42318; }
+    .module-partial .state-badge { color: #a76716; border-color: #a76716; }
     .approval-module { grid-column: 1 / -1; }
-    .approval-row { border-top: 1px solid #cdd5c8; padding-top: 12px; margin-top: 12px; display: grid; grid-template-columns: minmax(180px, 1fr) minmax(260px, 2fr) auto; gap: 12px; align-items: start; }
-    .approval-row h3 { margin: 0 0 4px; font-size: 15px; overflow-wrap: anywhere; }
-    .approval-row p { margin: 0; color: #687064; overflow-wrap: anywhere; }
+    .approval-row { border: 1px solid #cdd5c8; border-radius: 8px; padding: 13px; display: grid; grid-template-columns: minmax(180px, 1fr) minmax(260px, 2fr) minmax(220px, auto); gap: 14px; align-items: start; background: #fffffb; }
+    .approval-row + .approval-row { margin-top: 10px; }
+    .approval-row h3 { margin: 8px 0 4px; font-size: 15px; overflow-wrap: anywhere; }
+    .approval-row p { margin: 0; color: #626b61; overflow-wrap: anywhere; }
     dl { display: grid; gap: 7px; margin: 0; }
     dl div { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 8px; }
-    dt { color: #687064; font-size: 12px; }
-    dd { margin: 0; font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12px; overflow-wrap: anywhere; }
+    dt { color: #626b61; font-size: 12px; }
+    dd { margin: 0; font-family: "JetBrains Mono", "IBM Plex Mono", ui-monospace, monospace; font-size: 12px; overflow-wrap: anywhere; }
     .row-actions, .decision-actions { display: flex; flex-wrap: wrap; gap: 6px; }
     .approval-decision-form { display: grid; gap: 8px; }
-    button { border: 1px solid #cdd5c8; background: #ffffff; border-radius: 6px; min-height: 44px; padding: 8px 12px; }
+    button { border: 1px solid #cdd5c8; background: #fffffb; border-radius: 6px; min-height: 44px; padding: 8px 12px; color: #20241f; }
     button:hover { border-color: #2f6f4e; background: #eef1ea; }
     button:focus-visible, input:focus-visible, textarea:focus-visible, .left-nav a:focus-visible { outline: 2px solid #2f6f4e; outline-offset: 2px; }
-    .details-drawer { border-left: 1px solid #cdd5c8; background: #ffffff; padding: 18px; min-width: 0; }
-    label { display: block; margin: 12px 0 6px; font-size: 12px; color: #687064; }
-    input, textarea { width: 100%; box-sizing: border-box; border: 1px solid #cdd5c8; border-radius: 6px; padding: 8px; }
+    .details-drawer { border-left: 1px solid #cdd5c8; background: #fffffb; padding: 22px 18px; min-width: 0; box-shadow: -12px 0 34px rgba(32, 36, 31, 0.06); }
+    label { display: block; margin: 12px 0 6px; font-size: 12px; color: #626b61; }
+    input, textarea { width: 100%; min-height: 38px; margin-top: 8px; box-sizing: border-box; border: 1px solid #cdd5c8; border-radius: 6px; padding: 8px; background: #fffffb; color: #20241f; }
     textarea { min-height: 82px; resize: vertical; }
     .decision-status { min-height: 20px; color: #20241f; overflow-wrap: anywhere; }
     .decision-status[data-state="error"] { color: #b42318; }
     .decision-status[data-state="success"] { color: #1f7a4d; }
     .decision-complete { opacity: 0.78; }
     @media (max-width: 1199px) {
-      .runwarden-workbench { grid-template-columns: 76px minmax(0, 1fr); }
-      .left-nav a { font-size: 12px; }
+      .runwarden-workbench { grid-template-columns: 86px minmax(0, 1fr); }
+      .nav-brand { grid-template-columns: 1fr; }
+      .nav-brand strong, .nav-brand small { display: none; }
+      .left-nav a { font-size: 12px; padding-inline: 8px; }
       .details-drawer { grid-column: 1 / -1; border-left: 0; border-top: 1px solid #cdd5c8; }
       .top-status-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
     @media (max-width: 768px) {
-      .runwarden-workbench { display: block; padding-bottom: 76px; }
-      .left-nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; flex-direction: row; overflow-x: auto; padding: 8px 10px; border-top: 1px solid #cdd5c8; }
+      .runwarden-workbench { display: block; padding-bottom: 82px; }
+      .left-nav { position: fixed; left: 0; right: 0; bottom: 0; top: auto; height: auto; z-index: 10; flex-direction: row; overflow-x: auto; padding: 8px 10px; border-top: 1px solid #cdd5c8; }
+      .nav-brand { display: none; }
       .left-nav a { white-space: nowrap; }
+      h1 { font-size: 30px; }
+      .command-bar { display: block; padding: 16px; }
+      .command-meter { min-width: 0; margin-top: 12px; }
       .top-status-strip, .workspace-grid { grid-template-columns: 1fr; }
       .approval-row { grid-template-columns: 1fr; }
-      .details-drawer { min-height: calc(100vh - 76px); border-left: 0; border-top: 1px solid #cdd5c8; }
+      .details-drawer { min-height: calc(100vh - 82px); border-left: 0; border-top: 1px solid #cdd5c8; }
     }
   "#
 }
