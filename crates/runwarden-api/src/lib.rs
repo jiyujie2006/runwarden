@@ -2111,11 +2111,13 @@ fn reviewer_console_html(
     let approval_rows = if pending.is_empty() {
         String::new()
     } else {
-        pending
+        let rows = pending
             .iter()
-            .map(|approval| render_approval_row(approval))
+            .enumerate()
+            .map(|(index, approval)| render_approval_row(approval, index == 0))
             .collect::<Vec<_>>()
-            .join("")
+            .join("");
+        format!(r#"<div class="approval-list" role="list">{rows}</div>"#)
     };
     let details = pending
         .first()
@@ -2367,10 +2369,19 @@ fn optional_count(count: usize) -> Option<usize> {
     (count > 0).then_some(count)
 }
 
-fn render_approval_row(approval: &ApprovalRecord) -> String {
+fn render_approval_row(approval: &ApprovalRecord, selected: bool) -> String {
     format!(
-        r#"<article class="approval-row" data-approval-id="{}"><div><span class="risk-chip">requires_review</span><h3>{}</h3><p>{}</p></div><dl>{}{}{}{}{}{}</dl>{}</article>"#,
+        r#"<article class="approval-row{}" role="listitem" tabindex="0" aria-current="{}" aria-controls="approval-details" aria-label="Review approval for {}" data-approval-id="{}" data-provider="{}" data-action="{}" data-risk="requires_review" data-target="{}" data-side-effects="pending provider side effect" data-actor="{}" data-authz="{}" data-argument-hash="{}" data-obs-refs=""><div><span class="risk-chip">requires_review</span><h3>{}</h3><p>{}</p></div><dl>{}{}{}{}{}{}</dl>{}</article>"#,
+        if selected { " is-selected" } else { "" },
+        if selected { "true" } else { "false" },
+        escape_attr(&approval.binding.provider),
         escape_attr(&approval.approval_id),
+        escape_attr(&approval.binding.provider),
+        escape_attr(&approval.binding.action),
+        escape_attr(&approval.binding.action),
+        escape_attr(approval.binding.actor_id.as_deref().unwrap_or("unknown")),
+        escape_attr(approval.binding.authz_id.as_deref().unwrap_or("none")),
+        escape_attr(&approval.binding.argument_hash),
         escape_html_text(&approval.binding.provider),
         escape_html_text(&approval.binding.action),
         render_field("Approval", &approval.approval_id),
@@ -2391,7 +2402,7 @@ fn render_approval_row(approval: &ApprovalRecord) -> String {
 
 fn render_approval_details(approval: &ApprovalRecord) -> String {
     format!(
-        r#"<aside class="details-drawer" aria-label="Approval details"><h2>{}</h2><dl>{}{}{}{}{}{}{}{}{}</dl>{}</aside>"#,
+        r#"<aside class="details-drawer" id="approval-details" data-approval-details aria-label="Approval details"><h2 data-detail-title>{}</h2><dl data-detail-fields>{}{}{}{}{}{}{}{}{}</dl>{}</aside>"#,
         escape_html_text(&approval.binding.provider),
         render_field("Approval", &approval.approval_id),
         render_field("Provider", &approval.binding.provider),
@@ -2413,7 +2424,7 @@ fn render_approval_details(approval: &ApprovalRecord) -> String {
 }
 
 fn render_empty_approval_details() -> String {
-    "<aside class=\"details-drawer\" aria-label=\"Approval details\"><h2>Approval Details</h2><p>Select an approval to inspect provider, risk, target, side effects, actor, authz, argument hash, and obs refs before a reviewer decision.</p></aside>".to_string()
+    "<aside class=\"details-drawer\" id=\"approval-details\" data-approval-details aria-label=\"Approval details\"><h2 data-detail-title>Approval Details</h2><p>Select an approval to inspect provider, risk, target, side effects, actor, authz, argument hash, and obs refs before a reviewer decision.</p></aside>".to_string()
 }
 
 fn render_field(label: &str, value: &str) -> String {
@@ -2463,7 +2474,9 @@ fn reviewer_console_css() -> &'static str {
         #f7f8f4;
       background-size: 28px 28px, 28px 28px, auto, auto;
       color: #20241f;
+      font-size: 14px;
     }
+    section[id], article[id], aside[id] { scroll-margin-top: 86px; }
     .runwarden-workbench { min-height: 100vh; display: grid; grid-template-columns: 248px minmax(0, 1fr) minmax(320px, 360px); }
     .left-nav {
       position: sticky;
@@ -2545,7 +2558,9 @@ fn reviewer_console_css() -> &'static str {
     .module-error .state-badge { color: #b42318; border-color: #b42318; }
     .module-partial .state-badge { color: #a76716; border-color: #a76716; }
     .approval-module { grid-column: 1 / -1; }
-    .approval-row { border: 1px solid #cdd5c8; border-radius: 8px; padding: 13px; display: grid; grid-template-columns: minmax(180px, 1fr) minmax(260px, 2fr) minmax(220px, auto); gap: 14px; align-items: start; background: #fffffb; }
+    .approval-row { border: 1px solid #cdd5c8; border-radius: 8px; padding: 13px; display: grid; grid-template-columns: minmax(180px, 1fr) minmax(260px, 2fr) minmax(220px, auto); gap: 14px; align-items: start; background: #fffffb; cursor: pointer; transition: border-color 120ms ease, box-shadow 120ms ease, background-color 120ms ease; }
+    .approval-row:hover { border-color: rgba(47, 111, 78, 0.55); }
+    .approval-row.is-selected { border-color: #2f6f4e; background: #fbfdf9; box-shadow: inset 4px 0 0 #2f6f4e, 0 10px 24px rgba(32, 36, 31, 0.08); }
     .approval-row + .approval-row { margin-top: 10px; }
     .approval-row h3 { margin: 8px 0 4px; font-size: 15px; overflow-wrap: anywhere; }
     .approval-row p { margin: 0; color: #626b61; overflow-wrap: anywhere; }
@@ -2557,8 +2572,8 @@ fn reviewer_console_css() -> &'static str {
     .approval-decision-form { display: grid; gap: 8px; }
     button { border: 1px solid #cdd5c8; background: #fffffb; border-radius: 6px; min-height: 44px; padding: 8px 12px; color: #20241f; }
     button:hover { border-color: #2f6f4e; background: #eef1ea; }
-    button:focus-visible, input:focus-visible, textarea:focus-visible, .left-nav a:focus-visible { outline: 2px solid #2f6f4e; outline-offset: 2px; }
-    .details-drawer { border-left: 1px solid #cdd5c8; background: #fffffb; padding: 22px 18px; min-width: 0; box-shadow: -12px 0 34px rgba(32, 36, 31, 0.06); }
+    button:focus-visible, input:focus-visible, textarea:focus-visible, .left-nav a:focus-visible, .approval-row:focus-visible { outline: 2px solid #2f6f4e; outline-offset: 2px; }
+    .details-drawer { border-left: 1px solid #cdd5c8; background: #fffffb; padding: 22px 18px; min-width: 0; box-shadow: -12px 0 34px rgba(32, 36, 31, 0.06); position: sticky; top: 0; height: 100vh; overflow: auto; }
     label { display: block; margin: 12px 0 6px; font-size: 12px; color: #626b61; }
     input, textarea { width: 100%; min-height: 38px; margin-top: 8px; box-sizing: border-box; border: 1px solid #cdd5c8; border-radius: 6px; padding: 8px; background: #fffffb; color: #20241f; }
     textarea { min-height: 82px; resize: vertical; }
@@ -2571,12 +2586,12 @@ fn reviewer_console_css() -> &'static str {
       .nav-brand { grid-template-columns: 1fr; }
       .nav-brand strong, .nav-brand small { display: none; }
       .left-nav a { font-size: 12px; padding-inline: 8px; }
-      .details-drawer { grid-column: 1 / -1; border-left: 0; border-top: 1px solid #cdd5c8; }
+      .details-drawer { grid-column: 1 / -1; border-left: 0; border-top: 1px solid #cdd5c8; position: static; height: auto; overflow: visible; }
       .top-status-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
     @media (max-width: 768px) {
-      .runwarden-workbench { display: block; padding-bottom: 82px; }
-      .left-nav { position: fixed; left: 0; right: 0; bottom: 0; top: auto; height: auto; z-index: 10; flex-direction: row; overflow-x: auto; padding: 8px 10px; border-top: 1px solid #cdd5c8; }
+      .runwarden-workbench { display: block; }
+      .left-nav { position: sticky; top: 0; height: auto; z-index: 10; flex-direction: row; overflow-x: auto; padding: 8px 10px; border-right: 0; border-bottom: 1px solid #cdd5c8; box-shadow: 0 10px 22px rgba(32, 36, 31, 0.18); scrollbar-width: thin; }
       .nav-brand { display: none; }
       .left-nav a { white-space: nowrap; }
       h1 { font-size: 30px; }
@@ -2584,7 +2599,7 @@ fn reviewer_console_css() -> &'static str {
       .command-meter { min-width: 0; margin-top: 12px; }
       .top-status-strip, .workspace-grid { grid-template-columns: 1fr; }
       .approval-row { grid-template-columns: 1fr; }
-      .details-drawer { min-height: calc(100vh - 82px); border-left: 0; border-top: 1px solid #cdd5c8; }
+      .details-drawer { min-height: 0; border-left: 0; border-top: 1px solid #cdd5c8; }
     }
   "#
 }
@@ -2595,6 +2610,24 @@ fn reviewer_console_js() -> &'static str {
   const root = document.querySelector(".runwarden-workbench");
   const apiRoot = root?.dataset.localApiUrl?.replace(/\/$/, "");
   const tokenInput = document.querySelector("#local-api-token");
+  const details = document.querySelector("[data-approval-details]");
+  const detailTitle = details?.querySelector("[data-detail-title]");
+  const detailFields = details?.querySelector("[data-detail-fields]");
+  const detailForm = details?.querySelector("form.approval-decision-form");
+
+  function escapeHtml(value) {
+    return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      "\"": "&quot;",
+      "'": "&#39;"
+    })[char]);
+  }
+
+  function fieldHtml(label, value) {
+    return `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value || "none")}</dd></div>`;
+  }
 
   function statusFor(form) {
     return form.querySelector("[data-decision-status]");
@@ -2620,15 +2653,68 @@ fn reviewer_console_js() -> &'static str {
     form.classList.add("decision-complete");
   }
 
+  function enableForm(form) {
+    for (const control of form.querySelectorAll("input, textarea, button")) {
+      control.disabled = false;
+    }
+    form.classList.remove("decision-complete");
+  }
+
   function matchingForms(approvalId) {
     return Array.from(document.querySelectorAll("form.approval-decision-form")).filter((form) => form.dataset.approvalId === approvalId);
   }
 
   function markApprovalComplete(approvalId, message) {
+    for (const row of document.querySelectorAll(".approval-row")) {
+      if (row.dataset.approvalId === approvalId) {
+        row.dataset.decisionComplete = "true";
+      }
+    }
     for (const form of matchingForms(approvalId)) {
       setStatus(form, message, "success");
       disableForm(form);
     }
+  }
+
+  function syncDetails(row) {
+    if (!details || !detailTitle || !detailFields || !detailForm) {
+      return;
+    }
+    const approvalId = row.dataset.approvalId ?? "";
+    detailTitle.textContent = row.dataset.provider || "Approval Details";
+    detailFields.innerHTML = [
+      fieldHtml("Approval", approvalId),
+      fieldHtml("Provider", row.dataset.provider),
+      fieldHtml("Action", row.dataset.action),
+      fieldHtml("Risk", row.dataset.risk),
+      fieldHtml("Target", row.dataset.target),
+      fieldHtml("Side effects", row.dataset.sideEffects),
+      fieldHtml("Actor", row.dataset.actor),
+      fieldHtml("Authz", row.dataset.authz),
+      fieldHtml("Argument hash", row.dataset.argumentHash),
+      fieldHtml("Obs refs", row.dataset.obsRefs)
+    ].join("");
+    detailForm.dataset.approvalId = approvalId;
+    detailForm.reset();
+    enableForm(detailForm);
+    setStatus(detailForm, "", "");
+    if (row.dataset.decisionComplete === "true") {
+      setStatus(detailForm, "Decision already recorded.", "success");
+      disableForm(detailForm);
+    }
+  }
+
+  function selectApproval(row) {
+    for (const item of document.querySelectorAll(".approval-row")) {
+      const selected = item === row;
+      item.classList.toggle("is-selected", selected);
+      item.setAttribute("aria-current", selected ? "true" : "false");
+    }
+    syncDetails(row);
+  }
+
+  function interactiveTarget(target) {
+    return target instanceof Element && Boolean(target.closest("input, textarea, button, a, label"));
   }
 
   async function submitDecision(form, decision) {
@@ -2682,6 +2768,30 @@ fn reviewer_console_js() -> &'static str {
       setStatus(form, error instanceof Error ? error.message : "Approval decision failed.", "error");
     });
   });
+
+  document.addEventListener("click", (event) => {
+    if (interactiveTarget(event.target)) {
+      return;
+    }
+    const row = event.target instanceof Element ? event.target.closest(".approval-row") : null;
+    if (row instanceof HTMLElement) {
+      selectApproval(row);
+    }
+  });
+
+  document.addEventListener("keydown", (event) => {
+    const row = event.target instanceof HTMLElement && event.target.classList.contains("approval-row") ? event.target : null;
+    if (!row || (event.key !== "Enter" && event.key !== " ")) {
+      return;
+    }
+    event.preventDefault();
+    selectApproval(row);
+  });
+
+  const initialRow = document.querySelector(".approval-row.is-selected") ?? document.querySelector(".approval-row");
+  if (initialRow instanceof HTMLElement) {
+    syncDetails(initialRow);
+  }
 })();
 "##
 }

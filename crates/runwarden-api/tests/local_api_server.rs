@@ -263,11 +263,13 @@ fn local_api_ui_launch_writes_full_reviewer_console_contract() {
     assert!(!html.contains("radial-gradient"));
     assert!(!html.contains("4vw"));
     assert!(html.contains("@media (max-width: 768px)"));
+    assert!(html.contains("position: sticky"));
     assert!(html.contains("<script src=\"reviewer-console.js\" defer></script>"));
     assert!(!html.contains("data-action=\"approve\""));
     assert!(!html.contains("data-action=\"deny\""));
     assert!(!html.contains("<script>"));
     assert!(script.contains("fetch(`${apiRoot}/approvals/"));
+    assert!(script.contains("selectApproval(row)"));
     let _ = fs::remove_dir_all(&artifact_path);
 }
 
@@ -301,6 +303,13 @@ fn local_api_ui_launch_renders_pending_approval_controls() {
     assert!(html.contains("arg_hash_1"));
     assert!(html.contains("class=\"risk-chip\""));
     assert!(html.contains("1 pending"));
+    assert!(html.contains("is-selected"));
+    assert!(html.contains("role=\"list\""));
+    assert!(html.contains("role=\"listitem\""));
+    assert!(html.contains("aria-current=\"true\""));
+    assert!(html.contains("aria-controls=\"approval-details\""));
+    assert!(html.contains("data-provider=\"runwarden.report.render\""));
+    assert!(html.contains("data-detail-fields"));
     assert!(html.contains("class=\"approval-decision-form\""));
     assert!(html.contains("id=\"local-api-token\""));
     assert!(html.contains("data-action=\"approve\""));

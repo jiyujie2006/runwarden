@@ -37,6 +37,8 @@ describe("reviewer console browser contract", () => {
     expect(html).toContain("state-badge");
     expect(html).toContain("risk-chip");
     expect(html).toContain("details-drawer");
+    expect(html).toContain('aria-controls="approval-details"');
+    expect(html).toContain('data-detail-fields');
     expect(html).toContain("@media (max-width: 768px)");
     expect(html).toContain("min-height: 44px");
     expect(html).toContain(":focus-visible");

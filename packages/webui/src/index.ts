@@ -398,13 +398,25 @@ function renderApprovalModule(approvals: ApprovalQueueRow[]): string {
   const body =
     approvals.length === 0
       ? "<p>No actions waiting for review</p>"
-      : approvals.map(renderApprovalRow).join("");
+      : `<div class="approval-list" role="list">${approvals
+          .map((row, index) => renderApprovalRow(row, index === 0))
+          .join("")}</div>`;
   return `<section class="module approval-module module-${approvals.length > 0 ? "partial" : "empty"}" id="approval-queue"><div class="module-head"><h2>Approval Queue</h2><span class="state-badge">${approvals.length} pending</span></div>${body}</section>`;
 }
 
-function renderApprovalRow(row: ApprovalQueueRow): string {
-  return `<article class="approval-row" data-approval-id="${escapeAttr(
+function renderApprovalRow(row: ApprovalQueueRow, selected = false): string {
+  return `<article class="approval-row${selected ? " is-selected" : ""}" role="listitem" tabindex="0" aria-current="${selected ? "true" : "false"}" aria-controls="approval-details" aria-label="Review approval for ${escapeAttr(
+    row.provider
+  )}" data-approval-id="${escapeAttr(
     row.approvalId
+  )}" data-provider="${escapeAttr(row.provider)}" data-action="${escapeAttr(row.action)}" data-risk="${escapeAttr(
+    row.risk
+  )}" data-target="${escapeAttr(row.target)}" data-side-effects="${escapeAttr(
+    row.sideEffects.join(", ") || "none"
+  )}" data-actor="${escapeAttr(row.actorId ?? "unknown")}" data-authz="${escapeAttr(
+    row.authzId ?? "none"
+  )}" data-argument-hash="${escapeAttr(row.argumentHash)}" data-obs-refs="${escapeAttr(
+    row.obsRefs.join(", ")
   )}"><div><span class="risk-chip">${escapeHtml(row.risk)}</span><h3>${escapeHtml(row.provider)}</h3><p>${escapeHtml(
     row.target
   )}</p></div><dl>${field("Risk", row.risk)}${field(
@@ -430,11 +442,11 @@ function renderModule(id: string, module: WorkbenchModule): string {
 
 function renderDetailsDrawer(row: ApprovalQueueRow | undefined): string {
   if (!row) {
-    return '<aside class="details-drawer" aria-label="Approval details"><h2>Approval Details</h2><p>Select an approval to review context.</p></aside>';
+    return '<aside class="details-drawer" id="approval-details" data-approval-details aria-label="Approval details"><h2 data-detail-title>Approval Details</h2><p>Select an approval to review context.</p></aside>';
   }
-  return `<aside class="details-drawer" aria-label="Approval details"><h2>${escapeHtml(
+  return `<aside class="details-drawer" id="approval-details" data-approval-details aria-label="Approval details"><h2 data-detail-title>${escapeHtml(
     row.provider
-  )}</h2><dl>${field("Action", row.action)}${field("Risk", row.risk)}${field("Target", row.target)}${field(
+  )}</h2><dl data-detail-fields>${field("Action", row.action)}${field("Risk", row.risk)}${field("Target", row.target)}${field(
     "Side effects",
     row.sideEffects.join(", ") || "none"
   )}${field("Actor", row.actorId ?? "unknown")}${field(
@@ -500,7 +512,9 @@ function workbenchCss(): string {
         #f7f8f4;
       background-size: 28px 28px, 28px 28px, auto, auto;
       color: #20241f;
+      font-size: 14px;
     }
+    section[id], article[id], aside[id] { scroll-margin-top: 86px; }
     .runwarden-workbench {
       min-height: 100vh;
       display: grid;
@@ -636,6 +650,14 @@ function workbenchCss(): string {
       gap: 14px;
       align-items: start;
       background: #fffffb;
+      cursor: pointer;
+      transition: border-color 120ms ease, box-shadow 120ms ease, background-color 120ms ease;
+    }
+    .approval-row:hover { border-color: rgba(47, 111, 78, 0.55); }
+    .approval-row.is-selected {
+      border-color: #2f6f4e;
+      background: #fbfdf9;
+      box-shadow: inset 4px 0 0 #2f6f4e, 0 10px 24px rgba(32, 36, 31, 0.08);
     }
     .approval-row + .approval-row { margin-top: 10px; }
     .approval-row h3 { margin: 8px 0 4px; font-size: 15px; overflow-wrap: anywhere; }
@@ -655,13 +677,17 @@ function workbenchCss(): string {
       color: #20241f;
     }
     button:hover { border-color: #2f6f4e; background: #eef1ea; }
-    button:focus-visible, input:focus-visible, textarea:focus-visible, .left-nav a:focus-visible { outline: 2px solid #2f6f4e; outline-offset: 2px; }
+    button:focus-visible, input:focus-visible, textarea:focus-visible, .left-nav a:focus-visible, .approval-row:focus-visible { outline: 2px solid #2f6f4e; outline-offset: 2px; }
     .details-drawer {
       border-left: 1px solid #cdd5c8;
       background: #fffffb;
       padding: 22px 18px;
       min-width: 0;
       box-shadow: -12px 0 34px rgba(32, 36, 31, 0.06);
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow: auto;
     }
     label { display: block; margin: 12px 0 6px; font-size: 12px; color: #626b61; }
     input, textarea {
@@ -685,12 +711,12 @@ function workbenchCss(): string {
       .nav-brand { grid-template-columns: 1fr; }
       .nav-brand strong, .nav-brand small { display: none; }
       .left-nav a { font-size: 12px; padding-inline: 8px; }
-      .details-drawer { grid-column: 1 / -1; border-left: 0; border-top: 1px solid #cdd5c8; }
+      .details-drawer { grid-column: 1 / -1; border-left: 0; border-top: 1px solid #cdd5c8; position: static; height: auto; overflow: visible; }
       .top-status-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
     @media (max-width: 768px) {
-      .runwarden-workbench { display: block; padding-bottom: 82px; }
-      .left-nav { position: fixed; left: 0; right: 0; bottom: 0; top: auto; height: auto; z-index: 10; flex-direction: row; overflow-x: auto; padding: 8px 10px; border-top: 1px solid #cdd5c8; }
+      .runwarden-workbench { display: block; }
+      .left-nav { position: sticky; top: 0; height: auto; z-index: 10; flex-direction: row; overflow-x: auto; padding: 8px 10px; border-right: 0; border-bottom: 1px solid #cdd5c8; box-shadow: 0 10px 22px rgba(32, 36, 31, 0.18); scrollbar-width: thin; }
       .nav-brand { display: none; }
       .left-nav a { white-space: nowrap; }
       h1 { font-size: 30px; }
@@ -698,7 +724,7 @@ function workbenchCss(): string {
       .command-meter { min-width: 0; margin-top: 12px; }
       .top-status-strip, .workspace-grid { grid-template-columns: 1fr; }
       .approval-row { grid-template-columns: 1fr; }
-      .details-drawer { min-height: calc(100vh - 82px); border-left: 0; border-top: 1px solid #cdd5c8; }
+      .details-drawer { min-height: 0; border-left: 0; border-top: 1px solid #cdd5c8; }
     }
   `;
 }

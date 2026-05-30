@@ -73,6 +73,11 @@ test("desktop reviewer console keeps review regions visible and separated", asyn
   await expect(page.locator(".top-status-strip .status-pill")).toHaveCount(6);
   await expect(page.locator(".approval-module")).toContainText("1 pending");
   await expect(page.locator(".approval-row .risk-chip")).toHaveText("report_claim");
+  await expect(page.locator(".approval-list")).toHaveAttribute("role", "list");
+  await expect(page.locator(".approval-row")).toHaveAttribute("role", "listitem");
+  await expect(page.locator(".approval-row")).toHaveAttribute("aria-current", "true");
+  await expect(page.locator(".approval-row")).toHaveClass(/is-selected/);
+  await expect(page.locator(".details-drawer")).toContainText("artifact_write");
   await expect(page.locator("script")).toHaveCount(0);
 
   const background = await page.locator("body").evaluate((body) => getComputedStyle(body).backgroundImage);
@@ -98,10 +103,10 @@ test("desktop reviewer console keeps review regions visible and separated", asyn
   );
 });
 
-test("mobile reviewer console uses bottom navigation without horizontal overflow", async ({ page }, testInfo) => {
+test("mobile reviewer console uses sticky top navigation without horizontal overflow", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile", "mobile layout check");
 
-  await expect(page.locator(".left-nav")).toHaveCSS("position", "fixed");
+  await expect(page.locator(".left-nav")).toHaveCSS("position", "sticky");
   await expect(page.locator(".nav-brand")).toBeHidden();
   await expect(page.locator(".command-bar")).toBeVisible();
   await expect(page.locator(".approval-row")).toBeVisible();
@@ -110,7 +115,14 @@ test("mobile reviewer console uses bottom navigation without horizontal overflow
   const commandBox = await page.locator(".command-bar").boundingBox();
   expect(navBox).not.toBeNull();
   expect(commandBox).not.toBeNull();
-  expect(navBox!.y).toBeGreaterThan(commandBox!.y + commandBox!.height);
+  expect(navBox!.y + navBox!.height).toBeLessThanOrEqual(commandBox!.y + 1);
+
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  await expect(page.locator(".left-nav")).toBeInViewport();
+  const scrolledNavBox = await page.locator(".left-nav").boundingBox();
+  expect(scrolledNavBox).not.toBeNull();
+  expect(scrolledNavBox!.y).toBeGreaterThanOrEqual(-1);
+  expect(scrolledNavBox!.y).toBeLessThanOrEqual(1);
 
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
     await page.evaluate(() => window.innerWidth + 1)

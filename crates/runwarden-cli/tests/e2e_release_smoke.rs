@@ -122,7 +122,7 @@ fn ui_launch_bundle_contains_responsive_accessibility_contract() {
     assert!(html.contains("repeating-linear-gradient"));
     assert!(!html.contains("radial-gradient"));
     assert!(!html.contains("4vw"));
-    assert!(html.contains("position: fixed"));
+    assert!(html.contains("position: sticky"));
     assert!(html.contains("min-height: 44px"));
     assert!(html.contains(":focus-visible"));
     assert!(!html.contains("data-action=\"approve\""));
@@ -237,6 +237,13 @@ fn ui_command_renders_pending_approvals_with_reviewer_controls() {
     assert!(html.contains("authz-1"));
     assert!(html.contains("class=\"risk-chip\""));
     assert!(html.contains("1 pending"));
+    assert!(html.contains("is-selected"));
+    assert!(html.contains("role=\"list\""));
+    assert!(html.contains("role=\"listitem\""));
+    assert!(html.contains("aria-current=\"true\""));
+    assert!(html.contains("aria-controls=\"approval-details\""));
+    assert!(html.contains("data-provider=\"runwarden.report.render\""));
+    assert!(html.contains("data-detail-fields"));
     assert!(html.contains("class=\"approval-decision-form\""));
     assert!(html.contains("id=\"local-api-token\""));
     assert!(html.contains("data-action=\"approve\""));

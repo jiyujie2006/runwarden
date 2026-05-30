@@ -237,6 +237,13 @@ describe("renderReviewerConsoleHtml", () => {
     expect(html).toContain("risk-chip");
     expect(html).toContain("module-partial");
     expect(html).toContain("1 pending");
+    expect(html).toContain('tabindex="0"');
+    expect(html).toContain('role="list"');
+    expect(html).toContain('role="listitem"');
+    expect(html).toContain('aria-current="true"');
+    expect(html).toContain('aria-controls="approval-details"');
+    expect(html).toContain('data-provider="runwarden.report.render"');
+    expect(html).toContain('data-side-effects="artifact_write"');
     expect(html).toContain("data-action=\"approve\"");
     expect(html).not.toContain("<script");
   });
@@ -261,6 +268,7 @@ describe("renderReviewerConsoleHtml", () => {
     expect(html).toContain("#f7f8f4");
     expect(html).toContain("#20241f");
     expect(html).toContain("repeating-linear-gradient");
+    expect(html).toContain("position: sticky");
     expect(html).not.toContain("radial-gradient");
     expect(html).not.toContain("4vw");
   });
