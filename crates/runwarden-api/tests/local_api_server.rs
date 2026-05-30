@@ -225,6 +225,20 @@ fn local_api_ui_launch_writes_full_reviewer_console_contract() {
             .expect("script path")
             .ends_with("reviewer-console.js")
     );
+    let launch_url = response.body["operation"]["data"]["launch_url"]
+        .as_str()
+        .expect("launch url");
+    assert!(launch_url.starts_with("file:///"), "{launch_url}");
+    assert!(
+        launch_url.ends_with("/reviewer-console.html"),
+        "{launch_url}"
+    );
+    #[cfg(windows)]
+    {
+        assert!(!launch_url.contains("%5C"), "{launch_url}");
+        assert!(!launch_url.contains("%3A"), "{launch_url}");
+        assert!(!launch_url.contains("\\\\"), "{launch_url}");
+    }
     assert!(html.contains("aria-label=\"Runwarden sections\""));
     assert!(html.contains("role=\"status\""));
     assert!(html.contains("Agent Boundary"));

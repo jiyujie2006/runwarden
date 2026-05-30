@@ -14,7 +14,9 @@ The UI contract requires:
 - escaped bind text in generated HTML
 - launch bundles written only to relative workspace artifact paths
 - generated `launch_url` values point at the written `reviewer-console.html`
-  file; `local_api_url` reports the configured local API origin separately
+  file; Windows launch URLs use browser-openable `file:///C:/...` paths rather
+  than canonical `\\?\` paths; `local_api_url` reports the configured local API
+  origin separately
 - pending approval records are rendered with provider, action, actor, authz,
   argument hash, and reviewer controls. When the local API is running and the
   reviewer supplies the launch token, approval forms submit approve or deny

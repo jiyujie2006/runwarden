@@ -2523,7 +2523,28 @@ fn join_preview(values: &[String], limit: usize) -> String {
 }
 
 fn file_url_for_path(path: &Path) -> String {
-    format!("file://{}", percent_encode_path(&path.to_string_lossy()))
+    format!(
+        "file://{}",
+        percent_encode_path(&normalize_file_url_path(&path.to_string_lossy()))
+    )
+}
+
+fn normalize_file_url_path(path: &str) -> String {
+    let mut normalized = path.replace('\\', "/");
+
+    if let Some(stripped) = normalized.strip_prefix("//?/UNC/") {
+        return stripped.to_string();
+    }
+    if let Some(stripped) = normalized.strip_prefix("//?/") {
+        normalized = stripped.to_string();
+    }
+
+    let bytes = normalized.as_bytes();
+    if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+        return format!("/{normalized}");
+    }
+
+    normalized
 }
 
 fn percent_encode_path(path: &str) -> String {
@@ -2531,7 +2552,7 @@ fn percent_encode_path(path: &str) -> String {
     let mut encoded = String::with_capacity(path.len());
     for byte in path.as_bytes() {
         match *byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' | b':' => {
                 encoded.push(*byte as char);
             }
             other => {
