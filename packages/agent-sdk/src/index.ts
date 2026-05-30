@@ -7,6 +7,9 @@ import type {
   ErrorKind,
   ExecutionMode,
   ExecutionStatus,
+  OperationError,
+  OperationResultForProviderOutcome,
+  OperationStatus,
   PolicyDecision,
   ProviderCall,
   ProviderOutcome
@@ -21,6 +24,9 @@ export type {
   ErrorKind,
   ExecutionMode,
   ExecutionStatus,
+  OperationError,
+  OperationResultForProviderOutcome,
+  OperationStatus,
   PolicyDecision,
   ProviderCall,
   ProviderOutcome

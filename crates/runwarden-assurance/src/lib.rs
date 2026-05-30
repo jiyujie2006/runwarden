@@ -417,6 +417,32 @@ pub mod report {
         pub id: String,
         pub text: String,
         pub obs_refs: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub support: Option<ReportClaimSupport>,
+    }
+
+    #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct ReportClaimSupport {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub provider: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub event_type: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub decision: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub execution_status: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub side_effect_executed: Option<bool>,
+    }
+
+    impl ReportClaimSupport {
+        fn has_expectations(&self) -> bool {
+            self.provider.is_some()
+                || self.event_type.is_some()
+                || self.decision.is_some()
+                || self.execution_status.is_some()
+                || self.side_effect_executed.is_some()
+        }
     }
 
     impl ReportClaim {
@@ -429,7 +455,13 @@ pub mod report {
                 id: id.into(),
                 text: text.into(),
                 obs_refs: obs_refs.into_iter().map(Into::into).collect(),
+                support: None,
             }
+        }
+
+        pub fn with_support(mut self, support: ReportClaimSupport) -> Self {
+            self.support = Some(support);
+            self
         }
     }
 
@@ -548,6 +580,12 @@ pub mod report {
     }
 
     fn observation_supports_claim(claim: &ReportClaim, event: &TraceEvent) -> bool {
+        if let Some(support) = &claim.support
+            && support.has_expectations()
+        {
+            return observation_matches_structured_support(support, event);
+        }
+
         let text = claim.text.to_ascii_lowercase();
         if text.contains("completed") {
             return event.event_type.contains("completed")
@@ -568,6 +606,61 @@ pub mod report {
                     .is_some_and(|decision| matches!(decision, "denied" | "blocked" | "rejected"));
         }
         true
+    }
+
+    fn observation_matches_structured_support(
+        support: &ReportClaimSupport,
+        event: &TraceEvent,
+    ) -> bool {
+        string_field_matches(support.provider.as_deref(), event.provider.as_deref())
+            && string_field_matches(
+                support.event_type.as_deref(),
+                Some(event.event_type.as_str()),
+            )
+            && string_field_matches(
+                support.decision.as_deref(),
+                payload_string(&event.payload, "decision"),
+            )
+            && string_field_matches(
+                support.execution_status.as_deref(),
+                payload_string(&event.payload, "execution_status"),
+            )
+            && bool_field_matches(
+                support.side_effect_executed,
+                payload_bool(&event.payload, "side_effect_executed"),
+            )
+    }
+
+    fn string_field_matches(expected: Option<&str>, actual: Option<&str>) -> bool {
+        expected.is_none_or(|expected| actual == Some(expected))
+    }
+
+    fn bool_field_matches(expected: Option<bool>, actual: Option<bool>) -> bool {
+        expected.is_none_or(|expected| actual == Some(expected))
+    }
+
+    fn payload_string<'a>(payload: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+        payload
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| {
+                payload
+                    .get("envelope")
+                    .and_then(|envelope| envelope.get(key))
+                    .and_then(serde_json::Value::as_str)
+            })
+    }
+
+    fn payload_bool(payload: &serde_json::Value, key: &str) -> Option<bool> {
+        payload
+            .get(key)
+            .and_then(serde_json::Value::as_bool)
+            .or_else(|| {
+                payload
+                    .get("envelope")
+                    .and_then(|envelope| envelope.get(key))
+                    .and_then(serde_json::Value::as_bool)
+            })
     }
 
     fn verify_trace_hash_chain(
@@ -1189,9 +1282,13 @@ pub mod cert {
                 .get("command")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            if name != "runwarden" || command != "runwarden-mcp" {
+            if name != "runwarden" {
+                findings.push(format!("raw or downstream MCP exposed: {name} ({command})"));
+                continue;
+            }
+            if command != "runwarden-mcp" {
                 findings.push(format!(
-                    "raw or downstream MCP server exposed: {name} ({command})"
+                    "runwarden MCP server must execute runwarden-mcp, got: {command}"
                 ));
                 continue;
             }
@@ -1209,6 +1306,9 @@ pub mod cert {
                         .to_string(),
                 );
             }
+        }
+        if !servers.contains_key("runwarden") {
+            findings.push("missing runwarden MCP server".to_string());
         }
 
         if findings.is_empty() && servers.contains_key("runwarden") {

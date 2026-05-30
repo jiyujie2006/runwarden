@@ -1,6 +1,7 @@
 # Release Installation
 
-Release evidence is produced by `scripts/release_gate_local.sh` and `.github/workflows/release.yml`.
+Release evidence is produced by `scripts/release_gate_local.sh`,
+`scripts/generate_artifacts.sh`, and `.github/workflows/release.yml`.
 
 Named binaries:
 

@@ -127,12 +127,22 @@ fn cert_provider_manifest_rejects_schema_rug_pull() {
 
 #[test]
 fn artifact_verify_json_uses_default_artifact_paths() {
-    let dir = tempdir().expect("tempdir");
+    let workspace = workspace_root();
+    let target = workspace.join("target");
+    fs::create_dir_all(&target).expect("target dir");
+    let dir = tempfile::Builder::new()
+        .prefix("runwarden-completion-artifacts-")
+        .tempdir_in(&target)
+        .expect("tempdir in workspace target");
     let artifact_root = dir.path().join("artifacts");
+    let output_arg = artifact_root
+        .strip_prefix(&workspace)
+        .expect("relative artifact root")
+        .to_path_buf();
     let submission = Command::new(env!("CARGO_BIN_EXE_runwarden"))
-        .current_dir(workspace_root())
+        .current_dir(&workspace)
         .args(["artifact", "submission", "--full", "--output"])
-        .arg(&artifact_root)
+        .arg(&output_arg)
         .arg("--json")
         .output()
         .expect("write submission bundle");

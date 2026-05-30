@@ -85,6 +85,17 @@ fn write_report_schema(path: impl AsRef<Path>) -> Result<(), Box<dyn std::error:
                         "obs_refs": {
                             "type": "array",
                             "items": {"type": "string", "pattern": "^obs_"}
+                        },
+                        "support": {
+                            "type": "object",
+                            "minProperties": 1,
+                            "properties": {
+                                "provider": {"type": "string"},
+                                "event_type": {"type": "string"},
+                                "decision": {"type": "string"},
+                                "execution_status": {"type": "string"},
+                                "side_effect_executed": {"type": "boolean"}
+                            }
                         }
                     }
                 }

@@ -9,6 +9,12 @@ require a denial observation. A claim that says a provider was denied, blocked,
 or rejected must cite an observation with matching event type or decision
 payload.
 
+Report claims may include an optional `support` object with explicit expected
+trace fields: `provider`, `event_type`, `decision`, `execution_status`, and
+`side_effect_executed`. When present, lint validates those fields against the
+verified cited event before falling back to legacy text semantics for claims
+without structured support.
+
 Accountability summaries preserve:
 
 - requester or actor id

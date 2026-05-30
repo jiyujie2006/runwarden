@@ -13,8 +13,11 @@ Provider records define:
 - evidence contract
 - authority requirements
 
-The `external.mcp.*` provider id prefix is reserved for external providers whose
-kind is `mcp`; other external families use their own prefixes such as
-`external.api.*`, `external.scanner.*`, or `external.shell.*`.
+The `external.` provider id prefix is the external-provider namespace used by
+manifest certification. Runtime dispatch must use provider registry metadata:
+`provider_class` selects first-party versus external execution, and `kind`
+selects the mediated adapter family such as `mcp`, `api`, `scanner`, or
+`shell`. String family prefixes such as `external.mcp.*` are descriptive naming
+conventions, not the source of truth for execution.
 
 High-risk, network-active, credential, destructive, and artifact-writing providers require approval before trusted side effects.

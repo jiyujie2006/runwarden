@@ -9,4 +9,8 @@ The supported pipeline is:
 3. `node packages/agent-sdk/scripts/generate-contracts.mjs` refreshes `packages/agent-sdk/src/generated/contracts.ts`.
 4. `scripts/check_ts_contracts.sh` fails CI if generated TypeScript declarations drift from Rust schemas.
 
-TypeScript code must import `PolicyDecision`, `ExecutionStatus`, `ExecutionMode`, `ErrorKind`, and `ApprovalState` from `@runwarden/agent-sdk`; it must not duplicate these unions manually.
+TypeScript code must import generated contract types such as `PolicyDecision`,
+`ExecutionStatus`, `ExecutionMode`, `ErrorKind`, `OperationStatus`,
+`OperationError`, `OperationResultForProviderOutcome`, and `ApprovalState` from
+`@runwarden/agent-sdk`; it must not duplicate these unions or operation-result
+shapes manually.

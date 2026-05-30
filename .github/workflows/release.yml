@@ -24,7 +24,7 @@ jobs:
           cache: pnpm
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
-      - run: bash scripts/release_gate_local.sh
+      - run: RUNWARDEN_SKIP_ARTIFACT_BUNDLE=1 bash scripts/release_gate_local.sh
       - run: bash scripts/generate_artifacts.sh
       - run: bash scripts/artifact_leak_scan.sh
       - run: cargo build --workspace --release

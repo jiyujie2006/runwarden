@@ -39,6 +39,13 @@ export type ErrorKind =
   | "report_citation_invalid"
   | "internal";
 
+export type OperationStatus =
+  | "ok"
+  | "denied"
+  | "requires_review"
+  | "failed"
+  | "incomplete";
+
 export type ApprovalState =
   | "pending"
   | "approved"
@@ -46,6 +53,8 @@ export type ApprovalState =
   | "denied"
   | "expired"
   | "revoked";
+
+export type ErrorCode = string;
 
 export interface ProviderCall {
   action: string;
@@ -107,6 +116,26 @@ export interface ApprovalRecord {
   reason?: string | null;
   reviewer?: string | null;
   state: ApprovalState;
+}
+
+export interface OperationError {
+  code: ErrorCode;
+  developer_message: string;
+  kind: ErrorKind;
+  obs_refs: string[];
+  retryable: boolean;
+  side_effect_executed: boolean;
+  user_message: string;
+}
+
+export interface OperationResultForProviderOutcome {
+  artifacts: ArtifactRef[];
+  data?: ProviderOutcome | null;
+  error?: OperationError | null;
+  next_actions: string[];
+  obs_refs: string[];
+  ok: boolean;
+  status: OperationStatus;
 }
 
 export interface ArtifactManifestEntry {

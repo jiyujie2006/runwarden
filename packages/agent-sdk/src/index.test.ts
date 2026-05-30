@@ -3,6 +3,8 @@ import {
   RunwardenClient,
   type ApprovalRecord,
   type FetchInit,
+  type OperationError,
+  type OperationResultForProviderOutcome,
   type ProviderOutcome
 } from "./index";
 
@@ -42,6 +44,39 @@ describe("RunwardenClient", () => {
     expect(outcome.decision).toBe("denied");
     expect(outcome.execution_status).toBe("not_executed");
     expect(outcome.envelope.error_kind).toBe("provider_not_allowed");
+  });
+
+  it("models operation result envelopes generated from Rust schemas", () => {
+    const error: OperationError = {
+      code: "provider_not_allowed",
+      developer_message: "provider external.shell.command is not in session allowlist",
+      kind: "provider_not_allowed",
+      obs_refs: ["obs_1"],
+      retryable: false,
+      side_effect_executed: false,
+      user_message: "Provider is not allowed for this session"
+    };
+    const result: OperationResultForProviderOutcome = {
+      artifacts: [],
+      data: null,
+      error,
+      next_actions: ["request an allowed provider"],
+      obs_refs: ["obs_1"],
+      ok: false,
+      status: "denied"
+    };
+
+    expect(result.status).toBe("denied");
+    expect(result.error?.kind).toBe("provider_not_allowed");
+
+    // @ts-expect-error OperationResultForProviderOutcome.ok is required by schemas/operation-result.schema.json.
+    const missingOk: OperationResultForProviderOutcome = {
+      artifacts: [],
+      next_actions: [],
+      obs_refs: [],
+      status: "ok"
+    };
+    expect(missingOk.status).toBe("ok");
   });
 
   it("loads approval queue through the Local API with the launch token", async () => {

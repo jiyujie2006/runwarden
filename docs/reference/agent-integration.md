@@ -18,6 +18,11 @@ also rejects non-empty or malformed `args` plus any `env`, `cwd`, `url`, or
 the agent outside the kernel boundary. Empty `args: []` is allowed for clients
 that require an explicit argument array.
 
+`runwarden agent check-config` and `runwarden cert agent-config` both use the
+Rust assurance `certify_agent_config` implementation for the allow/deny
+decision; CLI output may format the result, but it must not maintain a separate
+agent-config policy.
+
 The TypeScript `RunwardenClient` accepts `launchToken` only for local API
 origins (`localhost`, `.localhost`, `127.0.0.1`, or `::1`) unless
 `allowRemoteLaunchToken` is explicitly set. Do not send launch tokens to remote

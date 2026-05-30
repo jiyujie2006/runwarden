@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     env, fs,
     net::TcpListener,
     path::{Path, PathBuf},
@@ -25,7 +25,7 @@ use runwarden_assurance::report::{
 };
 use runwarden_kernel::artifact::ArtifactManifest;
 use runwarden_kernel::authority::{ApprovalBinding, ApprovalRecord, ApprovalState};
-use runwarden_kernel::contracts::{PolicyDecision, ProviderCall};
+use runwarden_kernel::contracts::{PolicyDecision, ProviderCall, ProviderClass, ProviderKind};
 use runwarden_kernel::evidence::{InMemoryTraceStore, TraceEvent, TraceQuery, hex_sha256};
 use runwarden_kernel::kernel::{KernelEnforcer, KernelPolicy, ScopedRoot};
 use runwarden_kernel::manifest::{AssessmentManifest, SessionManifest};
@@ -458,7 +458,7 @@ fn run() -> anyhow::Result<()> {
                 json,
             } => {
                 let content = fs::read_to_string(&input)?;
-                let config: AgentConfig = serde_json::from_str(&content)?;
+                let config: serde_json::Value = serde_json::from_str(&content)?;
                 let result = check_runwarden_only_config(&client, &config);
                 if json {
                     println!("{}", serde_json::to_string_pretty(&result)?);
@@ -819,7 +819,7 @@ fn run() -> anyhow::Result<()> {
                     }
                 }
                 let execution_root = resolve_cli_execution_root(session_manifest.as_ref(), root);
-                let result = if provider.starts_with("external.") {
+                let result = if provider_is_external(&provider) {
                     call_external_provider(&provider, input, execution_root)?
                 } else {
                     call_first_party_provider(
@@ -940,6 +940,7 @@ fn run() -> anyhow::Result<()> {
         Command::Artifact { command } => match command {
             ArtifactCommand::Submission { full, output, json } => {
                 let root = find_workspace_root(env::current_dir()?)?;
+                let output = resolve_local_artifact_output_path(&root, &output)?;
                 let result = write_submission_bundle(&root, &output, full)?;
                 if json {
                     println!("{}", serde_json::to_string_pretty(&result)?);
@@ -1200,12 +1201,16 @@ fn call_external_provider(
     input: Option<PathBuf>,
     root: Option<PathBuf>,
 ) -> anyhow::Result<serde_json::Value> {
-    if !EXTERNAL_PROVIDER_IDS.contains(&provider) {
+    let registry = full_provider_registry();
+    let Some(provider_record) = registry.get(provider) else {
+        anyhow::bail!("unsupported external provider call: {provider}");
+    };
+    if provider_record.class != ProviderClass::External {
         anyhow::bail!("unsupported external provider call: {provider}");
     }
 
-    match provider {
-        "external.shell.command" => {
+    match &provider_record.kind {
+        ProviderKind::Shell if provider == "external.shell.command" => {
             let input_path = input.ok_or_else(|| {
                 anyhow::anyhow!(
                     "--input JSON is required for external.shell.command mediated calls"
@@ -1263,7 +1268,7 @@ fn call_external_provider(
                 })),
             }
         }
-        other if other.starts_with("external.mcp.") => {
+        ProviderKind::Mcp => {
             let input_path = input.ok_or_else(|| {
                 anyhow::anyhow!("--input JSON is required for external MCP adapter calls")
             })?;
@@ -1273,13 +1278,13 @@ fn call_external_provider(
                 let manifest_body = fs::read_to_string(manifest_path)?;
                 load_provider_manifest(&manifest_body)?
             } else {
-                default_external_provider_manifest(other).ok_or_else(|| {
-                    anyhow::anyhow!("missing default external provider manifest: {other}")
+                default_external_provider_manifest(provider).ok_or_else(|| {
+                    anyhow::anyhow!("missing default external provider manifest: {provider}")
                 })?
             };
-            if manifest.provider_id != other {
+            if manifest.provider_id != provider {
                 anyhow::bail!(
-                    "external MCP manifest provider_id {} does not match requested provider {other}",
+                    "external MCP manifest provider_id {} does not match requested provider {provider}",
                     manifest.provider_id
                 );
             }
@@ -1289,8 +1294,8 @@ fn call_external_provider(
                 root.as_deref(),
             ))
         }
-        other => Ok(json!({
-            "provider": other,
+        _ => Ok(json!({
+            "provider": provider,
             "decision": "requires_review",
             "execution_status": "not_executed",
             "external_adapter_required": true,
@@ -1298,6 +1303,17 @@ fn call_external_provider(
             "side_effect_executed": false
         })),
     }
+}
+
+fn provider_is_external(provider: &str) -> bool {
+    full_provider_registry()
+        .get(provider)
+        .is_some_and(|record| record.class == ProviderClass::External)
+}
+
+fn provider_is_external_mcp(provider: &str) -> bool {
+    default_external_provider_manifest(provider)
+        .is_some_and(|manifest| manifest.kind == ProviderKind::Mcp)
 }
 
 fn runtime_denial_error_kind(kind: &ProviderRuntimeDenialKind) -> &'static str {
@@ -1388,7 +1404,7 @@ fn bind_cli_file_digests(call: &mut ProviderCall) -> anyhow::Result<()> {
         let digest = digest_file(Path::new(path))?;
         arguments.insert(format!("{field}_sha256"), serde_json::Value::String(digest));
     }
-    if call.provider.starts_with("external.mcp.")
+    if provider_is_external_mcp(&call.provider)
         && let Some(input_path) = arguments
             .get("input_path")
             .and_then(serde_json::Value::as_str)
@@ -1426,7 +1442,7 @@ fn verify_cli_file_digests(call: &ProviderCall) -> anyhow::Result<()> {
             anyhow::bail!("{field} changed after approval binding");
         }
     }
-    if call.provider.starts_with("external.mcp.")
+    if provider_is_external_mcp(&call.provider)
         && let Some(expected) = arguments
             .get("manifest_path_sha256")
             .and_then(serde_json::Value::as_str)
@@ -2480,6 +2496,25 @@ fn safe_record_id(record_id: &str) -> anyhow::Result<&str> {
     Ok(record_id)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provider_external_dispatch_uses_registry_class() {
+        assert!(provider_is_external("external.api.request"));
+        assert!(provider_is_external("external.mcp.browser.open_page"));
+        assert!(!provider_is_external("runwarden.input.inspect"));
+    }
+
+    #[test]
+    fn provider_mcp_adapter_dispatch_uses_manifest_kind() {
+        assert!(provider_is_external_mcp("external.mcp.browser.open_page"));
+        assert!(!provider_is_external_mcp("external.api.request"));
+        assert!(!provider_is_external_mcp("external.shell.command"));
+    }
+}
+
 fn verify_trace_events(events: Vec<TraceEvent>) -> serde_json::Value {
     let event_count = events.len();
     let mut store = InMemoryTraceStore::default();
@@ -2527,6 +2562,7 @@ fn run_strict_check() -> anyhow::Result<()> {
         "scripts/dev_gate.sh",
         "scripts/check_ts_contracts.sh",
         "scripts/release_gate_local.sh",
+        "scripts/artifact_bundle_gate.sh",
         ".github/workflows/ci.yml",
         "crates/runwarden-kernel/src/main.rs",
         "packages/agent-sdk/src/generated/contracts.ts",
@@ -2546,10 +2582,23 @@ fn run_strict_check() -> anyhow::Result<()> {
         "runwarden eval scenarios --json",
         "runwarden eval agent-native --json",
         "runwarden bench run --json",
-        "runwarden artifact verify --artifacts artifacts --manifest artifacts/artifact-manifest.json --json",
     ] {
         if !release_gate.contains(command) {
             anyhow::bail!("strict check failed: release gate does not run {command}");
+        }
+    }
+    if !release_gate.contains("scripts/artifact_bundle_gate.sh") {
+        anyhow::bail!("strict check failed: release gate does not run artifact bundle gate");
+    }
+    let artifact_gate = fs::read_to_string(root.join("scripts/artifact_bundle_gate.sh"))?;
+    for command in [
+        "artifact submission --full --output",
+        "artifact verify",
+        "--artifacts",
+        "--manifest",
+    ] {
+        if !artifact_gate.contains(command) {
+            anyhow::bail!("strict check failed: artifact bundle gate does not run {command}");
         }
     }
 
@@ -2656,12 +2705,6 @@ fn generate_runwarden_only_config(client: &str) -> anyhow::Result<serde_json::Va
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct AgentConfig {
-    #[serde(default, rename = "mcpServers")]
-    mcp_servers: BTreeMap<String, serde_json::Value>,
-}
-
 #[derive(Debug, serde::Serialize)]
 struct AgentConfigCheckResult {
     client: String,
@@ -2669,45 +2712,12 @@ struct AgentConfigCheckResult {
     findings: Vec<String>,
 }
 
-fn check_runwarden_only_config(client: &str, config: &AgentConfig) -> AgentConfigCheckResult {
-    let mut findings = Vec::new();
-    match config.mcp_servers.get("runwarden") {
-        Some(server) => {
-            let command = server
-                .get("command")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default();
-            if command != "runwarden-mcp" {
-                findings.push(format!(
-                    "runwarden MCP server must execute runwarden-mcp, got: {command}"
-                ));
-            }
-            let invalid_args = server
-                .get("args")
-                .is_some_and(|args| !args.as_array().is_some_and(|args| args.is_empty()));
-            if invalid_args
-                || server.get("env").is_some()
-                || server.get("cwd").is_some()
-                || server.get("url").is_some()
-                || server.get("transport").is_some()
-            {
-                findings.push(
-                    "runwarden MCP server must not define args/env/cwd/url/transport overrides"
-                        .to_string(),
-                );
-            }
-        }
-        None => findings.push("missing runwarden MCP server".to_string()),
-    }
-    for name in config.mcp_servers.keys() {
-        if name != "runwarden" {
-            findings.push(format!("raw or downstream MCP exposed: {name}"));
-        }
-    }
+fn check_runwarden_only_config(client: &str, config: &serde_json::Value) -> AgentConfigCheckResult {
+    let report = certify_agent_config(config);
     AgentConfigCheckResult {
         client: client.to_string(),
-        safe: findings.is_empty(),
-        findings,
+        safe: report.passed,
+        findings: report.findings,
     }
 }
 

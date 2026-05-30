@@ -98,6 +98,17 @@ fn checked_in_schema_artifacts_match_rust_contracts() {
                             "obs_refs": {
                                 "type": "array",
                                 "items": {"type": "string", "pattern": "^obs_"}
+                            },
+                            "support": {
+                                "type": "object",
+                                "minProperties": 1,
+                                "properties": {
+                                    "provider": {"type": "string"},
+                                    "event_type": {"type": "string"},
+                                    "decision": {"type": "string"},
+                                    "execution_status": {"type": "string"},
+                                    "side_effect_executed": {"type": "boolean"}
+                                }
                             }
                         }
                     }
@@ -114,6 +125,7 @@ fn typescript_sdk_contract_enums_match_rust_schema_values() {
         .expect("read generated SDK contracts");
     let provider_outcome = read_schema(&root, "provider-outcome.schema.json");
     let approval_record = read_schema(&root, "approval-record.schema.json");
+    let operation_result = read_schema(&root, "operation-result.schema.json");
 
     assert_ts_contains_enum_values(
         &sdk,
@@ -131,6 +143,10 @@ fn typescript_sdk_contract_enums_match_rust_schema_values() {
     assert_ts_contains_enum_values(
         &sdk,
         &approval_record["definitions"]["ApprovalState"]["enum"],
+    );
+    assert_ts_contains_enum_values(
+        &sdk,
+        &operation_result["definitions"]["OperationStatus"]["enum"],
     );
 }
 

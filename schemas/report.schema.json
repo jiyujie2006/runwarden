@@ -14,6 +14,27 @@
             },
             "type": "array"
           },
+          "support": {
+            "minProperties": 1,
+            "properties": {
+              "decision": {
+                "type": "string"
+              },
+              "event_type": {
+                "type": "string"
+              },
+              "execution_status": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "side_effect_executed": {
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          },
           "text": {
             "type": "string"
           }

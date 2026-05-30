@@ -1,5 +1,5 @@
 use runwarden_assurance::report::{
-    ReportClaim, ReportDraft, ReportLintErrorKind, lint_report_against_trace,
+    ReportClaim, ReportClaimSupport, ReportDraft, ReportLintErrorKind, lint_report_against_trace,
 };
 use runwarden_kernel::evidence::{InMemoryTraceStore, TraceEvent};
 use serde_json::json;
@@ -10,6 +10,21 @@ fn trace(obs_id: &str) -> TraceEvent {
         "provider_completed".to_string(),
         Some("runwarden.evidence.inspect".to_string()),
         json!({"ok": true}),
+        None,
+    )
+}
+
+fn trace_with_payload(
+    obs_id: &str,
+    event_type: &str,
+    provider: &str,
+    payload: serde_json::Value,
+) -> TraceEvent {
+    TraceEvent::sealed(
+        obs_id.to_string(),
+        event_type.to_string(),
+        Some(provider.to_string()),
+        payload,
         None,
     )
 }
@@ -126,4 +141,130 @@ fn report_lint_rejects_tampered_trace_before_trusting_citations() {
     assert!(!result.ok);
     assert_eq!(result.errors[0].kind, ReportLintErrorKind::TraceTampered);
     assert_eq!(result.errors[0].obs_ref.as_deref(), Some("obs_1"));
+}
+
+#[test]
+fn report_lint_accepts_structured_support_matching_trace_event_fields() {
+    let trace_events = vec![trace_with_payload(
+        "obs_1",
+        "provider_requires_review",
+        "external.mcp.browser.open_page",
+        json!({
+            "decision": "requires_review",
+            "execution_status": "not_executed",
+            "side_effect_executed": false
+        }),
+    )];
+    let report = ReportDraft::new(vec![
+        ReportClaim::new(
+            "finding-1",
+            "Browser navigation requires review before execution",
+            ["obs_1"],
+        )
+        .with_support(ReportClaimSupport {
+            provider: Some("external.mcp.browser.open_page".to_string()),
+            event_type: Some("provider_requires_review".to_string()),
+            decision: Some("requires_review".to_string()),
+            execution_status: Some("not_executed".to_string()),
+            side_effect_executed: Some(false),
+        }),
+    ]);
+
+    let result = lint_report_against_trace(&report, &trace_events);
+
+    assert!(result.ok, "{result:#?}");
+    assert!(result.errors.is_empty());
+}
+
+#[test]
+fn report_lint_rejects_structured_support_citing_wrong_decision() {
+    let trace_events = vec![trace_with_payload(
+        "obs_1",
+        "provider_completed",
+        "external.mcp.browser.open_page",
+        json!({
+            "decision": "allowed",
+            "execution_status": "completed",
+            "side_effect_executed": true
+        }),
+    )];
+    let report = ReportDraft::new(vec![
+        ReportClaim::new(
+            "finding-1",
+            "Browser navigation requires review before execution",
+            ["obs_1"],
+        )
+        .with_support(ReportClaimSupport {
+            provider: Some("external.mcp.browser.open_page".to_string()),
+            event_type: Some("provider_requires_review".to_string()),
+            decision: Some("requires_review".to_string()),
+            execution_status: Some("not_executed".to_string()),
+            side_effect_executed: Some(false),
+        }),
+    ]);
+
+    let result = lint_report_against_trace(&report, &trace_events);
+
+    assert!(!result.ok);
+    assert_eq!(
+        result.errors[0].kind,
+        ReportLintErrorKind::UnsupportedObservation
+    );
+}
+
+#[test]
+fn report_lint_rejects_structured_support_when_side_effect_state_differs() {
+    let trace_events = vec![trace_with_payload(
+        "obs_1",
+        "provider_denied",
+        "external.shell.command",
+        json!({
+            "decision": "denied",
+            "execution_status": "not_executed",
+            "side_effect_executed": true
+        }),
+    )];
+    let report = ReportDraft::new(vec![
+        ReportClaim::new(
+            "finding-1",
+            "Shell was denied before side effects",
+            ["obs_1"],
+        )
+        .with_support(ReportClaimSupport {
+            provider: Some("external.shell.command".to_string()),
+            event_type: Some("provider_denied".to_string()),
+            decision: Some("denied".to_string()),
+            execution_status: Some("not_executed".to_string()),
+            side_effect_executed: Some(false),
+        }),
+    ]);
+
+    let result = lint_report_against_trace(&report, &trace_events);
+
+    assert!(!result.ok);
+    assert_eq!(
+        result.errors[0].kind,
+        ReportLintErrorKind::UnsupportedObservation
+    );
+}
+
+#[test]
+fn report_lint_empty_structured_support_falls_back_to_text_semantics() {
+    let trace_events = vec![trace("obs_1")];
+    let report = ReportDraft::new(vec![
+        ReportClaim::new(
+            "finding-1",
+            "Shell command was denied before execution",
+            ["obs_1"],
+        )
+        .with_support(ReportClaimSupport::default()),
+    ]);
+
+    let result = lint_report_against_trace(&report, &trace_events);
+
+    assert!(!result.ok);
+    assert_eq!(
+        result.errors[0].kind,
+        ReportLintErrorKind::UnsupportedObservation
+    );
 }

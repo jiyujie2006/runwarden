@@ -52,6 +52,24 @@ fn cert_agent_config_detects_raw_tool_exposure() {
 }
 
 #[test]
+fn cert_agent_config_rejects_missing_runwarden_server_with_finding() {
+    let config = serde_json::json!({
+        "mcpServers": {}
+    });
+
+    let report = certify_agent_config(&config);
+
+    assert!(!report.passed);
+    assert_eq!(report.exposure, AgentConfigExposure::RawToolExposure);
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|finding| finding.contains("missing runwarden MCP server"))
+    );
+}
+
+#[test]
 fn cert_agent_config_rejects_poisoned_runwarden_entry() {
     let config = serde_json::json!({
         "mcpServers": {
@@ -72,6 +90,28 @@ fn cert_agent_config_rejects_poisoned_runwarden_entry() {
             .findings
             .iter()
             .any(|finding| finding.contains("args/env/cwd/url/transport"))
+    );
+}
+
+#[test]
+fn cert_agent_config_rejects_runwarden_entry_pointing_at_downstream_server() {
+    let config = serde_json::json!({
+        "mcpServers": {
+            "runwarden": {
+                "command": "shell-mcp"
+            }
+        }
+    });
+
+    let report = certify_agent_config(&config);
+
+    assert!(!report.passed);
+    assert_eq!(report.exposure, AgentConfigExposure::RawToolExposure);
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|finding| finding.contains("runwarden MCP server must execute runwarden-mcp"))
     );
 }
 

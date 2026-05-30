@@ -8,6 +8,7 @@ target/debug/runwarden eval scenarios --json
 target/debug/runwarden eval agent-native --json
 target/debug/runwarden bench run --json
 target/debug/runwarden release smoke --json
-target/debug/runwarden artifact submission --full --output artifacts --json
-target/debug/runwarden artifact verify --artifacts artifacts --manifest artifacts/artifact-manifest.json --json
-scripts/artifact_leak_scan.sh
+if [[ "${RUNWARDEN_SKIP_ARTIFACT_BUNDLE:-0}" != "1" ]]; then
+  RUNWARDEN_BIN=target/debug/runwarden scripts/artifact_bundle_gate.sh artifacts
+  scripts/artifact_leak_scan.sh
+fi

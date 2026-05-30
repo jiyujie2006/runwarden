@@ -10,7 +10,12 @@ const enumSources = [
   ["provider-outcome.schema.json", "ExecutionStatus"],
   ["provider-outcome.schema.json", "ExecutionMode"],
   ["provider-outcome.schema.json", "ErrorKind"],
+  ["operation-result.schema.json", "OperationStatus"],
   ["approval-record.schema.json", "ApprovalState"]
+];
+
+const aliasSources = [
+  ["operation-result.schema.json", "ErrorCode"]
 ];
 
 const interfaceSources = [
@@ -28,6 +33,11 @@ const interfaceSources = [
     fileName: "approval-record.schema.json",
     definitions: ["ApprovalBinding"],
     roots: ["ApprovalRecord"]
+  },
+  {
+    fileName: "operation-result.schema.json",
+    definitions: ["OperationError"],
+    roots: ["OperationResultForProviderOutcome"]
   },
   {
     fileName: "artifact-manifest.schema.json",
@@ -55,6 +65,19 @@ function renderUnion(name, values) {
     `export type ${name} =`,
     ...values.map((value, index) => `  | ${JSON.stringify(value)}${index === values.length - 1 ? ";" : ""}`)
   ].join("\n");
+}
+
+function aliasSchema(fileName, typeName) {
+  const schema = readSchema(fileName);
+  const definition = schema.definitions?.[typeName];
+  if (!definition) {
+    throw new Error(`${fileName} is missing alias schema ${typeName}`);
+  }
+  return definition;
+}
+
+function renderAlias(fileName, typeName) {
+  return `export type ${typeName} = ${schemaType(aliasSchema(fileName, typeName))};`;
 }
 
 function interfaceSchema(fileName, typeName, fromDefinition) {
@@ -135,6 +158,9 @@ function generate() {
   const sections = enumSources.map(([fileName, definitionName]) =>
     renderUnion(definitionName, enumValues(fileName, definitionName))
   );
+  const aliases = aliasSources.map(([fileName, definitionName]) =>
+    renderAlias(fileName, definitionName)
+  );
   const interfaces = interfaceSources.flatMap(({ fileName, definitions, roots }) => [
     ...definitions.map((definitionName) => renderInterface(fileName, definitionName, true)),
     ...roots.map((rootName) => renderInterface(fileName, rootName, false))
@@ -144,6 +170,8 @@ function generate() {
     "/* eslint-disable */",
     "",
     sections.join("\n\n"),
+    "",
+    aliases.join("\n\n"),
     "",
     interfaces.join("\n\n"),
     ""

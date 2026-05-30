@@ -3,6 +3,8 @@
 Provider manifests describe external providers and bind identity, transport, permissions, and schema pins.
 
 The checked schema is `schemas/provider-manifest.schema.json`.
+External provider dispatch uses the manifest and registry `provider_class` plus
+`kind` fields, not provider id family prefixes.
 
 Run:
 
