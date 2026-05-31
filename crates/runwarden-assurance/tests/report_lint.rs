@@ -47,7 +47,7 @@ fn report_lint_accepts_claims_with_known_obs_refs() {
     let trace_events = trace_events(&["obs_1", "obs_2"]);
     let report = ReportDraft::new(vec![
         ReportClaim::new("finding-1", "Evidence inspection completed", ["obs_1"]),
-        ReportClaim::new("finding-2", "Trace verified", ["obs_2"]),
+        ReportClaim::new("finding-2", "Trace verification completed", ["obs_2"]),
     ]);
 
     let result = lint_report_against_trace(&report, &trace_events);
@@ -77,11 +77,51 @@ fn report_lint_rejects_claims_citing_unrelated_observations() {
 }
 
 #[test]
+fn report_lint_rejects_neutral_claim_without_structured_support() {
+    let trace_events = vec![trace("obs_1")];
+    let report = ReportDraft::new(vec![ReportClaim::new(
+        "finding-1",
+        "Provider behavior was reviewed",
+        ["obs_1"],
+    )]);
+
+    let result = lint_report_against_trace(&report, &trace_events);
+
+    assert!(!result.ok);
+    assert_eq!(
+        result.errors[0].kind,
+        ReportLintErrorKind::UnsupportedObservation
+    );
+    assert_eq!(result.errors[0].claim_id, "finding-1");
+    assert_eq!(result.errors[0].obs_ref.as_deref(), Some("obs_1"));
+}
+
+#[test]
 fn report_lint_accepts_completed_claim_with_negated_denial_keyword() {
     let trace_events = vec![trace("obs_1")];
     let report = ReportDraft::new(vec![ReportClaim::new(
         "finding-1",
         "Provider call completed and was not denied",
+        ["obs_1"],
+    )]);
+
+    let result = lint_report_against_trace(&report, &trace_events);
+
+    assert!(result.ok, "{result:#?}");
+    assert!(result.errors.is_empty());
+}
+
+#[test]
+fn report_lint_accepts_allowed_claim_with_allowed_decision() {
+    let trace_events = vec![trace_with_payload(
+        "obs_1",
+        "provider_completed",
+        "runwarden.evidence.inspect",
+        json!({"decision": "allowed"}),
+    )];
+    let report = ReportDraft::new(vec![ReportClaim::new(
+        "finding-1",
+        "Provider call was allowed",
         ["obs_1"],
     )]);
 

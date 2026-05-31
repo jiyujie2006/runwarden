@@ -282,16 +282,49 @@ pub mod artifact {
     }
 
     fn redact(contents: &str) -> RedactedArtifact {
-        let secret_markers = ["SECRET=", "TOKEN=", "PASSWORD=", "PRIVATE KEY"];
-        let contains_secret = secret_markers
+        let normalized_contents = contents.to_ascii_lowercase();
+        let contains_secret = secret_markers()
             .iter()
-            .any(|marker| contents.contains(marker));
+            .any(|marker| normalized_contents.contains(marker))
+            || contains_bearer_authorization_header(&normalized_contents);
         RedactedArtifact {
             contents: contents.to_string(),
             contains_secret,
             redaction_applied: false,
             redacted_patterns: Vec::new(),
         }
+    }
+
+    fn secret_markers() -> &'static [&'static str] {
+        &[
+            "secret=",
+            "token=",
+            "password=",
+            "passwd=",
+            "api_key=",
+            "api-key=",
+            "apikey=",
+            "access_token=",
+            "refresh_token=",
+            "auth_token=",
+            "client_secret=",
+            "secret_access_key=",
+            "authorization: bearer",
+            "x-api-key:",
+            "private key",
+            "begin private key",
+            "begin rsa private key",
+            "begin ec private key",
+            "begin openssh private key",
+        ]
+    }
+
+    fn contains_bearer_authorization_header(normalized_contents: &str) -> bool {
+        normalized_contents.lines().any(|line| {
+            line.split_once(':').is_some_and(|(name, value)| {
+                name.trim() == "authorization" && value.trim_start().starts_with("bearer")
+            })
+        })
     }
 
     fn extract_obs_refs(contents: &str) -> Vec<String> {
@@ -587,7 +620,7 @@ pub mod report {
         }
 
         let text = claim.text.to_ascii_lowercase();
-        if text.contains("completed") {
+        if text.contains("completed") || text.contains("allowed") {
             return event.event_type.contains("completed")
                 || event
                     .payload
@@ -605,7 +638,7 @@ pub mod report {
                     .and_then(serde_json::Value::as_str)
                     .is_some_and(|decision| matches!(decision, "denied" | "blocked" | "rejected"));
         }
-        true
+        false
     }
 
     fn observation_matches_structured_support(

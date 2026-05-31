@@ -21,7 +21,7 @@ fn eval_passes_when_report_cites_all_expected_trace_events() {
     let trace_events = trace_events(&["obs_1", "obs_2"]);
     let report = ReportDraft::new(vec![
         ReportClaim::new("finding-1", "Evidence inspection completed", ["obs_1"]),
-        ReportClaim::new("finding-2", "Trace verified", ["obs_2"]),
+        ReportClaim::new("finding-2", "Trace verification completed", ["obs_2"]),
     ]);
 
     let eval = evaluate_report_assurance(
@@ -41,7 +41,7 @@ fn eval_fails_when_expected_obs_ref_is_missing_from_report() {
     let trace_events = trace_events(&["obs_1", "obs_2"]);
     let report = ReportDraft::new(vec![ReportClaim::new(
         "finding-1",
-        "Policy denied raw shell",
+        "Evidence inspection completed",
         ["obs_1"],
     )]);
 

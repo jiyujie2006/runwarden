@@ -8,19 +8,30 @@ scripts/release_gate_local.sh
 
 The gate runs:
 
-1. Rust formatting, clippy, and workspace tests.
-2. TypeScript tests and builds.
-3. `runwarden check --strict`.
-4. `runwarden cert all --json`.
-5. `runwarden eval all --json`.
-6. `runwarden eval scenarios --json`.
-7. `runwarden eval agent-native --json`.
-8. `runwarden bench run --json`.
-9. `runwarden release smoke --json`.
-10. `runwarden artifact submission --full --output artifacts --json`.
-11. `runwarden artifact verify --artifacts artifacts --manifest
+1. Rust formatting and clippy.
+2. Dependency policy from `deny.toml` via `cargo deny check`.
+3. Rust workspace tests.
+4. TypeScript tests and builds.
+5. `runwarden check --strict`.
+6. `runwarden cert all --json`.
+7. `runwarden eval all --json`.
+8. `runwarden eval scenarios --json`.
+9. `runwarden eval agent-native --json`.
+10. `runwarden bench run --json`.
+11. `runwarden release smoke --json`.
+12. `runwarden artifact submission --full --output artifacts --json`.
+13. `runwarden artifact verify --artifacts artifacts --manifest
    artifacts/artifact-manifest.json --json`.
-12. `scripts/artifact_leak_scan.sh`.
+14. `scripts/artifact_leak_scan.sh`.
+
+Install `cargo-deny` before running release gates locally:
+
+```bash
+cargo install cargo-deny --version 0.19.6 --locked
+```
+
+The local scripts fail with a clear installation hint when `cargo-deny` is
+missing. GitHub Actions installs it before invoking the gate scripts.
 
 `scripts/release_gate_local.sh` is self-contained by default. Composite gates
 that immediately regenerate artifacts, such as nightly CI and the release
@@ -37,6 +48,12 @@ CI is tiered:
   schema generation, artifact bundle generation and verification, leak scan,
   cert, agent-native eval, bench, release build, uploaded assets, and tagged
   GitHub Release publication.
+
+Release workflows pin all external `uses:` actions to immutable commit SHAs,
+including the publish action that has `contents: write`. Each pinned action keeps
+a nearby comment naming the upstream action and tag or branch, such as
+`softprops/action-gh-release@v2`, so action updates require intentionally
+resolving and reviewing a new SHA.
 
 Generated schemas are checked against Rust contract types by
 `cargo test -p runwarden-kernel --test contract_schemas`, including

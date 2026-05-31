@@ -1062,11 +1062,26 @@ pub mod external {
             );
         }
 
-        let transport = request
-            .transport
-            .as_deref()
-            .or(manifest.transport.as_deref())
-            .unwrap_or("stdio");
+        let Some(manifest_transport) = manifest.transport.as_deref() else {
+            return adapter_denial(
+                &manifest.provider_id,
+                request.transport.as_deref().unwrap_or("unknown"),
+                "provider_not_allowed",
+                "external MCP adapter manifest transport is required",
+            );
+        };
+        if let Some(request_transport) = request.transport.as_deref()
+            && request_transport != manifest_transport
+        {
+            return adapter_denial(
+                &manifest.provider_id,
+                request_transport,
+                "provider_not_allowed",
+                "external MCP adapter request transport must match the provider manifest",
+            );
+        }
+
+        let transport = manifest_transport;
 
         match transport {
             "stdio" => execute_stdio(manifest, request, runtime_root),
@@ -1109,12 +1124,20 @@ pub mod external {
                 "stdio MCP adapter command is not allowlisted by the provider manifest",
             );
         }
-        if command_is_shell_capable(command) || request.args.iter().any(|arg| arg == "-c") {
+        if command_is_shell_capable(command) {
             return adapter_denial(
                 &manifest.provider_id,
                 transport,
                 "provider_not_allowed",
                 "stdio MCP adapter command cannot be a shell-capable interpreter",
+            );
+        }
+        if !request.args.is_empty() {
+            return adapter_denial(
+                &manifest.provider_id,
+                transport,
+                "provider_not_allowed",
+                "stdio MCP adapter does not accept request-supplied command arguments",
             );
         }
         if stdio_requires_unsupported_egress_controls(manifest) {
@@ -1123,6 +1146,15 @@ pub mod external {
                 transport,
                 "egress_denied",
                 "stdio MCP adapter execution cannot enforce network egress or credential policies",
+            );
+        }
+        #[cfg(not(unix))]
+        {
+            return adapter_denial(
+                &manifest.provider_id,
+                transport,
+                "provider_not_allowed",
+                "stdio MCP adapter process-tree cleanup is not supported on this platform",
             );
         }
 
@@ -1142,11 +1174,8 @@ pub mod external {
                 "stdio MCP adapter execution requires a trusted runtime root",
             );
         };
-        let policy = ProviderRuntimePolicy::locked_to_root(root);
+        let policy = ProviderRuntimePolicy::locked_to_root(&root);
         let mut runtime_request = ProviderRuntimeRequest::new(command).cwd(cwd);
-        for arg in &request.args {
-            runtime_request = runtime_request.arg(arg.clone());
-        }
         if let Some(timeout_ms) = request.timeout_ms {
             runtime_request = runtime_request.timeout_ms(timeout_ms);
         }
@@ -1171,7 +1200,6 @@ pub mod external {
                 });
             }
         };
-
         let body = jsonrpc_request(manifest, request);
         let frame = content_length_frame(&body);
         let mut command = Command::new(&prepared.executable);
@@ -1199,7 +1227,8 @@ pub mod external {
         match child.stdin.take() {
             Some(mut stdin) => {
                 if let Err(err) = stdin.write_all(frame.as_bytes()) {
-                    let _ = child.kill();
+                    terminate_child(&mut child, prepared.kill_process_tree_on_timeout);
+                    let _ = child.wait();
                     return adapter_failure(
                         &manifest.provider_id,
                         transport,
@@ -1209,7 +1238,8 @@ pub mod external {
                 }
             }
             None => {
-                let _ = child.kill();
+                terminate_child(&mut child, prepared.kill_process_tree_on_timeout);
+                let _ = child.wait();
                 return adapter_failure(
                     &manifest.provider_id,
                     transport,
@@ -1566,14 +1596,16 @@ pub mod external {
         stderr_limit: usize,
         kill_process_tree: bool,
     ) -> Result<StdioOutput, String> {
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| "failed to open adapter stdout".to_string())?;
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| "failed to open adapter stderr".to_string())?;
+        let Some(stdout) = child.stdout.take() else {
+            terminate_child(child, kill_process_tree);
+            let _ = child.wait();
+            return Err("failed to open adapter stdout".to_string());
+        };
+        let Some(stderr) = child.stderr.take() else {
+            terminate_child(child, kill_process_tree);
+            let _ = child.wait();
+            return Err("failed to open adapter stderr".to_string());
+        };
         let output_exceeded = Arc::new(AtomicBool::new(false));
         let stdout_handle = read_limited_pipe(stdout, stdout_limit, output_exceeded.clone());
         let stderr_handle = read_limited_pipe(stderr, stderr_limit, output_exceeded.clone());
@@ -1597,6 +1629,7 @@ pub mod external {
             }
             thread::sleep(Duration::from_millis(10));
         };
+        terminate_child(child, kill_process_tree);
 
         let stdout = stdout_handle
             .join()

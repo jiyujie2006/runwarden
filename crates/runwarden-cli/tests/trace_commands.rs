@@ -1,6 +1,6 @@
 use std::{fs, process::Command};
 
-use runwarden_kernel::evidence::TraceEvent;
+use runwarden_kernel::evidence::{TraceEvent, hex_sha256};
 use serde_json::json;
 use tempfile::tempdir;
 
@@ -100,6 +100,108 @@ fn trace_export_command_outputs_only_after_verification() {
     assert!(stdout.contains(r#""verified": true"#));
     assert!(stdout.contains(r#""obs_id": "obs_1""#));
     assert!(stdout.contains(r#""obs_id": "obs_2""#));
+}
+
+#[test]
+fn provider_call_trace_export_rejects_tampered_events_without_returning_events() {
+    let dir = tempdir().expect("tempdir");
+    let trace_path = dir.path().join("trace.json");
+    let mut trace = trace_events();
+    trace[1].payload = json!({"status":"rewritten"});
+    fs::write(
+        &trace_path,
+        serde_json::to_string_pretty(&trace).expect("trace json"),
+    )
+    .expect("write trace");
+    let trace_digest = hex_sha256(&fs::read(&trace_path).expect("read trace"));
+    let arguments = json!({
+        "trace_path": trace_path.to_string_lossy(),
+        "trace_path_sha256": trace_digest
+    });
+    let argument_hash =
+        hex_sha256(&serde_json::to_vec(&arguments).expect("provider call arguments serialize"));
+    let approval = Command::new(env!("CARGO_BIN_EXE_runwarden"))
+        .current_dir(dir.path())
+        .args([
+            "authority",
+            "create",
+            "--approval",
+            "approval-trace-export",
+            "--session",
+            "cli-provider-call",
+            "--provider",
+            "runwarden.trace.export",
+            "--action",
+            "export",
+            "--argument-hash",
+            &argument_hash,
+            "--json",
+        ])
+        .output()
+        .expect("create approval");
+    assert!(
+        approval.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&approval.stderr)
+    );
+    let approved = Command::new(env!("CARGO_BIN_EXE_runwarden"))
+        .current_dir(dir.path())
+        .args([
+            "approval",
+            "approve",
+            "approval-trace-export",
+            "--reviewer",
+            "reviewer-alice",
+            "--reason",
+            "trace export regression",
+            "--json",
+        ])
+        .output()
+        .expect("approve trace export");
+    assert!(
+        approved.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&approved.stderr)
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_runwarden"))
+        .current_dir(dir.path())
+        .args([
+            "provider",
+            "call",
+            "--provider",
+            "runwarden.trace.export",
+            "--trace",
+        ])
+        .arg(&trace_path)
+        .arg("--json")
+        .output()
+        .expect("run trace export provider call");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    let response: serde_json::Value =
+        serde_json::from_str(&stdout).expect("trace export provider json");
+    assert_eq!(response["decision"].as_str(), Some("denied"));
+    assert!(
+        matches!(
+            response["execution_status"].as_str(),
+            Some("not_executed") | Some("failed")
+        ),
+        "tampered trace export must fail closed before returning events: {stdout}"
+    );
+    assert_eq!(
+        response["output"]["verification"]["verified"].as_bool(),
+        Some(false)
+    );
+    assert!(
+        response["output"].get("events").is_none(),
+        "tampered trace export must not return events: {stdout}"
+    );
 }
 
 #[test]

@@ -657,7 +657,7 @@ fn local_api_report_render_enqueues_pending_approval_before_rendering() {
             "session_id": session_id,
             "report": {
                 "claims": [
-                    {"id": "finding-1", "text": "cited finding", "obs_refs": ["obs_1"]}
+                    {"id": "finding-1", "text": "Evidence inspection completed", "obs_refs": ["obs_1"]}
                 ]
             },
             "trace": [trace_event()],
@@ -765,7 +765,7 @@ fn local_api_provider_call_persists_approval_consumption_and_rejects_replay() {
     let arguments = json!({
         "report": {
             "claims": [
-                {"id": "finding-1", "text": "cited finding", "obs_refs": ["obs_1"]}
+                {"id": "finding-1", "text": "Evidence inspection completed", "obs_refs": ["obs_1"]}
             ]
         },
         "trace": [trace_event()],
@@ -819,7 +819,7 @@ fn local_api_provider_call_enqueues_pending_approval_when_review_required() {
     let arguments = json!({
         "report": {
             "claims": [
-                {"id": "finding-1", "text": "cited finding", "obs_refs": ["obs_1"]}
+                {"id": "finding-1", "text": "Evidence inspection completed", "obs_refs": ["obs_1"]}
             ]
         },
         "trace": [trace_event()],

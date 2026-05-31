@@ -25,7 +25,9 @@ use runwarden_assurance::report::{
 };
 use runwarden_kernel::artifact::ArtifactManifest;
 use runwarden_kernel::authority::{ApprovalBinding, ApprovalRecord, ApprovalState};
-use runwarden_kernel::contracts::{PolicyDecision, ProviderCall, ProviderClass, ProviderKind};
+use runwarden_kernel::contracts::{
+    PolicyDecision, ProviderCall, ProviderClass, ProviderKind, ProviderOutcome,
+};
 use runwarden_kernel::evidence::{InMemoryTraceStore, TraceEvent, TraceQuery, hex_sha256};
 use runwarden_kernel::kernel::{KernelEnforcer, KernelPolicy, ScopedRoot};
 use runwarden_kernel::manifest::{AssessmentManifest, SessionManifest};
@@ -745,6 +747,9 @@ fn run() -> anyhow::Result<()> {
                 json,
             } => {
                 let session_manifest = session.as_deref().map(read_session).transpose()?;
+                let mut execution_input = input.clone();
+                let mut execution_trace = trace.clone();
+                let mut execution_report = report.clone();
                 let mut provider_call = Some(match session_manifest.as_ref() {
                     Some(session_manifest) => provider_call_from_cli(CliProviderCallInput {
                         session_id: &session_manifest.session_id,
@@ -772,37 +777,84 @@ fn run() -> anyhow::Result<()> {
                     }),
                 });
                 if let Some(call) = provider_call.as_mut() {
+                    if let Some(session_manifest) = session_manifest.as_ref() {
+                        let resolved_paths =
+                            resolve_session_provider_argument_paths(session_manifest, call)?;
+                        if let Some(path) = resolved_paths.input {
+                            execution_input = Some(path);
+                        }
+                        if let Some(path) = resolved_paths.trace {
+                            execution_trace = Some(path);
+                        }
+                        if let Some(path) = resolved_paths.report {
+                            execution_report = Some(path);
+                        }
+                    }
+                    let mut enforcer = KernelEnforcer::new(
+                        full_provider_registry(),
+                        cli_provider_policy(
+                            session_manifest.as_ref(),
+                            &provider,
+                            input.as_ref(),
+                            root.as_ref(),
+                            trace.as_ref(),
+                            report.as_ref(),
+                        ),
+                    );
+                    let outcome = enforcer.evaluate_call(call);
+                    if outcome.decision == PolicyDecision::Denied {
+                        emit_provider_policy_outcome(&outcome, json)?;
+                        return Ok(());
+                    }
+                    if provider_is_external_mcp(&call.provider)
+                        && let Some(input_path) = call
+                            .arguments
+                            .get("input_path")
+                            .and_then(serde_json::Value::as_str)
+                            .map(PathBuf::from)
+                    {
+                        resolve_external_mcp_manifest_argument(
+                            call.arguments
+                                .as_object_mut()
+                                .expect("CLI provider call arguments are an object"),
+                            &input_path,
+                        )?;
+                        let mut enforcer = KernelEnforcer::new(
+                            full_provider_registry(),
+                            cli_provider_policy(
+                                session_manifest.as_ref(),
+                                &provider,
+                                input.as_ref(),
+                                root.as_ref(),
+                                trace.as_ref(),
+                                report.as_ref(),
+                            ),
+                        );
+                        let outcome = enforcer.evaluate_call(call);
+                        if outcome.decision == PolicyDecision::Denied {
+                            emit_provider_policy_outcome(&outcome, json)?;
+                            return Ok(());
+                        }
+                    }
                     bind_cli_file_digests(call)?;
                     attach_matching_approval(call)?;
                     let mut enforcer = KernelEnforcer::new(
                         full_provider_registry(),
-                        session_manifest
-                            .as_ref()
-                            .map(SessionManifest::to_kernel_policy)
-                            .unwrap_or_else(|| {
-                                default_cli_provider_policy(
-                                    &provider,
-                                    input.as_ref(),
-                                    root.as_ref(),
-                                    trace.as_ref(),
-                                    report.as_ref(),
-                                )
-                            }),
+                        cli_provider_policy(
+                            session_manifest.as_ref(),
+                            &provider,
+                            input.as_ref(),
+                            root.as_ref(),
+                            trace.as_ref(),
+                            report.as_ref(),
+                        ),
                     );
                     for approval in read_all_approvals()? {
                         enforcer.add_approval(approval);
                     }
                     let outcome = enforcer.evaluate_call(call);
                     if outcome.decision != PolicyDecision::Allowed {
-                        if json {
-                            println!("{}", serde_json::to_string_pretty(&outcome)?);
-                        } else {
-                            println!(
-                                "provider call {}: {}",
-                                serde_json::to_string(&outcome.decision)?,
-                                outcome.envelope.reason
-                            );
-                        }
+                        emit_provider_policy_outcome(&outcome, json)?;
                         return Ok(());
                     }
                     verify_cli_file_digests(call)?;
@@ -820,14 +872,14 @@ fn run() -> anyhow::Result<()> {
                 }
                 let execution_root = resolve_cli_execution_root(session_manifest.as_ref(), root);
                 let result = if provider_is_external(&provider) {
-                    call_external_provider(&provider, input, execution_root)?
+                    call_external_provider(&provider, execution_input, execution_root)?
                 } else {
                     call_first_party_provider(
                         &provider,
-                        input,
+                        execution_input,
                         execution_root,
-                        trace,
-                        report,
+                        execution_trace,
+                        execution_report,
                         format,
                     )?
                 };
@@ -920,6 +972,7 @@ fn run() -> anyhow::Result<()> {
             } => {
                 let manifest_body = fs::read_to_string(&manifest)?;
                 let assessment = AssessmentManifest::from_toml_str(&manifest_body)?;
+                let assessment = assessment_with_manifest_relative_roots(&manifest, assessment)?;
                 let session_manifest = SessionManifest::from_assessment(session, &assessment);
                 write_session(&session_manifest)?;
                 if json {
@@ -1275,6 +1328,7 @@ fn call_external_provider(
             let request_body = fs::read_to_string(&input_path)?;
             let request: ExternalMcpAdapterRequest = serde_json::from_str(&request_body)?;
             let manifest = if let Some(manifest_path) = &request.manifest_path {
+                let manifest_path = resolve_external_mcp_manifest_path(&input_path, manifest_path);
                 let manifest_body = fs::read_to_string(manifest_path)?;
                 load_provider_manifest(&manifest_body)?
             } else {
@@ -1393,31 +1447,105 @@ fn provider_call_from_cli(input: CliProviderCallInput<'_>) -> ProviderCall {
     }
 }
 
+fn emit_provider_policy_outcome(outcome: &ProviderOutcome, json: bool) -> anyhow::Result<()> {
+    if json {
+        println!("{}", serde_json::to_string_pretty(outcome)?);
+    } else {
+        println!(
+            "provider call {}: {}",
+            serde_json::to_string(&outcome.decision)?,
+            outcome.envelope.reason
+        );
+    }
+    Ok(())
+}
+
+#[derive(Debug, Default)]
+struct ResolvedProviderArgumentPaths {
+    input: Option<PathBuf>,
+    trace: Option<PathBuf>,
+    report: Option<PathBuf>,
+}
+
+fn resolve_session_provider_argument_paths(
+    session_manifest: &SessionManifest,
+    call: &mut ProviderCall,
+) -> anyhow::Result<ResolvedProviderArgumentPaths> {
+    let Some(arguments) = call.arguments.as_object_mut() else {
+        return Ok(ResolvedProviderArgumentPaths::default());
+    };
+    let selected_root = arguments
+        .get("root")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|root_name| {
+            session_manifest
+                .roots
+                .iter()
+                .find(|root| root.name == root_name)
+                .map(|root| root.path.clone())
+        });
+    let implicit_root = if selected_root.is_none() && session_manifest.roots.len() == 1 {
+        Some(session_manifest.roots[0].path.clone())
+    } else {
+        None
+    };
+    let scoped_root = selected_root
+        .or(implicit_root)
+        .map(|root| absolute_cli_path(&root))
+        .transpose()?;
+
+    let input = resolve_session_provider_path_field(arguments, "input_path", scoped_root.as_ref())?;
+    let trace = resolve_session_provider_path_field(arguments, "trace_path", scoped_root.as_ref())?;
+    let report =
+        resolve_session_provider_path_field(arguments, "report_path", scoped_root.as_ref())?;
+
+    Ok(ResolvedProviderArgumentPaths {
+        input,
+        trace,
+        report,
+    })
+}
+
+fn resolve_session_provider_path_field(
+    arguments: &mut serde_json::Map<String, serde_json::Value>,
+    field: &str,
+    scoped_root: Option<&PathBuf>,
+) -> anyhow::Result<Option<PathBuf>> {
+    let Some(path_text) = arguments
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .map(ToOwned::to_owned)
+    else {
+        return Ok(None);
+    };
+    let path = PathBuf::from(path_text);
+    let resolved = if path.is_absolute() {
+        path
+    } else {
+        let Some(scoped_root) = scoped_root else {
+            anyhow::bail!(
+                "session relative provider path {field} requires a scoped --root or exactly one session root"
+            );
+        };
+        scoped_root.join(path)
+    };
+    arguments.insert(
+        field.to_string(),
+        serde_json::Value::String(resolved.to_string_lossy().into_owned()),
+    );
+    Ok(Some(resolved))
+}
+
 fn bind_cli_file_digests(call: &mut ProviderCall) -> anyhow::Result<()> {
     let Some(arguments) = call.arguments.as_object_mut() else {
         return Ok(());
     };
-    for field in ["input_path", "trace_path", "report_path"] {
+    for &field in provider_path_digest_fields() {
         let Some(path) = arguments.get(field).and_then(serde_json::Value::as_str) else {
             continue;
         };
         let digest = digest_file(Path::new(path))?;
         arguments.insert(format!("{field}_sha256"), serde_json::Value::String(digest));
-    }
-    if provider_is_external_mcp(&call.provider)
-        && let Some(input_path) = arguments
-            .get("input_path")
-            .and_then(serde_json::Value::as_str)
-    {
-        let request_body = fs::read_to_string(input_path)?;
-        let request: ExternalMcpAdapterRequest = serde_json::from_str(&request_body)?;
-        if let Some(manifest_path) = request.manifest_path {
-            let digest = digest_file(&manifest_path)?;
-            arguments.insert(
-                "manifest_path_sha256".to_string(),
-                serde_json::Value::String(digest),
-            );
-        }
     }
     Ok(())
 }
@@ -1426,7 +1554,7 @@ fn verify_cli_file_digests(call: &ProviderCall) -> anyhow::Result<()> {
     let Some(arguments) = call.arguments.as_object() else {
         return Ok(());
     };
-    for field in ["input_path", "trace_path", "report_path"] {
+    for &field in provider_path_digest_fields() {
         let Some(path) = arguments.get(field).and_then(serde_json::Value::as_str) else {
             continue;
         };
@@ -1442,26 +1570,42 @@ fn verify_cli_file_digests(call: &ProviderCall) -> anyhow::Result<()> {
             anyhow::bail!("{field} changed after approval binding");
         }
     }
-    if provider_is_external_mcp(&call.provider)
-        && let Some(expected) = arguments
-            .get("manifest_path_sha256")
-            .and_then(serde_json::Value::as_str)
-    {
-        let input_path = arguments
-            .get("input_path")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| anyhow::anyhow!("external MCP input path is required"))?;
-        let request_body = fs::read_to_string(input_path)?;
-        let request: ExternalMcpAdapterRequest = serde_json::from_str(&request_body)?;
-        let manifest_path = request
-            .manifest_path
-            .ok_or_else(|| anyhow::anyhow!("external MCP manifest path is required"))?;
-        let actual = digest_file(&manifest_path)?;
-        if actual != expected {
-            anyhow::bail!("external MCP manifest changed after approval binding");
-        }
-    }
     Ok(())
+}
+
+fn provider_path_digest_fields() -> &'static [&'static str] {
+    &["input_path", "trace_path", "report_path", "manifest_path"]
+}
+
+fn resolve_external_mcp_manifest_argument(
+    arguments: &mut serde_json::Map<String, serde_json::Value>,
+    input_path: &Path,
+) -> anyhow::Result<()> {
+    if arguments.contains_key("manifest_path") {
+        return Ok(());
+    }
+    let request_body = fs::read_to_string(input_path)?;
+    let request: ExternalMcpAdapterRequest = serde_json::from_str(&request_body)?;
+    let Some(manifest_path) = request.manifest_path.as_ref() else {
+        return Ok(());
+    };
+    let resolved = resolve_external_mcp_manifest_path(input_path, manifest_path);
+    arguments.insert(
+        "manifest_path".to_string(),
+        serde_json::Value::String(resolved.to_string_lossy().into_owned()),
+    );
+    Ok(())
+}
+
+fn resolve_external_mcp_manifest_path(input_path: &Path, manifest_path: &Path) -> PathBuf {
+    if manifest_path.is_absolute() {
+        manifest_path.to_path_buf()
+    } else {
+        input_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(manifest_path)
+    }
 }
 
 fn digest_file(path: &Path) -> anyhow::Result<String> {
@@ -1490,6 +1634,19 @@ fn default_cli_provider_policy(
         }
     }
     policy
+}
+
+fn cli_provider_policy(
+    session_manifest: Option<&SessionManifest>,
+    provider: &str,
+    input: Option<&PathBuf>,
+    root: Option<&PathBuf>,
+    trace: Option<&PathBuf>,
+    report: Option<&PathBuf>,
+) -> KernelPolicy {
+    session_manifest
+        .map(SessionManifest::to_kernel_policy)
+        .unwrap_or_else(|| default_cli_provider_policy(provider, input, root, trace, report))
 }
 
 fn default_cli_scoped_root(path: Option<&PathBuf>) -> Option<PathBuf> {
@@ -1645,9 +1802,20 @@ fn call_first_party_provider(
                 trace.ok_or_else(|| anyhow::anyhow!("--trace is required for trace.export"))?;
             let events = read_trace(&trace_path)?;
             let verification = verify_trace_events(events.clone());
+            if verification["verified"].as_bool() != Some(true) {
+                return Ok(json!({
+                    "provider": provider,
+                    "decision": "denied",
+                    "execution_status": "failed",
+                    "side_effect_executed": false,
+                    "output": {
+                        "verification": verification
+                    }
+                }));
+            }
             Ok(json!({
                 "provider": provider,
-                "decision": if verification["verified"].as_bool() == Some(true) { "allowed" } else { "denied" },
+                "decision": "allowed",
                 "execution_status": "completed",
                 "side_effect_executed": false,
                 "output": {
@@ -2320,6 +2488,28 @@ fn parse_render_format(format: &str) -> anyhow::Result<RenderFormat> {
         "html" => Ok(RenderFormat::Html),
         "sarif" | "sarif.json" => Ok(RenderFormat::Sarif),
         other => anyhow::bail!("unsupported report render format: {other}"),
+    }
+}
+
+fn assessment_with_manifest_relative_roots(
+    manifest: &Path,
+    mut assessment: AssessmentManifest,
+) -> anyhow::Result<AssessmentManifest> {
+    let manifest_dir = manifest.parent().unwrap_or_else(|| Path::new("."));
+    let manifest_dir = absolute_cli_path(manifest_dir)?;
+    for root in &mut assessment.roots {
+        if !root.path.is_absolute() {
+            root.path = manifest_dir.join(&root.path);
+        }
+    }
+    Ok(assessment)
+}
+
+fn absolute_cli_path(path: &Path) -> anyhow::Result<PathBuf> {
+    if path.is_absolute() {
+        Ok(path.to_path_buf())
+    } else {
+        Ok(env::current_dir()?.join(path))
     }
 }
 

@@ -94,6 +94,7 @@ fn authority_create_rejects_path_traversal_approval_ids() {
     assert!(!dir.path().join(".runwarden/approvals").exists());
 }
 
+#[cfg(unix)]
 #[test]
 fn provider_call_executes_external_mcp_stdio_adapter_from_manifest() {
     let dir = tempdir().expect("tempdir");
@@ -182,6 +183,7 @@ enabled = true
     let arguments = serde_json::json!({
         "input_path": input_path.to_string_lossy(),
         "input_path_sha256": hex_sha256(&request_bytes),
+        "manifest_path": manifest_path.to_string_lossy(),
         "manifest_path_sha256": hex_sha256(&manifest_bytes),
         "root": "workspace"
     });
@@ -248,6 +250,96 @@ enabled = true
     let saved_approval =
         fs::read_to_string(approval_dir.join("approval-1.json")).expect("saved approval");
     assert!(saved_approval.contains(r#""state": "consumed""#));
+}
+
+#[test]
+fn provider_call_denies_external_mcp_manifest_path_outside_session_root() {
+    let dir = tempdir().expect("tempdir");
+    let workspace = dir.path().join("workspace");
+    fs::create_dir(&workspace).expect("workspace");
+    let session_manifest_path = dir.path().join("assessment.toml");
+    fs::write(
+        &session_manifest_path,
+        format!(
+            r#"
+version = "1"
+name = "external mcp session"
+mode = "audit"
+provider_allowlist = ["external.mcp.browser.open_page"]
+
+[[roots]]
+name = "workspace"
+path = "{}"
+
+[active_assessment]
+enabled = true
+"#,
+            workspace.display()
+        ),
+    )
+    .expect("write session manifest");
+    let outside_manifest = dir.path().join("external-mcp-manifest-dir");
+    fs::create_dir(&outside_manifest).expect("outside manifest dir");
+    let input_path = workspace.join("adapter-request.json");
+    fs::write(
+        &input_path,
+        serde_json::json!({
+            "manifest_path": outside_manifest,
+            "transport": "stdio",
+            "command": "cat",
+            "cwd": workspace,
+            "request": {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "open_page",
+                "params": {"url": "https://example.com"}
+            }
+        })
+        .to_string(),
+    )
+    .expect("write request");
+    let create_session = Command::new(env!("CARGO_BIN_EXE_runwarden"))
+        .current_dir(dir.path())
+        .args(["session", "create", "--manifest"])
+        .arg(&session_manifest_path)
+        .args(["--session", "enterprise_ops", "--json"])
+        .output()
+        .expect("session create");
+    assert!(
+        create_session.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&create_session.stderr)
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_runwarden"))
+        .current_dir(dir.path())
+        .args([
+            "provider",
+            "call",
+            "--session",
+            "enterprise_ops",
+            "--provider",
+            "external.mcp.browser.open_page",
+            "--input",
+        ])
+        .arg(&input_path)
+        .arg("--root")
+        .arg("workspace")
+        .arg("--json")
+        .output()
+        .expect("external mcp provider call");
+
+    assert!(
+        output.status.success(),
+        "stderr should not expose a pre-gate manifest read: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    assert!(stdout.contains(r#""decision": "denied""#));
+    assert!(stdout.contains(r#""error_kind": "root_escape""#));
+    assert!(stdout.contains(r#""gate_id": "root""#));
+    assert!(!stdout.contains("No such file"));
+    assert!(!stdout.contains(r#""side_effect_executed": true"#));
 }
 
 #[test]

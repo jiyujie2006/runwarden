@@ -9,11 +9,20 @@ require a denial observation. A claim that says a provider was denied, blocked,
 or rejected must cite an observation with matching event type or decision
 payload.
 
+Provider policy observation ids are derived from the pre-side-effect decision
+material, including the trace event type, decision, session id, provider,
+action, argument hash, gate, reason, error kind, authz id, actor id, and
+approval id. Repeated provider calls with different sessions or arguments
+therefore produce different `obs_*` ids even when the policy decision is the
+same.
+
 Report claims may include an optional `support` object with explicit expected
 trace fields: `provider`, `event_type`, `decision`, `execution_status`, and
 `side_effect_executed`. When present, lint validates those fields against the
-verified cited event before falling back to legacy text semantics for claims
-without structured support.
+verified cited event. Claims without structured support use legacy text
+semantics only when the text positively states completed/allowed or
+denied/blocked/rejected behavior that the cited event supports. Unstructured
+neutral text is rejected even when it cites an existing `obs_*` reference.
 
 Accountability summaries preserve:
 

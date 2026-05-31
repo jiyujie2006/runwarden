@@ -292,8 +292,13 @@ impl ProviderOutcome {
     ) -> Self {
         Self::new_before_side_effect(BeforeSideEffect {
             decision,
+            session_id: call.session_id.clone(),
             provider: call.provider.clone(),
             action: call.action.clone(),
+            argument_hash: hex_sha256(
+                &serde_json::to_vec(&call.arguments)
+                    .expect("provider call arguments must serialize"),
+            ),
             authz_id: call.authz_id.clone(),
             actor_id: call.actor_id.clone(),
             approval_id: call.approval_id.clone(),
@@ -310,8 +315,10 @@ impl ProviderOutcome {
     ) -> Self {
         Self::new_before_side_effect(BeforeSideEffect {
             decision: PolicyDecision::Denied,
+            session_id: String::new(),
             provider: provider.into(),
             action: action.into(),
+            argument_hash: String::new(),
             authz_id: None,
             actor_id: None,
             approval_id: None,
@@ -364,8 +371,10 @@ fn observation_id_for_before_side_effect(input: &BeforeSideEffect, trace_event: 
     let material = serde_json::json!({
         "trace_event": trace_event,
         "decision": &input.decision,
+        "session_id": &input.session_id,
         "provider": &input.provider,
         "action": &input.action,
+        "argument_hash": &input.argument_hash,
         "gate_id": &input.gate_id,
         "reason": &input.reason,
         "error_kind": &input.error_kind,
@@ -383,8 +392,10 @@ fn observation_id_for_before_side_effect(input: &BeforeSideEffect, trace_event: 
 
 struct BeforeSideEffect {
     decision: PolicyDecision,
+    session_id: String,
     provider: String,
     action: String,
+    argument_hash: String,
     authz_id: Option<String>,
     actor_id: Option<String>,
     approval_id: Option<String>,

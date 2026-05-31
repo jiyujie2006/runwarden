@@ -22,6 +22,35 @@ fn artifact_seal_rejects_unredacted_secret_before_write() {
 }
 
 #[test]
+fn artifact_seal_rejects_common_secret_formats() {
+    let secret_examples = [
+        "password=redacted\n",
+        "api_key=redacted\n",
+        "Authorization: Bearer redacted\n",
+        "-----BEGIN PRIVATE KEY-----\nredacted\n-----END PRIVATE KEY-----\n",
+    ];
+
+    for (index, contents) in secret_examples.iter().enumerate() {
+        let dir = tempdir().expect("tempdir");
+        let error = seal_artifact(
+            dir.path(),
+            format!("report-md-{index}"),
+            format!("reports/report-{index}.md"),
+            contents,
+        )
+        .expect_err("common secret format must fail closed");
+
+        assert_eq!(error.kind, ArtifactErrorKind::RedactionFailed);
+        assert!(!error.side_effect_executed);
+        assert!(
+            !dir.path()
+                .join(format!("reports/report-{index}.md"))
+                .exists()
+        );
+    }
+}
+
+#[test]
 fn artifact_seal_writes_manifest_entry_and_redaction_sidecar_hashes() {
     let dir = tempdir().expect("tempdir");
     let manifest = seal_artifact(

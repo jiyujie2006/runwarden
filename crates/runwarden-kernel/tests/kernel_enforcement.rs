@@ -107,6 +107,45 @@ fn provider_policy_outcome_includes_observation_id_and_trace_event() {
 }
 
 #[test]
+fn provider_policy_observation_id_changes_with_session_and_arguments() {
+    let provider_id = "runwarden.evidence.inspect";
+    let registry = registry_with(provider(
+        provider_id,
+        ProviderRisk::Low,
+        vec![SideEffectKind::FileRead],
+    ));
+    let policy = base_policy(provider_id);
+    let mut enforcer = KernelEnforcer::new(registry, policy);
+
+    let first = call(
+        provider_id,
+        json!({"root":"evidence","target_path":"/srv/runwarden/evidence/input-a.txt"}),
+    );
+    let second_arguments = call(
+        provider_id,
+        json!({"root":"evidence","target_path":"/srv/runwarden/evidence/input-b.txt"}),
+    );
+    let mut second_session = call(
+        provider_id,
+        json!({"root":"evidence","target_path":"/srv/runwarden/evidence/input-a.txt"}),
+    );
+    second_session.session_id = "session-2".to_string();
+
+    let first_outcome = enforcer.evaluate_call(&first);
+    let second_arguments_outcome = enforcer.evaluate_call(&second_arguments);
+    let second_session_outcome = enforcer.evaluate_call(&second_session);
+
+    assert_ne!(
+        first_outcome.observation_id, second_arguments_outcome.observation_id,
+        "provider observation ids must be bound to argument material"
+    );
+    assert_ne!(
+        first_outcome.observation_id, second_session_outcome.observation_id,
+        "provider observation ids must be bound to session id"
+    );
+}
+
+#[test]
 fn authz_bound_to_session_actor_rejects_different_actor() {
     let assessment = AssessmentManifest::from_toml_str(
         r#"

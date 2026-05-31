@@ -50,9 +50,25 @@ the certified external provider families declared in the kernel-managed catalog.
 
 Approval-bound CLI provider calls bind file contents, not only file paths. When
 `input_path`, `trace_path`, `report_path`, or an external MCP manifest path is
-part of the approved call, the CLI records a SHA-256 digest before approval
-matching, then rechecks it after the kernel allows the call and before
-persisting consumed approval state or executing the provider.
+part of the approved call, the CLI first runs kernel path policy without
+reading file contents, records a SHA-256 digest before approval matching only
+after that policy allows the path, then rechecks it after the kernel allows the
+call and before persisting consumed approval state or executing the provider.
+
+Session-backed provider calls resolve relative `input_path`, `trace_path`, and
+`report_path` arguments under the same scoped root used by kernel root
+validation before digest binding and provider execution. External MCP request
+`manifest_path` values are also promoted into kernel arguments, resolved
+relative to the adapter request file when they are not absolute, and root
+validated before digest binding or execution. For example, a call with
+`--session enterprise_ops --root safe --input input.txt` reads `safe/input.txt`,
+not `./input.txt` from the CLI process directory. No-session provider calls
+keep normal CLI path resolution.
+
+Provider-call trace export fails closed on unverified trace input. If trace
+hash-chain verification fails, `provider call --provider runwarden.trace.export`
+returns a denied failed result with verification details and does not include
+trace `events` in the provider output.
 
 Artifact and UI output arguments (`--output`, `--artifacts`) must be relative
 workspace paths. Absolute paths, parent traversal, and symlink escapes are
