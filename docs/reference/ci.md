@@ -19,6 +19,11 @@ dependency policy.
 Workspace crates inherit `publish = false` and a proprietary `LicenseRef-*`
 identifier, then `cargo-deny` treats them as private for license checks;
 third-party crates remain subject to the allowlist in `deny.toml`.
+The bans policy still reports duplicate crate versions by default; the only
+checked-in duplicate exception is `wit-bindgen@0.51.0`, which is pulled by
+`getrandom` through target-specific WASI preview3 support while the same
+`getrandom` release also carries a WASI preview2 dependency on
+`wit-bindgen@0.57.1`.
 
 The release gate additionally runs cert, eval, scenario golden-corpus eval,
 bench, release smoke, artifact submission, artifact verification, and leak scan.

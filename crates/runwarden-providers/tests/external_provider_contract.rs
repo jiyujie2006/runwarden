@@ -7,6 +7,25 @@ use runwarden_providers::external::{
 };
 use tempfile::tempdir;
 
+#[cfg(unix)]
+fn write_executable_script(path: &std::path::Path, content: &str) {
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .expect("script");
+    file.write_all(content.as_bytes()).expect("write script");
+    file.sync_all().expect("sync script");
+    drop(file);
+
+    let mut permissions = fs::metadata(path).expect("metadata").permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions).expect("chmod");
+}
+
 #[test]
 fn external_mcp_manifest_certifies_identity_permissions_and_schema_pin() {
     let manifest = load_provider_manifest(
@@ -824,14 +843,9 @@ fn external_mcp_stdio_rejects_network_capable_manifest_before_spawn() {
 #[cfg(unix)]
 #[test]
 fn external_mcp_stdio_enforces_timeout_while_waiting() {
-    use std::os::unix::fs::PermissionsExt;
-
     let dir = tempdir().expect("tempdir");
     let script = dir.path().join("sleep-adapter");
-    fs::write(&script, "#!/bin/sh\ncat >/dev/null & sleep 1\n").expect("script");
-    let mut permissions = fs::metadata(&script).expect("metadata").permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&script, permissions).expect("chmod");
+    write_executable_script(&script, "#!/bin/sh\ncat >/dev/null & sleep 1\n");
     let manifest = load_provider_manifest(&format!(
         r#"{{
           "schema_version": "1",
@@ -882,14 +896,9 @@ fn external_mcp_stdio_enforces_timeout_while_waiting() {
 #[cfg(unix)]
 #[test]
 fn external_mcp_stdio_enforces_output_limit_while_reading() {
-    use std::os::unix::fs::PermissionsExt;
-
     let dir = tempdir().expect("tempdir");
     let script = dir.path().join("output-adapter");
-    fs::write(&script, "#!/bin/sh\ncat >/dev/null\nprintf 1234567890\n").expect("script");
-    let mut permissions = fs::metadata(&script).expect("metadata").permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&script, permissions).expect("chmod");
+    write_executable_script(&script, "#!/bin/sh\ncat >/dev/null\nprintf 1234567890\n");
     let manifest = load_provider_manifest(&format!(
         r#"{{
           "schema_version": "1",
@@ -939,20 +948,15 @@ fn external_mcp_stdio_enforces_output_limit_while_reading() {
 #[cfg(unix)]
 #[test]
 fn external_mcp_stdio_cleans_process_group_after_success() {
-    use std::os::unix::fs::PermissionsExt;
     use std::thread;
     use std::time::{Duration, Instant};
 
     let dir = tempdir().expect("tempdir");
     let script = dir.path().join("spawn-background-adapter");
-    fs::write(
+    write_executable_script(
         &script,
         "#!/bin/sh\ncat >/dev/null\nsleep 60 >/dev/null 2>/dev/null </dev/null &\necho $!\n",
-    )
-    .expect("script");
-    let mut permissions = fs::metadata(&script).expect("metadata").permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&script, permissions).expect("chmod");
+    );
     let manifest = load_provider_manifest(&format!(
         r#"{{
           "schema_version": "1",

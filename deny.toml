@@ -4,7 +4,13 @@ ignore = []
 
 [licenses]
 version = 2
-allow = ["MIT", "Apache-2.0", "Unicode-3.0", "BSD-3-Clause", "ISC"]
+allow = ["MIT", "Apache-2.0", "Unicode-3.0"]
 
 [licenses.private]
 ignore = true
+
+[bans]
+multiple-versions = "warn"
+skip = [
+  { crate = "wit-bindgen@0.51.0", reason = "getrandom 0.4 carries target-specific WASI preview2/preview3 transitive dependencies until upstream converges on one wit-bindgen line" },
+]
