@@ -14,3 +14,9 @@ TypeScript code must import generated contract types such as `PolicyDecision`,
 `OperationError`, `OperationResultForProviderOutcome`, and `ApprovalState` from
 `@runwarden/agent-sdk`; it must not duplicate these unions or operation-result
 shapes manually.
+
+TypeScript packages also must not duplicate Rust-owned allow/deny policy
+checks. For agent-config certification, TypeScript may invoke
+`runwarden cert agent-config <path> --json` and format the returned Rust
+`AgentConfigCertReport`; the safe/unsafe decision remains in
+`runwarden_assurance::cert::certify_agent_config`.

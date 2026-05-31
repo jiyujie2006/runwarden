@@ -1,68 +1,66 @@
 import { describe, expect, it } from "vitest";
-import { checkRunwardenOnlyConfig } from "./index";
+import * as configTools from "./index";
+import {
+  agentConfigCertCommand,
+  agentConfigCheckFromCertReport,
+  isAgentConfigCertPassed,
+  parseAgentConfigCertReport
+} from "./index";
 
-describe("checkRunwardenOnlyConfig", () => {
-  it("accepts a runwarden-only MCP config", () => {
-    expect(
-      checkRunwardenOnlyConfig({
-        mcpServers: {
-          runwarden: { command: "runwarden-mcp", args: [] }
-        }
+describe("agent config cert report helpers", () => {
+  it("does not export a TypeScript raw-config policy checker", () => {
+    expect("checkRunwardenOnlyConfig" in configTools).toBe(false);
+  });
+
+  it("builds a Rust certifier command for agent config checks", () => {
+    expect(agentConfigCertCommand("examples/agent-configs/claude.runwarden-only.json")).toEqual({
+      command: "runwarden",
+      args: [
+        "cert",
+        "agent-config",
+        "examples/agent-configs/claude.runwarden-only.json",
+        "--json"
+      ]
+    });
+  });
+
+  it("summarizes the Rust certifier report without re-evaluating the config", () => {
+    const report = parseAgentConfigCertReport(
+      JSON.stringify({
+        passed: false,
+        exposure: "raw_tool_exposure",
+        findings: ["raw or downstream MCP exposed: shell (bash)"],
+        side_effect_executed: false
       })
-    ).toEqual({ safe: true, findings: [] });
-  });
+    );
 
-  it("rejects raw downstream tools next to runwarden", () => {
-    const result = checkRunwardenOnlyConfig({
-      mcpServers: {
-        runwarden: { command: "runwarden-mcp", args: [] },
-        shell: { command: "shell-mcp", args: [] }
-      }
+    expect(isAgentConfigCertPassed(report)).toBe(false);
+    expect(agentConfigCheckFromCertReport("claude", report)).toEqual({
+      client: "claude",
+      safe: false,
+      exposure: "raw_tool_exposure",
+      findings: ["raw or downstream MCP exposed: shell (bash)"],
+      source: "rust-certifier"
     });
-
-    expect(result.safe).toBe(false);
-    expect(result.findings).toContain("raw or downstream tool exposed: shell");
   });
 
-  it("rejects a poisoned runwarden server entry", () => {
-    const result = checkRunwardenOnlyConfig({
-      mcpServers: {
-        runwarden: { command: "shell-mcp", args: [] }
-      }
+  it("rejects malformed Rust certifier output", () => {
+    expect(() =>
+      parseAgentConfigCertReport(
+        JSON.stringify({
+          passed: true,
+          exposure: "runwarden_only",
+          findings: [],
+          side_effect_executed: true
+        })
+      )
+    ).toThrow("agent config cert report must have side_effect_executed=false");
+  });
+
+  it("keeps custom binary selection outside policy decisions", () => {
+    expect(agentConfigCertCommand("config.json", { binary: "target/debug/runwarden" })).toEqual({
+      command: "target/debug/runwarden",
+      args: ["cert", "agent-config", "config.json", "--json"]
     });
-
-    expect(result.safe).toBe(false);
-    expect(result.findings).toContain("runwarden server command must be runwarden-mcp");
-  });
-
-  it("rejects non-empty or malformed runwarden args", () => {
-    for (const args of [["--stdio"], ""] as const) {
-      const result = checkRunwardenOnlyConfig({
-        mcpServers: {
-          runwarden: { command: "runwarden-mcp", args }
-        }
-      });
-
-      expect(result.safe).toBe(false);
-      expect(result.findings).toContain("runwarden server args must be empty");
-    }
-  });
-
-  it("rejects runwarden transport and process overrides", () => {
-    for (const [field, value] of [
-      ["env", { TOKEN: "secret" }],
-      ["cwd", "/tmp"],
-      ["url", "http://127.0.0.1:3000"],
-      ["transport", "sse"]
-    ] as const) {
-      const result = checkRunwardenOnlyConfig({
-        mcpServers: {
-          runwarden: { command: "runwarden-mcp", args: [], [field]: value }
-        }
-      });
-
-      expect(result.safe).toBe(false);
-      expect(result.findings).toContain(`runwarden server must not define ${field}`);
-    }
   });
 });

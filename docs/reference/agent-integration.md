@@ -23,6 +23,11 @@ Rust assurance `certify_agent_config` implementation for the allow/deny
 decision; CLI output may format the result, but it must not maintain a separate
 agent-config policy.
 
+TypeScript config helpers are non-authoritative. `@runwarden/config-tools` may
+build the `runwarden cert agent-config <path> --json` command and parse or
+summarize that Rust certifier report, but it must not accept a raw agent config
+and make its own safe/unsafe decision.
+
 The TypeScript `RunwardenClient` accepts `launchToken` only for local API
 origins (`localhost`, `.localhost`, `127.0.0.1`, or `::1`) unless
 `allowRemoteLaunchToken` is explicitly set. Do not send launch tokens to remote
