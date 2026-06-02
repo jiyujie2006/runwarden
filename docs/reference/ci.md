@@ -16,6 +16,9 @@ Local gate scripts require `cargo-deny` to be installed and fail with an
 installation hint when it is missing. GitHub Actions installs
 `cargo-deny@0.19.6` before running gate scripts that enforce the checked-in
 dependency policy.
+GitHub Actions installs `pnpm@11.4.0` with a pinned `pnpm/action-setup`
+step before `actions/setup-node` enables `cache: pnpm`; the setup-node cache
+restore path shells out to `pnpm`, so pnpm must already be on `PATH`.
 Workspace crates inherit `publish = false` and a proprietary `LicenseRef-*`
 identifier, then `cargo-deny` treats them as private for license checks;
 third-party crates remain subject to the allowlist in `deny.toml`.
