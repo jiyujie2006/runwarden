@@ -1408,13 +1408,15 @@ pub mod cert {
     fn ci_tiered_gates_check(root: &Path) -> CertCheck {
         let body = fs::read_to_string(root.join(".github/workflows/ci.yml")).unwrap_or_default();
         let passed = active_yaml_contains(&body, "pull_request:")
-            && active_yaml_contains(&body, "schedule:")
+            && active_yaml_contains(&body, "workflow_dispatch:")
+            && !active_yaml_contains(&body, "schedule:")
+            && active_yaml_contains(&body, "manual-full-gate:")
             && active_yaml_contains(&body, "scripts/pr_fast_gate.sh")
             && active_yaml_contains(&body, "scripts/nightly_full_gate.sh");
         check(
             "ci_tiered_gates",
             passed,
-            "CI splits PR fast gate from nightly full gate",
+            "CI runs fast gate on changes and manual full gate on dispatch",
         )
     }
 

@@ -34,7 +34,7 @@ The local scripts fail with a clear installation hint when `cargo-deny` is
 missing. GitHub Actions installs it before invoking the gate scripts.
 
 `scripts/release_gate_local.sh` is self-contained by default. Composite gates
-that immediately regenerate artifacts, such as nightly CI and the release
+that immediately regenerate artifacts, such as manual full CI and the release
 evidence workflow, set `RUNWARDEN_SKIP_ARTIFACT_BUNDLE=1` before invoking the
 release gate, then run `scripts/generate_artifacts.sh` and
 `scripts/artifact_leak_scan.sh` once. `scripts/generate_artifacts.sh` uses
@@ -43,7 +43,8 @@ release gate, then run `scripts/generate_artifacts.sh` and
 CI is tiered:
 
 - PR and push events run `scripts/pr_fast_gate.sh`.
-- Nightly scheduled CI runs `scripts/nightly_full_gate.sh`.
+- Manual CI workflow dispatch runs `scripts/nightly_full_gate.sh`; scheduled CI
+  is disabled.
 - Release evidence runs on tags and workflow dispatch with OS matrix smoke,
   schema generation, artifact bundle generation and verification, leak scan,
   cert, agent-native eval, bench, release build, uploaded assets, and tagged
