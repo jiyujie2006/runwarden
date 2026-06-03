@@ -1,6 +1,8 @@
 # CI
 
 Pull requests and pushes to `main` run `scripts/pr_fast_gate.sh`.
+The full release-style gate is manual-only through the CI workflow's
+`workflow_dispatch` trigger; there is no scheduled CI run.
 
 The gate checks:
 
@@ -19,6 +21,8 @@ dependency policy.
 GitHub Actions installs `pnpm@11.4.0` with a pinned `pnpm/action-setup`
 step before `actions/setup-node` enables `cache: pnpm`; the setup-node cache
 restore path shells out to `pnpm`, so pnpm must already be on `PATH`.
+The artifact leak scan prefers `rg` when it is available and falls back to
+recursive `grep` on runner images that do not ship ripgrep.
 Workspace crates inherit `publish = false` and a proprietary `LicenseRef-*`
 identifier, then `cargo-deny` treats them as private for license checks;
 third-party crates remain subject to the allowlist in `deny.toml`.
@@ -31,7 +35,7 @@ checked-in duplicate exception is `wit-bindgen@0.51.0`, which is pulled by
 The release gate additionally runs cert, eval, scenario golden-corpus eval,
 bench, release smoke, artifact submission, artifact verification, and leak scan.
 By default `scripts/release_gate_local.sh` is self-contained and runs the
-artifact bundle and leak scan. Composite gates such as nightly CI and release
+artifact bundle and leak scan. Composite gates such as manual full CI and release
 evidence set `RUNWARDEN_SKIP_ARTIFACT_BUNDLE=1` before calling it, then run
 `scripts/generate_artifacts.sh` and `scripts/artifact_leak_scan.sh` once so
 schema generation, artifact submission, verification, and leak scanning are not
