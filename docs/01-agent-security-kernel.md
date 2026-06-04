@@ -1,37 +1,75 @@
 # Agent Security Kernel
 
-The Rust kernel owns manifests, sessions, provider registry lookup, policy gates,
-scope gates, egress gates, budget gates, approval gates, trace writing, redaction,
-and report citation enforcement.
+The Rust kernel is the source of truth for Runwarden security decisions. CLI,
+MCP, Local API, WebUI, and TypeScript packages may present state or call Rust
+contracts, but they must not duplicate allow/deny policy.
 
-Implemented enforcement path:
+## Enforcement Path
 
-1. Validate provider exists in the kernel registry.
-2. Validate the session allowlist permits the provider.
-3. Validate scoped roots and reject root escape before side effects.
-4. Validate network egress and deny private/metadata addresses.
-5. Validate argument budgets.
-6. Require an active assessment.
+`KernelEnforcer` evaluates provider calls before trusted side effects:
+
+1. Validate that the provider exists in the kernel registry.
+2. Validate that the session allowlist permits the provider.
+3. Validate scoped roots and reject root escape.
+4. Validate network egress and deny private or local targets.
+5. Validate argument byte budgets.
+6. Require an active assessment when the policy requires one.
 7. Validate actor-bound authz state.
 8. Require and consume a bound approval for high-risk providers.
-9. Return a `ProviderOutcome` with separate policy decision and execution status.
+9. Return a `ProviderOutcome` with separate policy decision and execution
+   status.
 
-Every denial returns `side_effect_executed: false` and a stable `ErrorKind`.
-High-risk approval records are single-use and bind session, provider, action,
-argument hash, authz, and actor. Authz grants derived from session manifests are
-also actor-bound, so another actor cannot reuse the same authz id.
+Every denial must report `side_effect_executed: false` unless a lower-level
+failure happened after execution began.
 
-Trace events are append-only, hash-chain verified, and queryable with provider,
-event-type, `obs_*` prefix, offset/limit, and byte-budget bounds before export
-or report use. Reports cannot render successfully unless every claim cites known
-`obs_*` references that support the claim semantics.
+## Authority and Approval
 
-External providers are modeled as kernel-managed provider manifests. Each
-manifest binds downstream identity, tool identity, transport, declared
-permissions, egress policy, side effects, risk, and a SHA-256 schema pin. The
-provider contract detects schema rug-pulls when the observed schema digest
-differs from the pin, and high-risk or side-effecting providers require approval
-gates, trace, redaction, and resource limits before execution. Stdio adapters
-require a trusted runtime root, exact command allowlisting, and no shell
-interpreter or `-c`; HTTP/SSE adapters reject hostnames that resolve to private
-or local addresses before connecting.
+High-risk approval records are single-use. A matching approval binds:
+
+- session id
+- provider id
+- action
+- argument hash
+- authz id
+- actor id
+
+Session-derived authz grants are actor-bound, so another actor cannot reuse the
+same authz id. Reviewer actions can be submitted through CLI or the Local API,
+but the kernel-owned `ApprovalRecord` remains the source of truth.
+
+## Trace and Reports
+
+Trace events are append-only and hash-chain verified. Trace export supports
+provider, event type, `obs_*` prefix, offset/limit, and byte-budget filters.
+
+Reports cannot render successfully unless every claim cites known `obs_*`
+references that support the claim semantics. Claims may use structured support
+fields for exact provider, event type, decision, execution status, and
+side-effect assertions.
+
+## External Providers
+
+External providers are kernel-managed provider manifests. A manifest binds:
+
+- downstream identity and tool identity
+- provider kind and class
+- transport
+- permissions
+- egress policy
+- side effects and risk
+- schema pin
+- evidence and authority requirements
+
+Stdio MCP adapters require a trusted runtime root, exact command allowlisting,
+no shell-capable command or `-c`, bounded output, timeout cleanup, and
+process-tree cleanup. HTTP and SSE adapters reject private or local address
+resolutions before connecting.
+
+## Maintained References
+
+- [Provider Model](reference/provider-model.md)
+- [Provider Manifest](reference/provider-manifest.md)
+- [Provider Contract](reference/provider-contract.md)
+- [Authority and Session](reference/authority-and-session.md)
+- [Evidence and Accountability](reference/evidence-and-accountability.md)
+- [Threat Model](reference/threat-model.md)

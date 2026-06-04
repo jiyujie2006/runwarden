@@ -1,46 +1,63 @@
 # CI
 
-Pull requests and pushes to `main` run `scripts/pr_fast_gate.sh`.
-The full release-style gate is manual-only through the CI workflow's
-`workflow_dispatch` trigger; there is no scheduled CI run.
+Runwarden uses tiered gates. Pull requests and pushes to `main` run the fast
+gate. Manual workflow dispatch runs the full gate. Release evidence runs on
+tags and manual dispatch.
 
-The gate checks:
+## Fast Gate
 
-- Rust formatting
-- Clippy warnings as errors
-- dependency policy from `deny.toml` via `cargo deny check`
-- Rust workspace tests
-- generated TypeScript contract drift
-- pnpm tests
-- pnpm builds
+`scripts/pr_fast_gate.sh` runs:
 
-Local gate scripts require `cargo-deny` to be installed and fail with an
-installation hint when it is missing. GitHub Actions installs
-`cargo-deny@0.19.6` before running gate scripts that enforce the checked-in
-dependency policy.
-GitHub Actions installs `pnpm@11.4.0` with a pinned `pnpm/action-setup`
-step before `actions/setup-node` enables `cache: pnpm`; the setup-node cache
-restore path shells out to `pnpm`, so pnpm must already be on `PATH`.
-The artifact leak scan prefers `rg` when it is available and falls back to
-recursive `grep` on runner images that do not ship ripgrep.
-Workspace crates inherit `publish = false` and a proprietary `LicenseRef-*`
-identifier, then `cargo-deny` treats them as private for license checks;
-third-party crates remain subject to the allowlist in `deny.toml`.
-The bans policy still reports duplicate crate versions by default; the only
-checked-in duplicate exception is `wit-bindgen@0.51.0`, which is pulled by
-`getrandom` through target-specific WASI preview3 support while the same
-`getrandom` release also carries a WASI preview2 dependency on
-`wit-bindgen@0.57.1`.
+- `cargo fmt --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo deny check`
+- `cargo test --workspace`
+- `scripts/check_ts_contracts.sh`
+- `pnpm test`
+- `pnpm build`
 
-The release gate additionally runs cert, eval, scenario golden-corpus eval,
-bench, release smoke, artifact submission, artifact verification, and leak scan.
-By default `scripts/release_gate_local.sh` is self-contained and runs the
-artifact bundle and leak scan. Composite gates such as manual full CI and release
-evidence set `RUNWARDEN_SKIP_ARTIFACT_BUNDLE=1` before calling it, then run
+`scripts/dev_gate.sh` currently runs the same local checks.
+
+## Full and Release Gates
+
+`scripts/release_gate_local.sh` adds:
+
+- `target/debug/runwarden check --strict`
+- `target/debug/runwarden cert all --json`
+- `target/debug/runwarden eval all --json`
+- `target/debug/runwarden eval scenarios --json`
+- `target/debug/runwarden eval agent-native --json`
+- `target/debug/runwarden bench run --json`
+- `target/debug/runwarden release smoke --json`
+- artifact submission and verification
+- artifact leak scan
+
+Composite gates such as manual full CI and release evidence set
+`RUNWARDEN_SKIP_ARTIFACT_BUNDLE=1` before calling the release gate, then run
 `scripts/generate_artifacts.sh` and `scripts/artifact_leak_scan.sh` once so
-schema generation, artifact submission, verification, and leak scanning are not
-duplicated.
+artifact generation is not duplicated.
+
+## Tooling
+
+Local gate scripts require `cargo-deny` and fail with an installation hint when
+it is missing:
+
+```bash
+cargo install cargo-deny --version 0.19.6 --locked
+```
+
+GitHub Actions installs `cargo-deny@0.19.6`, `pnpm@11.4.0`, and Node before
+running gate scripts. `pnpm/action-setup` runs before `actions/setup-node`
+enables `cache: pnpm` because setup-node shells out to `pnpm`.
+
+The artifact leak scan prefers `rg` and falls back to recursive `grep`.
+
+Workspace crates inherit `publish = false` and a proprietary `LicenseRef-*`
+identifier. `cargo-deny` treats them as private for license checks; third-party
+crates remain subject to the allowlist in `deny.toml`.
+
+## Workflow Pinning
 
 Workflow actions are pinned to immutable commit SHAs. Each pinned `uses:` entry
 keeps a nearby comment with the upstream action and tag or branch for human
-readability; update both the SHA and comment deliberately when bumping actions.
+readability. Update both the SHA and comment deliberately when bumping actions.

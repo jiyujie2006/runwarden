@@ -4,8 +4,17 @@ All notable changes to Runwarden are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Reworked repository documentation around a concise top-level README, grouped
+  docs index, persistent repository review, expanded reference pages, and
+  scenario/example README guidance.
+
 ### Fixed
 
+- Fixed Windows workspace test failures by escaping manifest fixture paths,
+  preserving scoped-root evidence paths relative to their configured root, and
+  making provider runtime assertions platform-aware.
 - Fixed Reviewer Console launch bundles to use file `launch_url` values, reject
   artifact path escapes, render pending approval state, and submit browser
   approve/deny decisions through the token-protected Local API.

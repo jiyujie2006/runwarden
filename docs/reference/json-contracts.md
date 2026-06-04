@@ -1,19 +1,36 @@
 # JSON Contracts
 
-Runwarden JSON contracts are stored under `schemas/` and are generated from Rust types where possible.
+Runwarden JSON contracts are stored under `schemas/` and are generated from
+Rust types where possible. Rust is the source of truth.
 
-Important contracts:
+## Schema Inventory
 
-- provider call
-- provider outcome
-- operation result
-- approval record
-- trace event
-- assessment manifest
-- session manifest
-- provider manifest
-- provider contract
-- artifact manifest
-- report
+- `provider-call.schema.json`
+- `provider-outcome.schema.json`
+- `operation-result.schema.json`
+- `approval-record.schema.json`
+- `trace-event.schema.json`
+- `assessment-manifest.schema.json`
+- `session-manifest.schema.json`
+- `provider-manifest.schema.json`
+- `provider-contract.schema.json`
+- `artifact-manifest.schema.json`
+- `report.schema.json`
 
-Schema drift is caught by `cargo test -p runwarden-kernel --test contract_schemas`.
+## Drift Checks
+
+Schema drift is caught by:
+
+```bash
+cargo test -p runwarden-kernel --test contract_schemas
+```
+
+TypeScript contract drift is caught by:
+
+```bash
+scripts/check_ts_contracts.sh
+```
+
+Do not hand-edit generated TypeScript contract declarations. Regenerate them
+from Rust schemas through the pipeline documented in
+[Rust Kernel and TypeScript Interaction](rust-kernel-ts-interaction.md).

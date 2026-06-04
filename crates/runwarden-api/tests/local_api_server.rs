@@ -70,6 +70,7 @@ fn manifest_body_with_root(
         .map(|provider| format!("\"{provider}\""))
         .collect::<Vec<_>>()
         .join(", ");
+    let root_path = toml_basic_string(root_path);
     body["manifest_toml"] = json!(format!(
         r#"
 version = "1"
@@ -79,13 +80,31 @@ provider_allowlist = [{allowlist}]
 
 [[roots]]
 name = "evidence"
-path = "{root_path}"
+path = {root_path}
 
 [active_assessment]
 enabled = true
 "#
     ));
     body
+}
+
+fn toml_basic_string(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len() + 2);
+    escaped.push('"');
+    for ch in value.chars() {
+        match ch {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            ch if ch.is_control() => escaped.push_str(&format!("\\u{:04X}", ch as u32)),
+            ch => escaped.push(ch),
+        }
+    }
+    escaped.push('"');
+    escaped
 }
 
 fn trace_event() -> TraceEvent {

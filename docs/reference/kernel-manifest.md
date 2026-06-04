@@ -1,8 +1,11 @@
 # Kernel Manifest
 
-Kernel manifests are represented by assessment and session manifests. They define the policy envelope used by `KernelEnforcer`.
+Kernel manifests are represented by assessment and session manifests. Together
+they define the policy envelope used by `KernelEnforcer`.
 
-Important fields:
+## Policy Fields
+
+Important runtime fields:
 
 - provider allowlist
 - scoped roots
@@ -12,4 +15,15 @@ Important fields:
 - authorization
 - active assessment
 
-The session manifest is derived from the assessment manifest and is the runtime policy input.
+## Assessment to Session
+
+The assessment manifest is the human-authored TOML input. The session manifest
+is the runtime policy input derived from that assessment.
+
+```bash
+runwarden session create --manifest <assessment.toml> --session <id> --json
+runwarden session inspect --session <id> --json
+```
+
+Session-backed provider calls use the session's allowlist, roots, authz, actor,
+and active-assessment state before side effects.

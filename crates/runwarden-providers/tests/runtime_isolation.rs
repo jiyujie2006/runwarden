@@ -130,8 +130,8 @@ fn safe_request_returns_sanitized_launch_plan() {
     let plan = ProviderRuntime::prepare(&policy, &request).expect("safe request prepares");
 
     assert_eq!(
-        plan.cwd.to_string_lossy(),
-        "/srv/runwarden/providers/example"
+        plan.cwd,
+        std::path::PathBuf::from("/srv/runwarden/providers/example")
     );
     assert_eq!(
         plan.env.get("RUNWARDEN_PROVIDER_TOKEN").map(String::as_str),

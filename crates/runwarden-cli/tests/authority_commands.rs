@@ -1,8 +1,24 @@
 use std::{fs, process::Command};
 
-use runwarden_kernel::authority::{ApprovalBinding, ApprovalRecord, ApprovalState};
-use runwarden_kernel::evidence::hex_sha256;
 use tempfile::tempdir;
+
+fn toml_basic_string(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len() + 2);
+    escaped.push('"');
+    for ch in value.chars() {
+        match ch {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            ch if ch.is_control() => escaped.push_str(&format!("\\u{:04X}", ch as u32)),
+            ch => escaped.push(ch),
+        }
+    }
+    escaped.push('"');
+    escaped
+}
 
 #[test]
 fn authority_create_and_inspect_manage_bound_approval_records() {
@@ -110,12 +126,12 @@ provider_allowlist = ["external.mcp.browser.open_page"]
 
 [[roots]]
 name = "workspace"
-path = "{}"
+path = {}
 
 [active_assessment]
 enabled = true
 "#,
-            dir.path().display()
+            toml_basic_string(&dir.path().to_string_lossy())
         ),
     )
     .expect("write session manifest");
@@ -269,12 +285,12 @@ provider_allowlist = ["external.mcp.browser.open_page"]
 
 [[roots]]
 name = "workspace"
-path = "{}"
+path = {}
 
 [active_assessment]
 enabled = true
 "#,
-            workspace.display()
+            toml_basic_string(&workspace.to_string_lossy())
         ),
     )
     .expect("write session manifest");

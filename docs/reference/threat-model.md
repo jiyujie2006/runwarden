@@ -1,19 +1,36 @@
 # Threat Model
 
-Runwarden assumes the agent, prompts, retrieved content, downstream tools, and report drafts can be adversarial or compromised.
+Runwarden assumes the agent, prompts, retrieved content, downstream tools, and
+report drafts can be adversarial or compromised.
 
-Primary threats:
+## Primary Threats
 
-- raw tool exposure bypassing the kernel
-- prompt injection that changes scope or approvals
-- external MCP schema or identity drift
-- private egress and credential exfiltration
-- uncited report fabrication
-- trace tampering
-- artifact leakage
+- Raw tool exposure bypassing the kernel.
+- Prompt injection that changes scope, target, or approval intent.
+- Tool injection through external MCP schema or identity drift.
+- Root escape through crafted paths or symlinks.
+- Private egress, loopback egress, metadata-service access, or credential
+  exfiltration.
+- Approval replay or approval binding mismatch.
+- Uncited report fabrication.
+- Trace tampering.
+- Artifact leakage.
 
-The kernel mitigates these through allowlists, scoped roots, egress checks,
-schema pins, approval records, trace verification, report linting, and artifact
-redaction checks. External MCP HTTP/SSE adapters also deny private or local IP
-literals and resolutions before connecting so downstream tool endpoints cannot
-be used for loopback or metadata-service egress.
+## Mitigations
+
+Runwarden mitigates these through:
+
+- provider allowlists
+- scoped roots
+- private and local egress checks
+- schema pins
+- manifest and provider certification
+- actor-bound authz
+- bound single-use approval records
+- trace hash-chain verification
+- report citation linting
+- artifact redaction sidecars and leak scan
+
+External MCP HTTP/SSE adapters deny private or local IP literals and
+resolutions before connecting so downstream tool endpoints cannot be used for
+loopback or metadata-service egress.

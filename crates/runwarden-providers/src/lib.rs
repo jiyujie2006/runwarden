@@ -800,7 +800,7 @@ pub mod evidence {
         paths.sort();
 
         for path in paths {
-            inspect_path(&canonical_root, &path, &policy, &mut result);
+            inspect_path(root, &canonical_root, &path, &policy, &mut result);
         }
 
         Ok(result)
@@ -821,13 +821,15 @@ pub mod evidence {
     }
 
     fn inspect_path(
+        root: &Path,
         canonical_root: &Path,
         path: &Path,
         policy: &EvidenceInspectPolicy,
         result: &mut EvidenceInspection,
     ) {
         let relative_path = path
-            .strip_prefix(canonical_root)
+            .strip_prefix(root)
+            .or_else(|_| path.strip_prefix(canonical_root))
             .or_else(|_| path.strip_prefix(canonical_root.parent().unwrap_or(canonical_root)))
             .map(format_path)
             .unwrap_or_else(|_| format_path(path));

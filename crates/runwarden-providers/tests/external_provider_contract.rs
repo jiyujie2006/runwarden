@@ -1,4 +1,4 @@
-use std::fs;
+use std::{fs, path::Path};
 
 use runwarden_kernel::{ProviderKind, ProviderRisk};
 use runwarden_providers::external::{
@@ -7,8 +7,16 @@ use runwarden_providers::external::{
 };
 use tempfile::tempdir;
 
+fn json_string(value: impl AsRef<str>) -> String {
+    serde_json::to_string(value.as_ref()).expect("json string")
+}
+
+fn json_path(path: &Path) -> String {
+    json_string(path.to_string_lossy())
+}
+
 #[cfg(unix)]
-fn write_executable_script(path: &std::path::Path, content: &str) {
+fn write_executable_script(path: &Path, content: &str) {
     use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
 
@@ -151,6 +159,7 @@ fn external_shell_manifest_requires_command_allowlist_and_working_root() {
 #[test]
 fn external_mcp_stdio_adapter_executes_framed_downstream_call() {
     let dir = tempdir().expect("tempdir");
+    let working_root = json_path(dir.path());
     let manifest = load_provider_manifest(&format!(
         r#"{{
           "schema_version": "1",
@@ -165,7 +174,7 @@ fn external_mcp_stdio_adapter_executes_framed_downstream_call() {
           "declared_permissions": ["process_spawn"],
           "allowed_origins": [],
           "command_allowlist": ["cat"],
-          "working_root": "{}",
+          "working_root": {},
           "schema_pin": {{
             "algorithm": "sha256",
             "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
@@ -173,7 +182,7 @@ fn external_mcp_stdio_adapter_executes_framed_downstream_call() {
           }},
           "observed_schema": {{"type": "object"}}
         }}"#,
-        dir.path().display()
+        working_root
     ))
     .expect("manifest parses");
     let request = ExternalMcpAdapterRequest {
@@ -206,6 +215,7 @@ fn external_mcp_stdio_adapter_executes_framed_downstream_call() {
 #[test]
 fn external_mcp_request_transport_must_match_manifest() {
     let dir = tempdir().expect("tempdir");
+    let working_root = json_path(dir.path());
     let manifest = load_provider_manifest(&format!(
         r#"{{
           "schema_version": "1",
@@ -220,7 +230,7 @@ fn external_mcp_request_transport_must_match_manifest() {
           "declared_permissions": ["process_spawn"],
           "allowed_origins": [],
           "command_allowlist": ["cat"],
-          "working_root": "{}",
+          "working_root": {},
           "schema_pin": {{
             "algorithm": "sha256",
             "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
@@ -228,7 +238,7 @@ fn external_mcp_request_transport_must_match_manifest() {
           }},
           "observed_schema": {{"type": "object"}}
         }}"#,
-        dir.path().display()
+        working_root
     ))
     .expect("manifest parses");
     let request = ExternalMcpAdapterRequest {
@@ -251,6 +261,7 @@ fn external_mcp_request_transport_must_match_manifest() {
 #[test]
 fn external_mcp_manifest_transport_required_for_execution() {
     let dir = tempdir().expect("tempdir");
+    let working_root = json_path(dir.path());
     let manifest = load_provider_manifest(&format!(
         r#"{{
           "schema_version": "1",
@@ -264,7 +275,7 @@ fn external_mcp_manifest_transport_required_for_execution() {
           "declared_permissions": ["process_spawn"],
           "allowed_origins": [],
           "command_allowlist": ["cat"],
-          "working_root": "{}",
+          "working_root": {},
           "schema_pin": {{
             "algorithm": "sha256",
             "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
@@ -272,7 +283,7 @@ fn external_mcp_manifest_transport_required_for_execution() {
           }},
           "observed_schema": {{"type": "object"}}
         }}"#,
-        dir.path().display()
+        working_root
     ))
     .expect("manifest parses");
     let request = ExternalMcpAdapterRequest {
@@ -296,6 +307,7 @@ fn external_mcp_stdio_rejects_request_args_before_spawn() {
     let runtime_root = dir.path().join("runtime");
     fs::create_dir(&runtime_root).expect("runtime root");
     fs::write(dir.path().join("outside-secret.txt"), "outside secret").expect("outside secret");
+    let working_root = json_path(&runtime_root);
     let manifest = load_provider_manifest(&format!(
         r#"{{
           "schema_version": "1",
@@ -310,7 +322,7 @@ fn external_mcp_stdio_rejects_request_args_before_spawn() {
           "declared_permissions": ["process_spawn"],
           "allowed_origins": [],
           "command_allowlist": ["cat"],
-          "working_root": "{}",
+          "working_root": {},
           "schema_pin": {{
             "algorithm": "sha256",
             "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
@@ -318,7 +330,7 @@ fn external_mcp_stdio_rejects_request_args_before_spawn() {
           }},
           "observed_schema": {{"type": "object"}}
         }}"#,
-        runtime_root.display()
+        working_root
     ))
     .expect("manifest parses");
     let request = ExternalMcpAdapterRequest {
@@ -365,6 +377,7 @@ fn external_mcp_stdio_rejects_symlink_escape_args() {
         runtime_root.join("secret-link"),
     )
     .expect("symlink");
+    let working_root = json_path(&runtime_root);
     let manifest = load_provider_manifest(&format!(
         r#"{{
           "schema_version": "1",
@@ -379,7 +392,7 @@ fn external_mcp_stdio_rejects_symlink_escape_args() {
           "declared_permissions": ["process_spawn"],
           "allowed_origins": [],
           "command_allowlist": ["cat"],
-          "working_root": "{}",
+          "working_root": {},
           "schema_pin": {{
             "algorithm": "sha256",
             "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
@@ -387,7 +400,7 @@ fn external_mcp_stdio_rejects_symlink_escape_args() {
           }},
           "observed_schema": {{"type": "object"}}
         }}"#,
-        runtime_root.display()
+        working_root
     ))
     .expect("manifest parses");
     let request = ExternalMcpAdapterRequest {
@@ -446,13 +459,17 @@ fn external_mcp_stdio_adapter_requires_trusted_runtime_root() {
 
     assert_eq!(result["decision"], "denied");
     assert_eq!(result["execution_status"], "not_executed");
+    #[cfg(unix)]
     assert_eq!(result["error_kind"], "root_escape");
+    #[cfg(not(unix))]
+    assert_eq!(result["error_kind"], "provider_not_allowed");
     assert_eq!(result["side_effect_executed"], false);
 }
 
 #[test]
 fn external_mcp_stdio_adapter_rejects_shell_capable_command() {
     let dir = tempdir().expect("tempdir");
+    let working_root = json_path(dir.path());
     let manifest = load_provider_manifest(&format!(
         r#"{{
           "schema_version": "1",
@@ -467,7 +484,7 @@ fn external_mcp_stdio_adapter_rejects_shell_capable_command() {
           "declared_permissions": ["process_spawn"],
           "allowed_origins": [],
           "command_allowlist": ["sh"],
-          "working_root": "{}",
+          "working_root": {},
           "schema_pin": {{
             "algorithm": "sha256",
             "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
@@ -475,7 +492,7 @@ fn external_mcp_stdio_adapter_rejects_shell_capable_command() {
           }},
           "observed_schema": {{"type": "object"}}
         }}"#,
-        dir.path().display()
+        working_root
     ))
     .expect("manifest parses");
     let request = ExternalMcpAdapterRequest {
@@ -758,6 +775,7 @@ fn external_mcp_http_adapter_rejects_control_characters_in_path() {
 #[test]
 fn external_mcp_stdio_requires_exact_allowlisted_command() {
     let dir = tempdir().expect("tempdir");
+    let working_root = json_path(dir.path());
     let manifest = load_provider_manifest(&format!(
         r#"{{
           "schema_version": "1",
@@ -772,7 +790,7 @@ fn external_mcp_stdio_requires_exact_allowlisted_command() {
           "declared_permissions": ["process_spawn"],
           "allowed_origins": [],
           "command_allowlist": ["sh"],
-          "working_root": "{}",
+          "working_root": {},
           "schema_pin": {{
             "algorithm": "sha256",
             "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
@@ -780,7 +798,7 @@ fn external_mcp_stdio_requires_exact_allowlisted_command() {
           }},
           "observed_schema": {{"type": "object"}}
         }}"#,
-        dir.path().display()
+        working_root
     ))
     .expect("manifest parses");
     let request = ExternalMcpAdapterRequest {
@@ -801,6 +819,7 @@ fn external_mcp_stdio_requires_exact_allowlisted_command() {
 #[test]
 fn external_mcp_stdio_rejects_network_capable_manifest_before_spawn() {
     let dir = tempdir().expect("tempdir");
+    let working_root = json_path(dir.path());
     let manifest = load_provider_manifest(&format!(
         r#"{{
           "schema_version": "1",
@@ -815,7 +834,7 @@ fn external_mcp_stdio_rejects_network_capable_manifest_before_spawn() {
           "declared_permissions": ["network", "process_spawn"],
           "allowed_origins": ["https://example.com"],
           "command_allowlist": ["cat"],
-          "working_root": "{}",
+          "working_root": {},
           "schema_pin": {{
             "algorithm": "sha256",
             "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
@@ -823,7 +842,7 @@ fn external_mcp_stdio_rejects_network_capable_manifest_before_spawn() {
           }},
           "observed_schema": {{"type": "object"}}
         }}"#,
-        dir.path().display()
+        working_root
     ))
     .expect("manifest parses");
     let request = ExternalMcpAdapterRequest {
@@ -846,6 +865,8 @@ fn external_mcp_stdio_enforces_timeout_while_waiting() {
     let dir = tempdir().expect("tempdir");
     let script = dir.path().join("sleep-adapter");
     write_executable_script(&script, "#!/bin/sh\ncat >/dev/null & sleep 1\n");
+    let command = json_path(&script);
+    let working_root = json_path(dir.path());
     let manifest = load_provider_manifest(&format!(
         r#"{{
           "schema_version": "1",
@@ -859,8 +880,8 @@ fn external_mcp_stdio_enforces_timeout_while_waiting() {
           "tool_identity": "open_page",
           "declared_permissions": ["process_spawn"],
           "allowed_origins": [],
-          "command_allowlist": ["{}"],
-          "working_root": "{}",
+          "command_allowlist": [{}],
+          "working_root": {},
           "schema_pin": {{
             "algorithm": "sha256",
             "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
@@ -868,8 +889,7 @@ fn external_mcp_stdio_enforces_timeout_while_waiting() {
           }},
           "observed_schema": {{"type": "object"}}
         }}"#,
-        script.display(),
-        dir.path().display()
+        command, working_root
     ))
     .expect("manifest parses");
     let request = ExternalMcpAdapterRequest {
@@ -899,6 +919,8 @@ fn external_mcp_stdio_enforces_output_limit_while_reading() {
     let dir = tempdir().expect("tempdir");
     let script = dir.path().join("output-adapter");
     write_executable_script(&script, "#!/bin/sh\ncat >/dev/null\nprintf 1234567890\n");
+    let command = json_path(&script);
+    let working_root = json_path(dir.path());
     let manifest = load_provider_manifest(&format!(
         r#"{{
           "schema_version": "1",
@@ -912,8 +934,8 @@ fn external_mcp_stdio_enforces_output_limit_while_reading() {
           "tool_identity": "open_page",
           "declared_permissions": ["process_spawn"],
           "allowed_origins": [],
-          "command_allowlist": ["{}"],
-          "working_root": "{}",
+          "command_allowlist": [{}],
+          "working_root": {},
           "schema_pin": {{
             "algorithm": "sha256",
             "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
@@ -921,8 +943,7 @@ fn external_mcp_stdio_enforces_output_limit_while_reading() {
           }},
           "observed_schema": {{"type": "object"}}
         }}"#,
-        script.display(),
-        dir.path().display()
+        command, working_root
     ))
     .expect("manifest parses");
     let request = ExternalMcpAdapterRequest {
@@ -957,6 +978,8 @@ fn external_mcp_stdio_cleans_process_group_after_success() {
         &script,
         "#!/bin/sh\ncat >/dev/null\nsleep 60 >/dev/null 2>/dev/null </dev/null &\necho $!\n",
     );
+    let command = json_path(&script);
+    let working_root = json_path(dir.path());
     let manifest = load_provider_manifest(&format!(
         r#"{{
           "schema_version": "1",
@@ -970,8 +993,8 @@ fn external_mcp_stdio_cleans_process_group_after_success() {
           "tool_identity": "open_page",
           "declared_permissions": ["process_spawn"],
           "allowed_origins": [],
-          "command_allowlist": ["{}"],
-          "working_root": "{}",
+          "command_allowlist": [{}],
+          "working_root": {},
           "schema_pin": {{
             "algorithm": "sha256",
             "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
@@ -979,8 +1002,7 @@ fn external_mcp_stdio_cleans_process_group_after_success() {
           }},
           "observed_schema": {{"type": "object"}}
         }}"#,
-        script.display(),
-        dir.path().display()
+        command, working_root
     ))
     .expect("manifest parses");
     let request = ExternalMcpAdapterRequest {

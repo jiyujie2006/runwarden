@@ -1,39 +1,55 @@
 # Evaluation Results
 
-Evaluation baselines and release evidence are produced by `runwarden eval all`,
-`runwarden eval agent-native`, `runwarden cert all`, and `runwarden bench run`.
+Runwarden evaluation evidence is produced by `runwarden eval all`,
+`runwarden eval scenarios`, `runwarden eval agent-native`, `runwarden cert all`,
+and `runwarden bench run`.
 
-Implemented assurance metrics:
+## Assurance Metrics
 
-- `trace_completeness`: expected `obs_*` references cited by the report divided
-  by all expected `obs_*` references.
-- `report_citation_accuracy`: report claims with at least one known `obs_*`
-  citation divided by all report claims.
+| Metric | Meaning | Passing baseline |
+| --- | --- | --- |
+| `trace_completeness` | Expected `obs_*` references cited by the report divided by all expected `obs_*` references. | `1.0` |
+| `report_citation_accuracy` | Report claims with at least one known supporting `obs_*` citation divided by all report claims. | `1.0` |
 
-The strict gate fails when either metric is below `1.0`, or when report lint
-finds an uncited claim or an unknown `obs_*` reference.
+The strict gate fails when either metric is below `1.0`, when report lint finds
+an uncited claim, or when a claim cites an unknown or semantically unsupported
+`obs_*` reference.
 
-Implemented benchmark metrics:
+## Scenario Metrics
 
-- `scenario_count`: number of scenario directories under `scenarios/`.
-- `expected_denial_cases`: expected denial fixtures used for provider mediation.
-- `provider_mediation_rate`: expected external-tool denials that are mediated
-  through the Runwarden provider boundary.
-- `policy_denial_correctness`: expected-denial fixtures whose decision is
-  `denied`.
+| Metric | Meaning | Passing baseline |
+| --- | --- | --- |
+| `scenario_count` | Number of scenario directories under `scenarios/`. | Non-zero and stable for the checked-in corpus. |
+| `expected_denial_cases` | Golden denial fixtures used for mediation checks. | Non-zero and stable for the checked-in corpus. |
+| `provider_mediation_rate` | Expected external-tool denials mediated through the Runwarden provider boundary. | `1.0` |
+| `policy_denial_correctness` | Expected denial fixtures whose decision is `denied`. | `1.0` |
 
-Current release baseline:
+Run:
 
 ```bash
 target/debug/runwarden bench run --json
+target/debug/runwarden eval scenarios --json
 ```
 
-The expected baseline is `provider_mediation_rate == 1.0` and
-`policy_denial_correctness == 1.0`.
+## Agent-Native Metrics
 
-Agent-native evaluation checks the default safe and unsafe agent configs:
+Agent-native evaluation checks default safe and unsafe agent configs:
 
-- runwarden-only configs must expose only `runwarden-mcp`.
-- unsafe raw filesystem/shell configs must be blocked as raw tool exposure.
-- release baseline expects `raw_tool_block_rate == 1.0` and
-  `runwarden_only_allow_rate == 1.0`.
+- Runwarden-only configs must expose only `runwarden-mcp`.
+- Raw filesystem and shell configs must be blocked as raw tool exposure.
+- Safe configs may include empty `args: []`.
+- Non-empty or malformed `args`, `env`, `cwd`, `url`, and `transport` overrides
+  are rejected.
+
+The expected release baseline is:
+
+```text
+raw_tool_block_rate == 1.0
+runwarden_only_allow_rate == 1.0
+```
+
+Run:
+
+```bash
+target/debug/runwarden eval agent-native --json
+```
