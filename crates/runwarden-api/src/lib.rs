@@ -2135,24 +2135,29 @@ fn reviewer_console_html(
   <script src="{}" defer></script>
 </head>
 <body>
-<main class="runwarden-workbench" data-local-api-url="{}">
+<main class="runwarden-workbench assurance-ops-shell" data-local-api-url="{}">
   {}
   <section class="workbench-main" id="dashboard" aria-label="Reviewer workspace">
     {}
     <header class="top-status-strip" role="status" aria-label="Assessment status">
       {}
     </header>
-    <div class="workspace-grid">
+    <section class="assurance-ops-layout">
       {}
       {}
-      <article class="module approval-module {}" id="approval-queue"><div class="module-head"><h2>Approval Queue</h2><span class="state-badge">{} pending</span></div><p>{}</p>{}</article>
-      {}
-      {}
-      {}
-      {}
-      {}
-      {}
-    </div>
+      <article class="module approval-module review-queue-panel {}" id="approval-queue" data-filter-status="all"><div class="module-head"><h2>Approval Queue</h2><span class="state-badge">{} pending</span></div>{}<p>{}</p>{}<p class="queue-empty" data-queue-empty hidden>No matching approvals.</p></article>
+      <section class="workspace-grid supporting-modules">
+        {}
+        {}
+        {}
+        {}
+        {}
+        {}
+        {}
+        {}
+        {}
+      </section>
+    </section>
   </section>
   {}
 </main>
@@ -2193,6 +2198,42 @@ fn reviewer_console_html(
             render_status_pill("Gates", "missing", "review"),
         ]
         .join(""),
+        render_assurance_map(
+            pending.len(),
+            if pending.is_empty() {
+                "incomplete"
+            } else {
+                "requires_review"
+            },
+            "missing",
+            module_state(!artifacts.report_files.is_empty()),
+            module_state(!artifacts.artifact_ids.is_empty()),
+            module_state(!artifacts.assurance_files.is_empty()),
+        ),
+        render_evidence_timeline(
+            &session_label,
+            if pending.is_empty() {
+                "incomplete"
+            } else {
+                "requires_review"
+            },
+            "missing",
+            pending
+                .first()
+                .map(|approval| approval.approval_id.as_str())
+                .unwrap_or("no pending approval"),
+            &artifact_message,
+            &assurance_message,
+        ),
+        if pending.is_empty() {
+            "module-empty"
+        } else {
+            "module-partial"
+        },
+        pending.len(),
+        render_queue_toolbar(),
+        escape_html_text(&approvals_message),
+        approval_rows,
         render_module(
             "agent-boundary",
             "Agent Boundary",
@@ -2207,14 +2248,7 @@ fn reviewer_console_html(
             module_state(provider_count > 0),
             optional_count(provider_count),
         ),
-        if pending.is_empty() {
-            "module-empty"
-        } else {
-            "module-partial"
-        },
-        pending.len(),
-        escape_html_text(&approvals_message),
-        approval_rows,
+        render_approval_summary(pending.len()),
         render_module(
             "trace",
             "Trace Explorer",
@@ -2328,7 +2362,7 @@ fn render_nav() -> String {
 }
 
 fn render_command_bar() -> &'static str {
-    r#"<header class="command-bar"><div><p class="eyebrow">Kernel Review</p><h1>Reviewer Console</h1></div><div class="command-meter"><span>Trusted side effects</span><strong>approval-gated</strong></div></header>"#
+    r#"<header class="command-bar"><div><p class="eyebrow">Assurance Operations</p><h1>Reviewer Console</h1></div><div class="command-meter"><span>Trusted side effects</span><strong>approval-gated by kernel evidence</strong></div></header>"#
 }
 
 fn render_status_pill(label: &str, value: &str, tone: &str) -> String {
@@ -2337,6 +2371,87 @@ fn render_status_pill(label: &str, value: &str, tone: &str) -> String {
         escape_attr(tone),
         escape_html_text(label),
         escape_html_text(value)
+    )
+}
+
+fn render_assurance_map(
+    pending_count: usize,
+    risk_state: &str,
+    trace_state: &str,
+    report_state: &str,
+    artifact_state: &str,
+    assurance_state: &str,
+) -> String {
+    let review_body = if pending_count == 0 {
+        "No pending high-risk actions.".to_string()
+    } else {
+        format!(
+            "{pending_count} high-risk {} require visible context, reviewer identity, and reason.",
+            plural(pending_count, "action", "actions")
+        )
+    };
+    format!(
+        r#"<section class="assurance-map" id="assurance-map" aria-label="Assurance evidence map"><div class="module-head"><h2>Assurance Map</h2><span class="state-badge">{pending_count} pending review</span></div><div class="assurance-nodes"><button type="button" class="assurance-node tone-info" data-detail-type="Kernel" data-detail-title="Kernel decision boundary" data-detail-body="Provider calls remain mediated by Runwarden kernel decisions before side effects."><span>Kernel</span><strong>{}</strong></button><button type="button" class="assurance-node tone-review" data-detail-type="Review" data-detail-title="Reviewer approval binding" data-detail-body="{}"><span>Review</span><strong>{pending_count} pending</strong></button><button type="button" class="assurance-node tone-success" data-detail-type="Trace" data-detail-title="Trace integrity" data-detail-body="Trace status is {}; report and approval claims must cite obs refs."><span>Trace</span><strong>{}</strong></button><button type="button" class="assurance-node tone-info" data-detail-type="Artifacts" data-detail-title="Artifacts and reports" data-detail-body="Reports are {}; artifacts are {}; assurance is {}."><span>Evidence</span><strong>{}</strong></button></div></section>"#,
+        escape_html_text(risk_state),
+        escape_attr(&review_body),
+        escape_attr(trace_state),
+        escape_html_text(trace_state),
+        escape_attr(report_state),
+        escape_attr(artifact_state),
+        escape_attr(assurance_state),
+        escape_html_text(assurance_state),
+    )
+}
+
+fn render_evidence_timeline(
+    session_label: &str,
+    risk_state: &str,
+    trace_state: &str,
+    approval_label: &str,
+    artifact_message: &str,
+    assurance_message: &str,
+) -> String {
+    let items = [
+        ("session", session_label),
+        ("kernel", risk_state),
+        ("trace", trace_state),
+        ("approval", approval_label),
+        ("artifact", artifact_message),
+        ("assurance", assurance_message),
+    ]
+    .into_iter()
+    .map(|(label, value)| {
+        format!(
+            r#"<li><span class="timeline-dot" aria-hidden="true"></span><strong>{}</strong><code>{}</code></li>"#,
+            escape_html_text(label),
+            escape_html_text(value)
+        )
+    })
+    .collect::<Vec<_>>()
+    .join("");
+    format!(
+        r#"<section class="evidence-timeline" id="evidence-timeline" aria-label="Evidence timeline"><div class="module-head"><h2>Evidence Timeline</h2><span class="state-badge">obs chain</span></div><ol>{items}</ol></section>"#
+    )
+}
+
+fn render_queue_toolbar() -> &'static str {
+    r#"<div class="queue-toolbar" role="search"><label class="queue-search">Search approvals<input type="search" data-approval-search placeholder="Provider, action, obs, hash"></label><div class="queue-filters" aria-label="Approval filters"><button type="button" data-approval-filter="all" aria-pressed="true">All</button><button type="button" data-approval-filter="requires_review">Review</button><button type="button" data-approval-filter="network">Network</button><button type="button" data-approval-filter="artifact">Artifact</button></div></div>"#
+}
+
+fn render_approval_summary(pending_count: usize) -> String {
+    let message = if pending_count == 0 {
+        "No reviewer action is currently required."
+    } else {
+        "Pending actions require visible context, reviewer identity, and reason before approval is consumed."
+    };
+    format!(
+        r#"<article class="module module-{}" id="approval-summary"><div class="module-head"><h2>Approval Summary</h2><span class="state-badge">{pending_count} pending</span></div><p>{}</p></article>"#,
+        if pending_count == 0 {
+            "empty"
+        } else {
+            "partial"
+        },
+        escape_html_text(message)
     )
 }
 
@@ -2370,8 +2485,19 @@ fn optional_count(count: usize) -> Option<usize> {
 }
 
 fn render_approval_row(approval: &ApprovalRecord, selected: bool) -> String {
+    let search_text = [
+        approval.approval_id.as_str(),
+        approval.binding.provider.as_str(),
+        approval.binding.action.as_str(),
+        "requires_review",
+        approval.binding.actor_id.as_deref().unwrap_or("unknown"),
+        approval.binding.authz_id.as_deref().unwrap_or("none"),
+        approval.binding.argument_hash.as_str(),
+        "pending provider side effect",
+    ]
+    .join(" ");
     format!(
-        r#"<article class="approval-row{}" role="listitem" tabindex="0" aria-current="{}" aria-controls="approval-details" aria-label="Review approval for {}" data-approval-id="{}" data-provider="{}" data-action="{}" data-risk="requires_review" data-target="{}" data-side-effects="pending provider side effect" data-actor="{}" data-authz="{}" data-argument-hash="{}" data-obs-refs=""><div><span class="risk-chip">requires_review</span><h3>{}</h3><p>{}</p></div><dl>{}{}{}{}{}{}</dl>{}</article>"#,
+        r#"<article class="approval-row{}" role="listitem" tabindex="0" aria-current="{}" aria-controls="approval-details" aria-label="Review approval for {}" data-approval-id="{}" data-provider="{}" data-action="{}" data-risk="requires_review" data-target="{}" data-side-effects="pending provider side effect" data-actor="{}" data-authz="{}" data-argument-hash="{}" data-obs-refs="" data-search-text="{}"><div><span class="risk-chip">requires_review</span><h3>{}</h3><p>{}</p></div><dl>{}{}{}{}{}{}</dl>{}</article>"#,
         if selected { " is-selected" } else { "" },
         if selected { "true" } else { "false" },
         escape_attr(&approval.binding.provider),
@@ -2382,6 +2508,7 @@ fn render_approval_row(approval: &ApprovalRecord, selected: bool) -> String {
         escape_attr(approval.binding.actor_id.as_deref().unwrap_or("unknown")),
         escape_attr(approval.binding.authz_id.as_deref().unwrap_or("none")),
         escape_attr(&approval.binding.argument_hash),
+        escape_attr(&search_text),
         escape_html_text(&approval.binding.provider),
         escape_html_text(&approval.binding.action),
         render_field("Approval", &approval.approval_id),
@@ -2437,7 +2564,7 @@ fn render_field(label: &str, value: &str) -> String {
 
 fn render_approval_decision_form(approval_id: &str) -> String {
     format!(
-        r#"<form class="approval-decision-form" data-approval-id="{}"><label>Reviewer<input name="reviewer" autocomplete="off" required></label><label>Reason<textarea name="reason" required></textarea></label><div class="decision-actions"><button type="submit" name="decision" value="approve" data-action="approve">Approve</button><button type="submit" name="decision" value="deny" data-action="deny">Deny</button></div><p class="decision-status" role="status" data-decision-status></p></form>"#,
+        r#"<form class="approval-decision-form" data-approval-id="{}" novalidate><label>Reviewer<input name="reviewer" autocomplete="off" required></label><label>Reason<textarea name="reason" required></textarea></label><div class="decision-actions"><button type="submit" name="decision" value="approve" data-action="approve">Approve</button><button type="submit" name="decision" value="deny" data-action="deny">Deny</button></div><p class="decision-status" role="status" data-decision-status></p></form>"#,
         escape_attr(approval_id)
     )
 }
@@ -2476,6 +2603,7 @@ fn reviewer_console_css() -> &'static str {
       color: #20241f;
       font-size: 14px;
     }
+    [hidden] { display: none !important; }
     section[id], article[id], aside[id] { scroll-margin-top: 86px; }
     .runwarden-workbench { min-height: 100vh; display: grid; grid-template-columns: 248px minmax(0, 1fr) minmax(320px, 360px); }
     .left-nav {
@@ -2548,7 +2676,9 @@ fn reviewer_console_css() -> &'static str {
     .tone-review { border-top-color: #a76716; }
     .tone-danger { border-top-color: #b42318; }
     .tone-info { border-top-color: #2866a8; }
+    .assurance-ops-layout { display: grid; grid-template-columns: minmax(240px, 0.8fr) minmax(320px, 1.1fr); gap: 14px; align-items: start; }
     .workspace-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .supporting-modules { grid-column: 1 / -1; }
     .module { background: rgba(255, 255, 251, 0.94); border: 1px solid #cdd5c8; border-radius: 8px; padding: 15px; min-width: 0; box-shadow: 0 10px 30px rgba(32, 36, 31, 0.07); }
     .module-head { display: flex; align-items: center; gap: 8px; justify-content: space-between; margin-bottom: 10px; }
     .module h2, .details-drawer h2 { font-size: 16px; margin: 0; }
@@ -2557,7 +2687,25 @@ fn reviewer_console_css() -> &'static str {
     .module-success .state-badge { color: #1f7a4d; border-color: #1f7a4d; }
     .module-error .state-badge { color: #b42318; border-color: #b42318; }
     .module-partial .state-badge { color: #a76716; border-color: #a76716; }
+    .assurance-map, .evidence-timeline { background: rgba(255, 255, 251, 0.94); border: 1px solid #cdd5c8; border-radius: 8px; padding: 15px; min-width: 0; box-shadow: 0 10px 30px rgba(32, 36, 31, 0.07); }
+    .assurance-nodes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .assurance-node { display: grid; gap: 4px; align-content: start; text-align: left; background: #f7f8f4; border-radius: 8px; min-height: 86px; padding: 12px; border-top-width: 3px; }
+    .assurance-node span { color: #626b61; font-size: 12px; text-transform: uppercase; }
+    .assurance-node strong { overflow-wrap: anywhere; }
+    .evidence-timeline ol { list-style: none; padding: 0; margin: 0; display: grid; }
+    .evidence-timeline li { display: grid; grid-template-columns: 16px 82px minmax(0, 1fr); gap: 8px; align-items: start; min-height: 38px; padding: 6px 0; border-bottom: 1px solid #e3e8df; }
+    .evidence-timeline li:last-child { border-bottom: 0; }
+    .timeline-dot { width: 9px; height: 9px; border-radius: 999px; background: #2f6f4e; margin-top: 4px; box-shadow: 0 0 0 3px rgba(47, 111, 78, 0.14); }
+    .evidence-timeline strong { color: #626b61; font-size: 12px; text-transform: uppercase; }
+    .evidence-timeline code { font-family: "JetBrains Mono", "IBM Plex Mono", ui-monospace, monospace; font-size: 12px; overflow-wrap: anywhere; }
     .approval-module { grid-column: 1 / -1; }
+    .review-queue-panel { grid-column: 1 / -1; }
+    .queue-toolbar { display: grid; grid-template-columns: minmax(220px, 1fr) auto; gap: 12px; align-items: end; margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid #e3e8df; }
+    .queue-search { margin: 0; }
+    .queue-search input { min-height: 44px; }
+    .queue-filters { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+    .queue-filters button[aria-pressed="true"] { background: #2f6f4e; color: #f3faf5; border-color: #2f6f4e; }
+    .queue-empty { margin-top: 10px; }
     .approval-row { border: 1px solid #cdd5c8; border-radius: 8px; padding: 13px; display: grid; grid-template-columns: minmax(180px, 1fr) minmax(260px, 2fr) minmax(220px, auto); gap: 14px; align-items: start; background: #fffffb; cursor: pointer; transition: border-color 120ms ease, box-shadow 120ms ease, background-color 120ms ease; }
     .approval-row:hover { border-color: rgba(47, 111, 78, 0.55); }
     .approval-row.is-selected { border-color: #2f6f4e; background: #fbfdf9; box-shadow: inset 4px 0 0 #2f6f4e, 0 10px 24px rgba(32, 36, 31, 0.08); }
@@ -2588,6 +2736,7 @@ fn reviewer_console_css() -> &'static str {
       .left-nav a { font-size: 12px; padding-inline: 8px; }
       .details-drawer { grid-column: 1 / -1; border-left: 0; border-top: 1px solid #cdd5c8; position: static; height: auto; overflow: visible; }
       .top-status-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .assurance-ops-layout { grid-template-columns: 1fr; }
     }
     @media (max-width: 768px) {
       .runwarden-workbench { display: block; }
@@ -2597,7 +2746,8 @@ fn reviewer_console_css() -> &'static str {
       h1 { font-size: 30px; }
       .command-bar { display: block; padding: 16px; }
       .command-meter { min-width: 0; margin-top: 12px; }
-      .top-status-strip, .workspace-grid { grid-template-columns: 1fr; }
+      .top-status-strip, .workspace-grid, .assurance-nodes, .queue-toolbar { grid-template-columns: 1fr; }
+      .queue-filters { justify-content: flex-start; }
       .approval-row { grid-template-columns: 1fr; }
       .details-drawer { min-height: 0; border-left: 0; border-top: 1px solid #cdd5c8; }
     }
@@ -2614,6 +2764,9 @@ fn reviewer_console_js() -> &'static str {
   const detailTitle = details?.querySelector("[data-detail-title]");
   const detailFields = details?.querySelector("[data-detail-fields]");
   const detailForm = details?.querySelector("form.approval-decision-form");
+  const queue = document.querySelector(".review-queue-panel");
+  const queueSearch = document.querySelector("[data-approval-search]");
+  const queueEmpty = document.querySelector("[data-queue-empty]");
 
   function escapeHtml(value) {
     return String(value ?? "").replace(/[&<>"']/g, (char) => ({
@@ -2713,6 +2866,33 @@ fn reviewer_console_js() -> &'static str {
     syncDetails(row);
   }
 
+  function filterApprovals() {
+    if (!queue) {
+      return;
+    }
+    const term = (queueSearch?.value ?? "").trim().toLowerCase();
+    const filter = queue.dataset.filterStatus ?? "all";
+    let visible = 0;
+    for (const row of queue.querySelectorAll(".approval-row")) {
+      const haystack = (row.dataset.searchText ?? "").toLowerCase();
+      const sideEffects = (row.dataset.sideEffects ?? "").toLowerCase();
+      const risk = (row.dataset.risk ?? "").toLowerCase();
+      const matchesTerm = !term || haystack.includes(term);
+      const matchesFilter =
+        filter === "all" ||
+        risk.includes(filter) ||
+        sideEffects.includes(filter);
+      const show = matchesTerm && matchesFilter;
+      row.hidden = !show;
+      if (show) {
+        visible += 1;
+      }
+    }
+    if (queueEmpty) {
+      queueEmpty.hidden = visible !== 0;
+    }
+  }
+
   function interactiveTarget(target) {
     return target instanceof Element && Boolean(target.closest("input, textarea, button, a, label"));
   }
@@ -2770,6 +2950,21 @@ fn reviewer_console_js() -> &'static str {
   });
 
   document.addEventListener("click", (event) => {
+    const filterButton = event.target instanceof Element ? event.target.closest("[data-approval-filter]") : null;
+    if (filterButton instanceof HTMLButtonElement && queue) {
+      queue.dataset.filterStatus = filterButton.dataset.approvalFilter ?? "all";
+      for (const button of queue.querySelectorAll("[data-approval-filter]")) {
+        button.setAttribute("aria-pressed", button === filterButton ? "true" : "false");
+      }
+      filterApprovals();
+      return;
+    }
+    const node = event.target instanceof Element ? event.target.closest(".assurance-node") : null;
+    if (node instanceof HTMLElement && detailTitle && detailFields) {
+      detailTitle.textContent = node.dataset.detailTitle || node.dataset.detailType || "Assurance detail";
+      detailFields.innerHTML = fieldHtml(node.dataset.detailType || "Type", node.dataset.detailBody || "No detail available.");
+      return;
+    }
     if (interactiveTarget(event.target)) {
       return;
     }
@@ -2788,10 +2983,13 @@ fn reviewer_console_js() -> &'static str {
     selectApproval(row);
   });
 
+  queueSearch?.addEventListener("input", filterApprovals);
+
   const initialRow = document.querySelector(".approval-row.is-selected") ?? document.querySelector(".approval-row");
   if (initialRow instanceof HTMLElement) {
     syncDetails(initialRow);
   }
+  filterApprovals();
 })();
 "##
 }

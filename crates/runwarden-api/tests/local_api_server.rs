@@ -282,6 +282,13 @@ fn local_api_ui_launch_writes_full_reviewer_console_contract() {
     assert!(!html.contains("radial-gradient"));
     assert!(!html.contains("4vw"));
     assert!(html.contains("@media (max-width: 768px)"));
+    assert!(html.contains("assurance-ops-shell"));
+    assert!(html.contains("assurance-map"));
+    assert!(html.contains("evidence-timeline"));
+    assert!(html.contains("review-queue-panel"));
+    assert!(html.contains("queue-search"));
+    assert!(html.contains("data-filter-status=\"all\""));
+    assert!(html.contains("[hidden] { display: none !important; }"));
     assert!(html.contains("position: sticky"));
     assert!(html.contains("<script src=\"reviewer-console.js\" defer></script>"));
     assert!(!html.contains("data-action=\"approve\""));
@@ -289,6 +296,9 @@ fn local_api_ui_launch_writes_full_reviewer_console_contract() {
     assert!(!html.contains("<script>"));
     assert!(script.contains("fetch(`${apiRoot}/approvals/"));
     assert!(script.contains("selectApproval(row)"));
+    assert!(script.contains("filterApprovals"));
+    assert!(script.contains("Reviewer and reason are required."));
+    assert!(script.contains("Bearer ${token}"));
     let _ = fs::remove_dir_all(&artifact_path);
 }
 
@@ -330,6 +340,7 @@ fn local_api_ui_launch_renders_pending_approval_controls() {
     assert!(html.contains("data-provider=\"runwarden.report.render\""));
     assert!(html.contains("data-detail-fields"));
     assert!(html.contains("class=\"approval-decision-form\""));
+    assert!(html.contains("novalidate"));
     assert!(html.contains("id=\"local-api-token\""));
     assert!(html.contains("data-action=\"approve\""));
     assert!(html.contains("data-action=\"deny\""));
@@ -953,7 +964,6 @@ fn local_api_provider_call_resolves_scoped_root_names_before_execution() {
             }
         })),
     );
-
     assert_eq!(response.status, 200);
     assert_eq!(
         response.body["operation"]["data"]["outcome"]["decision"],
@@ -1001,7 +1011,6 @@ fn local_api_provider_call_resolves_relative_paths_against_scoped_root_before_re
             }
         })),
     );
-
     assert_eq!(response.status, 200);
     assert_eq!(
         response.body["operation"]["data"]["outcome"]["decision"],

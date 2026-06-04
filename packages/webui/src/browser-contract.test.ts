@@ -32,6 +32,11 @@ describe("reviewer console browser contract", () => {
     expect(html).toContain('aria-label="Runwarden sections"');
     expect(html).toContain('aria-label="Approval details"');
     expect(html).toContain('role="status" aria-label="Assessment status"');
+    expect(html).toContain("assurance-ops-shell");
+    expect(html).toContain("assurance-map");
+    expect(html).toContain("evidence-timeline");
+    expect(html).toContain("queue-search");
+    expect(html).toContain("[hidden] { display: none !important; }");
     expect(html).toContain("nav-brand");
     expect(html).toContain("command-bar");
     expect(html).toContain("state-badge");
@@ -42,6 +47,7 @@ describe("reviewer console browser contract", () => {
     expect(html).toContain("@media (max-width: 768px)");
     expect(html).toContain("min-height: 44px");
     expect(html).toContain(":focus-visible");
-    expect(html).not.toContain("<script");
+    expect(html).toContain("<script");
+    expect(html).toContain("filterApprovals");
   });
 });

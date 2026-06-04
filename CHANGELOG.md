@@ -9,6 +9,9 @@ All notable changes to Runwarden are documented in this file.
 - Reworked repository documentation around a concise top-level README, grouped
   docs index, persistent repository review, expanded reference pages, and
   scenario/example README guidance.
+- Redesigned the Reviewer Console WebUI around an assurance operations
+  workspace with evidence mapping, timeline context, and searchable approval
+  review controls.
 
 ### Fixed
 

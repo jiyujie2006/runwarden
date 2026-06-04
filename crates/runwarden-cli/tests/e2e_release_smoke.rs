@@ -114,6 +114,13 @@ fn ui_launch_bundle_contains_responsive_accessibility_contract() {
     assert!(html.contains("href=\"#assurance\""));
     assert!(html.contains("Settings"));
     assert!(html.contains("@media (max-width: 768px)"));
+    assert!(html.contains("assurance-ops-shell"));
+    assert!(html.contains("assurance-map"));
+    assert!(html.contains("evidence-timeline"));
+    assert!(html.contains("review-queue-panel"));
+    assert!(html.contains("queue-search"));
+    assert!(html.contains("data-filter-status=\"all\""));
+    assert!(html.contains("[hidden] { display: none !important; }"));
     assert!(html.contains("<script src=\"reviewer-console.js\" defer></script>"));
     assert!(html.contains("class=\"state-badge\""));
     assert!(html.contains("class=\"module-head\""));
@@ -245,6 +252,7 @@ fn ui_command_renders_pending_approvals_with_reviewer_controls() {
     assert!(html.contains("data-provider=\"runwarden.report.render\""));
     assert!(html.contains("data-detail-fields"));
     assert!(html.contains("class=\"approval-decision-form\""));
+    assert!(html.contains("novalidate"));
     assert!(html.contains("id=\"local-api-token\""));
     assert!(html.contains("data-action=\"approve\""));
     assert!(html.contains("data-action=\"deny\""));

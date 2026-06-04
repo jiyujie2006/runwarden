@@ -7,6 +7,7 @@ test-results/
 .turbo/
 .cache/
 .gstack/
+.superpowers/
 .DS_Store
 *.log
 artifacts/

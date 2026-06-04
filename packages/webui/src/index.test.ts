@@ -216,6 +216,13 @@ describe("renderReviewerConsoleHtml", () => {
     );
 
     expect(html).toContain("runwarden-workbench");
+    expect(html).toContain("assurance-ops-shell");
+    expect(html).toContain("assurance-map");
+    expect(html).toContain("evidence-timeline");
+    expect(html).toContain("review-queue-panel");
+    expect(html).toContain("queue-search");
+    expect(html).toContain('data-filter-status="all"');
+    expect(html).toContain("[hidden] { display: none !important; }");
     expect(html).toContain("nav-brand");
     expect(html).toContain("brand-mark\" aria-hidden=\"true\"");
     expect(html).toContain("command-bar");
@@ -233,6 +240,7 @@ describe("renderReviewerConsoleHtml", () => {
     expect(html).toContain("render");
     expect(html).toContain("arg_hash_1");
     expect(html).toContain("approval-decision-form");
+    expect(html).toContain("novalidate");
     expect(html).toContain("state-badge");
     expect(html).toContain("risk-chip");
     expect(html).toContain("module-partial");
@@ -245,7 +253,11 @@ describe("renderReviewerConsoleHtml", () => {
     expect(html).toContain('data-provider="runwarden.report.render"');
     expect(html).toContain('data-side-effects="artifact_write"');
     expect(html).toContain("data-action=\"approve\"");
-    expect(html).not.toContain("<script");
+    expect(html).toContain('fetch(apiRoot + "/approvals/"');
+    expect(html).toContain('"authorization": "Bearer " + token');
+    expect(html).toContain("Reviewer and reason are required.");
+    expect(html).toContain("filterApprovals");
+    expect(html).toContain("<script");
   });
 
   it("does not expose approve or deny actions when no approval is selected", () => {
@@ -294,5 +306,6 @@ describe("renderReviewerConsoleHtml", () => {
     expect(html).toContain("&lt;svg onload=alert(1)&gt;");
     expect(html).toContain("obs_&lt;1&gt;");
     expect(html).not.toContain("<img src=x");
+    expect(html).not.toContain("<script>alert");
   });
 });
