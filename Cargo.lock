@@ -446,6 +446,7 @@ dependencies = [
  "runwarden-api",
  "runwarden-assurance",
  "runwarden-kernel",
+ "runwarden-platform",
  "runwarden-providers",
  "serde",
  "serde_json",
@@ -484,6 +485,7 @@ dependencies = [
 name = "runwarden-platform"
 version = "0.1.0"
 dependencies = [
+ "runwarden-kernel",
  "serde",
  "serde_json",
  "tempfile",

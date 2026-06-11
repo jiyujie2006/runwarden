@@ -2,9 +2,18 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
+use runwarden_kernel::authority::{ApprovalRecord, ApprovalState};
+use runwarden_kernel::manifest::SessionManifest;
+
 use crate::{PlatformError, PlatformEvent};
 
 const STATE_DIR: &str = ".runwarden";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalListFilter {
+    All,
+    Pending,
+}
 
 #[derive(Debug, Clone)]
 pub struct PlatformState {
@@ -51,6 +60,94 @@ impl PlatformState {
         serde_json::to_writer(&mut file, event)?;
         file.write_all(b"\n")?;
         Ok(())
+    }
+
+    pub(crate) fn write_session(&self, session: &SessionManifest) -> Result<(), PlatformError> {
+        validate_session_id(&session.session_id)?;
+        self.reject_state_path_symlink_components(state_relative_path("sessions"))?;
+        fs::create_dir_all(self.sessions_dir())?;
+        let path = self.session_path(&session.session_id)?;
+        fs::write(path, serde_json::to_string_pretty(session)?)?;
+        Ok(())
+    }
+
+    pub(crate) fn read_session(&self, session_id: &str) -> Result<SessionManifest, PlatformError> {
+        let body = fs::read_to_string(self.session_path(session_id)?)?;
+        Ok(serde_json::from_str(&body)?)
+    }
+
+    pub(crate) fn list_sessions(&self) -> Result<Vec<SessionManifest>, PlatformError> {
+        let dir = self.sessions_dir();
+        match fs::symlink_metadata(&dir) {
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(err) => return Err(PlatformError::Io(err)),
+        }
+        self.reject_state_path_symlink_components(state_relative_path("sessions"))?;
+
+        let mut sessions = Vec::new();
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            if entry.path().extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+            self.reject_state_path_symlink_components(
+                state_relative_path("sessions").join(entry.file_name()),
+            )?;
+            let body = fs::read_to_string(entry.path())?;
+            sessions.push(serde_json::from_str(&body)?);
+        }
+        sessions.sort_by(|left: &SessionManifest, right: &SessionManifest| {
+            left.session_id.cmp(&right.session_id)
+        });
+        Ok(sessions)
+    }
+
+    pub(crate) fn write_approval(&self, approval: &ApprovalRecord) -> Result<(), PlatformError> {
+        validate_record_id(&approval.approval_id)?;
+        self.reject_state_path_symlink_components(state_relative_path("approvals"))?;
+        fs::create_dir_all(self.approvals_dir())?;
+        let path = self.approval_path(&approval.approval_id)?;
+        fs::write(path, serde_json::to_string_pretty(approval)?)?;
+        Ok(())
+    }
+
+    pub(crate) fn read_approval(&self, approval_id: &str) -> Result<ApprovalRecord, PlatformError> {
+        let body = fs::read_to_string(self.approval_path(approval_id)?)?;
+        Ok(serde_json::from_str(&body)?)
+    }
+
+    pub(crate) fn list_approvals(
+        &self,
+        filter: ApprovalListFilter,
+    ) -> Result<Vec<ApprovalRecord>, PlatformError> {
+        let dir = self.approvals_dir();
+        match fs::symlink_metadata(&dir) {
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(err) => return Err(PlatformError::Io(err)),
+        }
+        self.reject_state_path_symlink_components(state_relative_path("approvals"))?;
+
+        let mut approvals = Vec::new();
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            if entry.path().extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+            self.reject_state_path_symlink_components(
+                state_relative_path("approvals").join(entry.file_name()),
+            )?;
+            let body = fs::read_to_string(entry.path())?;
+            let approval: ApprovalRecord = serde_json::from_str(&body)?;
+            if filter == ApprovalListFilter::All || approval.state == ApprovalState::Pending {
+                approvals.push(approval);
+            }
+        }
+        approvals.sort_by(|left: &ApprovalRecord, right: &ApprovalRecord| {
+            left.approval_id.cmp(&right.approval_id)
+        });
+        Ok(approvals)
     }
 
     pub fn sessions_dir(&self) -> PathBuf {
@@ -110,6 +207,22 @@ impl PlatformState {
         self.state_dir().join("events.jsonl")
     }
 
+    fn session_path(&self, session_id: &str) -> Result<PathBuf, PlatformError> {
+        let file_name = format!("{}.json", validate_session_id(session_id)?);
+        self.reject_state_path_symlink_components(
+            state_relative_path("sessions").join(&file_name),
+        )?;
+        Ok(self.state_dir().join("sessions").join(file_name))
+    }
+
+    fn approval_path(&self, approval_id: &str) -> Result<PathBuf, PlatformError> {
+        let file_name = format!("{}.json", validate_record_id(approval_id)?);
+        self.reject_state_path_symlink_components(
+            state_relative_path("approvals").join(&file_name),
+        )?;
+        Ok(self.state_dir().join("approvals").join(file_name))
+    }
+
     fn reject_symlink_components(&self, requested: &Path) -> Result<(), PlatformError> {
         let mut current = self.workspace_root.clone();
         for component in requested.components() {
@@ -164,6 +277,29 @@ impl PlatformState {
 
 fn state_relative_path(child: &str) -> PathBuf {
     Path::new(STATE_DIR).join(child)
+}
+
+pub fn validate_session_id(session_id: &str) -> Result<&str, PlatformError> {
+    if is_safe_record_id(session_id) {
+        Ok(session_id)
+    } else {
+        Err(PlatformError::InvalidSessionId(session_id.to_string()))
+    }
+}
+
+pub fn validate_record_id(record_id: &str) -> Result<&str, PlatformError> {
+    if is_safe_record_id(record_id) {
+        Ok(record_id)
+    } else {
+        Err(PlatformError::InvalidRecordId(record_id.to_string()))
+    }
+}
+
+fn is_safe_record_id(record_id: &str) -> bool {
+    !record_id.is_empty()
+        && record_id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
 }
 
 fn path_is_within_root(candidate: &Path, root: &Path) -> bool {

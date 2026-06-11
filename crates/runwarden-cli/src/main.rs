@@ -31,6 +31,7 @@ use runwarden_kernel::contracts::{
 use runwarden_kernel::evidence::{InMemoryTraceStore, TraceEvent, TraceQuery, hex_sha256};
 use runwarden_kernel::kernel::{KernelEnforcer, KernelPolicy, ScopedRoot};
 use runwarden_kernel::manifest::{AssessmentManifest, SessionManifest};
+use runwarden_platform::{ApprovalListFilter, RunwardenPlatform, validate_record_id};
 use runwarden_providers::catalog::{
     EXTERNAL_PROVIDER_IDS, FIRST_PARTY_PROVIDER_IDS, default_external_provider_manifest,
     default_external_providers, first_party_registry, full_provider_registry,
@@ -717,7 +718,9 @@ fn run() -> anyhow::Result<()> {
         Command::Provider { command } => match command {
             ProviderCommand::List { session, json } => {
                 let providers = if let Some(session_id) = session {
-                    read_session(&session_id)?.allowed_providers
+                    RunwardenPlatform::open(env::current_dir()?)?
+                        .read_session(&session_id)?
+                        .allowed_providers
                 } else {
                     FIRST_PARTY_PROVIDER_IDS
                         .iter()
@@ -746,7 +749,11 @@ fn run() -> anyhow::Result<()> {
                 format,
                 json,
             } => {
-                let session_manifest = session.as_deref().map(read_session).transpose()?;
+                let platform = RunwardenPlatform::open(env::current_dir()?)?;
+                let session_manifest = session
+                    .as_deref()
+                    .map(|session_id| platform.read_session(session_id))
+                    .transpose()?;
                 let mut execution_input = input.clone();
                 let mut execution_trace = trace.clone();
                 let mut execution_report = report.clone();
@@ -837,7 +844,7 @@ fn run() -> anyhow::Result<()> {
                         }
                     }
                     bind_cli_file_digests(call)?;
-                    attach_matching_approval(call)?;
+                    attach_matching_approval(&platform, call)?;
                     let mut enforcer = KernelEnforcer::new(
                         full_provider_registry(),
                         cli_provider_policy(
@@ -849,7 +856,7 @@ fn run() -> anyhow::Result<()> {
                             report.as_ref(),
                         ),
                     );
-                    for approval in read_all_approvals()? {
+                    for approval in platform.list_approvals(ApprovalListFilter::All)? {
                         enforcer.add_approval(approval);
                     }
                     let outcome = enforcer.evaluate_call(call);
@@ -865,6 +872,7 @@ fn run() -> anyhow::Result<()> {
                         == Some(ApprovalState::Consumed)
                     {
                         persist_consumed_cli_approval(
+                            &platform,
                             call,
                             &enforcer.approval_binding_for_call(call),
                         )?;
@@ -974,7 +982,7 @@ fn run() -> anyhow::Result<()> {
                 let assessment = AssessmentManifest::from_toml_str(&manifest_body)?;
                 let assessment = assessment_with_manifest_relative_roots(&manifest, assessment)?;
                 let session_manifest = SessionManifest::from_assessment(session, &assessment);
-                write_session(&session_manifest)?;
+                RunwardenPlatform::open(env::current_dir()?)?.write_session(&session_manifest)?;
                 if json {
                     println!("{}", serde_json::to_string_pretty(&session_manifest)?);
                 } else {
@@ -982,7 +990,8 @@ fn run() -> anyhow::Result<()> {
                 }
             }
             SessionCommand::Inspect { session, json } => {
-                let session_manifest = read_session(&session)?;
+                let session_manifest =
+                    RunwardenPlatform::open(env::current_dir()?)?.read_session(&session)?;
                 if json {
                     println!("{}", serde_json::to_string_pretty(&session_manifest)?);
                 } else {
@@ -1026,11 +1035,8 @@ fn run() -> anyhow::Result<()> {
         },
         Command::Approval { command } => match command {
             ApprovalCommand::Pending { json } => {
-                let approvals = read_all_approvals()?;
-                let pending: Vec<_> = approvals
-                    .into_iter()
-                    .filter(|approval| approval.state == ApprovalState::Pending)
-                    .collect();
+                let pending = RunwardenPlatform::open(env::current_dir()?)?
+                    .list_approvals(ApprovalListFilter::Pending)?;
                 if json {
                     println!(
                         "{}",
@@ -1054,9 +1060,10 @@ fn run() -> anyhow::Result<()> {
                 reason,
                 json,
             } => {
-                let mut approval = read_approval(&approval_id)?;
+                let platform = RunwardenPlatform::open(env::current_dir()?)?;
+                let mut approval = platform.read_approval(&approval_id)?;
                 approval.approve(reviewer, reason)?;
-                write_approval(&approval)?;
+                platform.write_approval(&approval)?;
                 if json {
                     println!("{}", serde_json::to_string_pretty(&approval)?);
                 } else {
@@ -1069,9 +1076,10 @@ fn run() -> anyhow::Result<()> {
                 reason,
                 json,
             } => {
-                let mut approval = read_approval(&approval_id)?;
+                let platform = RunwardenPlatform::open(env::current_dir()?)?;
+                let mut approval = platform.read_approval(&approval_id)?;
                 approval.deny(reviewer, reason)?;
-                write_approval(&approval)?;
+                platform.write_approval(&approval)?;
                 if json {
                     println!("{}", serde_json::to_string_pretty(&approval)?);
                 } else {
@@ -1091,7 +1099,7 @@ fn run() -> anyhow::Result<()> {
                 actor,
                 json,
             } => {
-                safe_record_id(&approval)?;
+                validate_record_id(&approval)?;
                 let computed_hash = match argument_hash {
                     Some(hash) => hash,
                     None => argument_hash_from_json(&arguments)?,
@@ -1107,7 +1115,7 @@ fn run() -> anyhow::Result<()> {
                         actor_id: actor,
                     },
                 );
-                write_approval(&approval)?;
+                RunwardenPlatform::open(env::current_dir()?)?.write_approval(&approval)?;
                 if json {
                     println!("{}", serde_json::to_string_pretty(&approval)?);
                 } else {
@@ -1115,7 +1123,8 @@ fn run() -> anyhow::Result<()> {
                 }
             }
             AuthorityCommand::Inspect { approval_id, json } => {
-                let approval = read_approval(&approval_id)?;
+                let approval =
+                    RunwardenPlatform::open(env::current_dir()?)?.read_approval(&approval_id)?;
                 if json {
                     println!("{}", serde_json::to_string_pretty(&approval)?);
                 } else {
@@ -1153,13 +1162,14 @@ fn run() -> anyhow::Result<()> {
         } => {
             let root = find_workspace_root(env::current_dir()?)?;
             let artifacts = resolve_local_artifact_output_path(&root, &artifacts)?;
+            let platform = RunwardenPlatform::open(env::current_dir()?)?;
             let result = write_ui_launch_bundle(
                 &bind,
                 port,
                 &artifacts,
                 UiLaunchSnapshot {
-                    approvals: read_all_approvals()?,
-                    sessions: read_all_sessions()?,
+                    approvals: platform.list_approvals(ApprovalListFilter::All)?,
+                    sessions: platform.list_sessions()?,
                 },
             )
             .map_err(anyhow::Error::msg)?;
@@ -1679,9 +1689,13 @@ fn resolve_cli_execution_root(
         .or(Some(root))
 }
 
-fn attach_matching_approval(call: &mut ProviderCall) -> anyhow::Result<()> {
+fn attach_matching_approval(
+    platform: &RunwardenPlatform,
+    call: &mut ProviderCall,
+) -> anyhow::Result<()> {
     let binding = cli_approval_binding(call)?;
-    if let Some(approval) = read_all_approvals()?
+    if let Some(approval) = platform
+        .list_approvals(ApprovalListFilter::All)?
         .into_iter()
         .find(|approval| approval.binding == binding && approval_is_usable_for_cli(approval))
     {
@@ -1698,16 +1712,17 @@ fn approval_is_usable_for_cli(approval: &ApprovalRecord) -> bool {
 }
 
 fn persist_consumed_cli_approval(
+    platform: &RunwardenPlatform,
     call: &ProviderCall,
     binding: &ApprovalBinding,
 ) -> anyhow::Result<()> {
     let Some(approval_id) = call.approval_id.as_deref() else {
         return Ok(());
     };
-    let mut approval = read_approval(approval_id)?;
+    let mut approval = platform.read_approval(approval_id)?;
     if approval.state == ApprovalState::Approved {
         approval.consume_once(binding)?;
-        write_approval(&approval)?;
+        platform.write_approval(&approval)?;
     }
     Ok(())
 }
@@ -2513,98 +2528,6 @@ fn absolute_cli_path(path: &Path) -> anyhow::Result<PathBuf> {
     }
 }
 
-fn write_session(session: &SessionManifest) -> anyhow::Result<()> {
-    let dir = PathBuf::from(".runwarden").join("sessions");
-    fs::create_dir_all(&dir)?;
-    let path = dir.join(format!("{}.json", safe_session_id(&session.session_id)?));
-    fs::write(path, serde_json::to_string_pretty(session)?)?;
-    Ok(())
-}
-
-fn read_session(session_id: &str) -> anyhow::Result<SessionManifest> {
-    let path = PathBuf::from(".runwarden")
-        .join("sessions")
-        .join(format!("{}.json", safe_session_id(session_id)?));
-    let body = fs::read_to_string(&path)?;
-    Ok(serde_json::from_str(&body)?)
-}
-
-fn read_all_sessions() -> anyhow::Result<Vec<SessionManifest>> {
-    let dir = PathBuf::from(".runwarden").join("sessions");
-    if !dir.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut sessions = Vec::new();
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        if entry.path().extension().and_then(|ext| ext.to_str()) != Some("json") {
-            continue;
-        }
-        let body = fs::read_to_string(entry.path())?;
-        sessions.push(serde_json::from_str(&body)?);
-    }
-    sessions.sort_by(|left: &SessionManifest, right: &SessionManifest| {
-        left.session_id.cmp(&right.session_id)
-    });
-    Ok(sessions)
-}
-
-fn safe_session_id(session_id: &str) -> anyhow::Result<&str> {
-    if session_id.is_empty()
-        || !session_id
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
-    {
-        anyhow::bail!("invalid session id: {session_id}");
-    }
-    Ok(session_id)
-}
-
-fn approvals_dir() -> PathBuf {
-    PathBuf::from(".runwarden").join("approvals")
-}
-
-fn approval_path(approval_id: &str) -> anyhow::Result<PathBuf> {
-    Ok(approvals_dir().join(format!("{}.json", safe_record_id(approval_id)?)))
-}
-
-fn read_all_approvals() -> anyhow::Result<Vec<ApprovalRecord>> {
-    let dir = approvals_dir();
-    if !dir.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut approvals = Vec::new();
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        if entry.path().extension().and_then(|ext| ext.to_str()) != Some("json") {
-            continue;
-        }
-        let body = fs::read_to_string(entry.path())?;
-        approvals.push(serde_json::from_str(&body)?);
-    }
-    approvals.sort_by(|left: &ApprovalRecord, right: &ApprovalRecord| {
-        left.approval_id.cmp(&right.approval_id)
-    });
-    Ok(approvals)
-}
-
-fn read_approval(approval_id: &str) -> anyhow::Result<ApprovalRecord> {
-    let body = fs::read_to_string(approval_path(approval_id)?)?;
-    Ok(serde_json::from_str(&body)?)
-}
-
-fn write_approval(approval: &ApprovalRecord) -> anyhow::Result<()> {
-    let dir = approvals_dir();
-    fs::create_dir_all(&dir)?;
-    fs::write(
-        dir.join(format!("{}.json", safe_record_id(&approval.approval_id)?)),
-        serde_json::to_string_pretty(approval)?,
-    )?;
-    Ok(())
-}
-
 fn argument_hash_from_json(arguments: &str) -> anyhow::Result<String> {
     let value: serde_json::Value = serde_json::from_str(arguments)?;
     let bytes = serde_json::to_vec(&value)?;
@@ -2673,17 +2596,6 @@ fn canonical_existing_parent(path: &Path) -> Option<PathBuf> {
             return None;
         }
     }
-}
-
-fn safe_record_id(record_id: &str) -> anyhow::Result<&str> {
-    if record_id.is_empty()
-        || !record_id
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
-    {
-        anyhow::bail!("invalid record id: {record_id}");
-    }
-    Ok(record_id)
 }
 
 #[cfg(test)]
