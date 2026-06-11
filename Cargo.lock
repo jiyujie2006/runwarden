@@ -481,6 +481,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "runwarden-platform"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "runwarden-providers"
 version = "0.1.0"
 dependencies = [
