@@ -27,6 +27,10 @@ impl PlatformState {
         })
     }
 
+    pub(crate) fn workspace_root(&self) -> &Path {
+        &self.workspace_root
+    }
+
     pub fn ensure_layout(&self) -> Result<(), PlatformError> {
         for (relative_path, dir) in [
             (PathBuf::from(STATE_DIR), self.state_dir()),
@@ -53,12 +57,13 @@ impl PlatformState {
         self.reject_state_path_symlink_components(Path::new(STATE_DIR))?;
         fs::create_dir_all(self.state_dir())?;
         self.reject_state_path_symlink_components(Path::new(STATE_DIR).join("events.jsonl"))?;
+        let mut line = serde_json::to_vec(event)?;
+        line.push(b'\n');
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(self.events_path())?;
-        serde_json::to_writer(&mut file, event)?;
-        file.write_all(b"\n")?;
+        file.write_all(&line)?;
         Ok(())
     }
 
@@ -150,6 +155,22 @@ impl PlatformState {
             left.approval_id.cmp(&right.approval_id)
         });
         Ok(approvals)
+    }
+
+    pub(crate) fn write_provider_call_record(
+        &self,
+        record_id: &str,
+        record: &serde_json::Value,
+    ) -> Result<PathBuf, PlatformError> {
+        let file_name = format!("{}.json", validate_record_id(record_id)?);
+        self.reject_state_path_symlink_components(state_relative_path("provider-calls"))?;
+        fs::create_dir_all(self.provider_calls_dir())?;
+        self.reject_state_path_symlink_components(
+            state_relative_path("provider-calls").join(&file_name),
+        )?;
+        let path = self.provider_calls_dir().join(file_name);
+        fs::write(&path, serde_json::to_string_pretty(record)?)?;
+        Ok(path)
     }
 
     pub fn sessions_dir(&self) -> PathBuf {

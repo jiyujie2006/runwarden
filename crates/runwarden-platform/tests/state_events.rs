@@ -1,5 +1,6 @@
 use std::fs;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Barrier, Mutex, OnceLock};
+use std::thread;
 
 use runwarden_platform::{PlatformError, PlatformEvent, RunwardenPlatform};
 use serde_json::json;
@@ -51,6 +52,52 @@ fn platform_state_creates_layout_and_appends_jsonl_events() {
         "platform.state.layout_ready"
     );
     assert!(events.ends_with('\n'));
+}
+
+#[test]
+fn platform_state_appends_valid_jsonl_events_under_parallel_writers() {
+    let workspace = tempfile::tempdir().expect("temp workspace");
+    let platform = Arc::new(RunwardenPlatform::open(workspace.path()).expect("open platform"));
+    platform.state().ensure_layout().expect("ensure layout");
+    let writer_count = 32;
+    let events_per_writer = 4;
+    let barrier = Arc::new(Barrier::new(writer_count));
+
+    let handles = (0..writer_count)
+        .map(|writer| {
+            let platform = Arc::clone(&platform);
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                barrier.wait();
+                for event in 0..events_per_writer {
+                    platform
+                        .state()
+                        .append_event(&PlatformEvent::new(
+                            "platform.parallel",
+                            json!({
+                                "writer": writer,
+                                "event": event,
+                                "padding": "x".repeat(32_768)
+                            }),
+                        ))
+                        .expect("append parallel event");
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+
+    for handle in handles {
+        handle.join().expect("writer thread");
+    }
+
+    let events_path = workspace.path().join(".runwarden/events.jsonl");
+    let events = fs::read_to_string(events_path).expect("read events");
+    let lines = events.lines().collect::<Vec<_>>();
+
+    assert_eq!(lines.len(), writer_count * events_per_writer);
+    for line in lines {
+        serde_json::from_str::<serde_json::Value>(line).expect("event line is valid json");
+    }
 }
 
 #[test]

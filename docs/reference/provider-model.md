@@ -24,6 +24,12 @@ family such as `mcp`, `api`, `scanner`, or `shell`.
 String family prefixes such as `external.mcp.*` are descriptive naming
 conventions, not the source of truth for execution.
 
+Provider calls submitted through the CLI are mediated by the Runwarden platform
+executor. The executor appends a `provider_call_requested` event before policy
+evaluation, applies session-derived or CLI-default kernel policy, writes
+completion/denial/review events, and persists a provider-call record under
+`.runwarden/provider-calls/`.
+
 ## First-Party Providers
 
 The checked-in first-party catalog includes:
@@ -57,3 +63,6 @@ The checked-in external provider catalog includes:
 
 High-risk, network-active, credential, destructive, report-claim, and
 artifact-writing providers require approval before trusted side effects.
+When such a call lacks a usable matching approval, the platform executor returns
+`requires_review`, writes or returns a pending approval record, and preserves
+`side_effect_executed: false`.

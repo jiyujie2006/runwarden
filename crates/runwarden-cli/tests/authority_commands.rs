@@ -392,12 +392,12 @@ enabled = true
 
 #[test]
 fn provider_call_verifies_bound_files_before_persisting_consumed_approval() {
-    let source = include_str!("../src/main.rs");
+    let source = include_str!("../../runwarden-platform/src/executor.rs");
     let verify_index = source
-        .find("verify_cli_file_digests(call)?;")
+        .find("verify_file_digests(&call)")
         .expect("provider call digest verification");
     let persist_index = source
-        .find("persist_consumed_cli_approval(")
+        .find("persist_consumed_approval(self,")
         .expect("approval persistence");
 
     assert!(

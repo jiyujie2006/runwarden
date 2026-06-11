@@ -1,4 +1,5 @@
 mod events;
+mod executor;
 mod state;
 
 use std::path::{Path, PathBuf};
@@ -7,6 +8,7 @@ use runwarden_kernel::authority::ApprovalRecord;
 use runwarden_kernel::manifest::SessionManifest;
 
 pub use events::PlatformEvent;
+pub use executor::{ProviderExecutionRequest, ProviderExecutionResult};
 pub use state::{ApprovalListFilter, PlatformState, validate_record_id, validate_session_id};
 
 #[derive(Debug, thiserror::Error)]
@@ -27,6 +29,10 @@ pub enum PlatformError {
     InvalidSessionId(String),
     #[error("invalid record id: {0}")]
     InvalidRecordId(String),
+    #[error("provider execution failed: {0}")]
+    ProviderExecution(String),
+    #[error("approval transition failed: {0}")]
+    ApprovalTransition(#[from] runwarden_kernel::authority::ApprovalTransitionError),
 }
 
 #[derive(Debug, Clone)]
