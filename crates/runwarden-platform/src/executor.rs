@@ -85,7 +85,9 @@ impl RunwardenPlatform {
         }
 
         let mut outcome = evaluate_call_without_approvals(&call, request.session.as_ref());
-        if outcome.decision == PolicyDecision::Denied {
+        if outcome.decision == PolicyDecision::Denied
+            && !is_explicit_approval_precheck_denial(&call, &outcome)
+        {
             return self.finish_provider_call(call, outcome, Value::Null);
         }
 
@@ -113,7 +115,9 @@ impl RunwardenPlatform {
                     return self.finish_provider_call(call, outcome, Value::Null);
                 }
                 outcome = evaluate_call_without_approvals(&call, request.session.as_ref());
-                if outcome.decision == PolicyDecision::Denied {
+                if outcome.decision == PolicyDecision::Denied
+                    && !is_explicit_approval_precheck_denial(&call, &outcome)
+                {
                     return self.finish_provider_call(call, outcome, Value::Null);
                 }
             }
@@ -294,6 +298,13 @@ fn failed_before_side_effect(
     outcome.execution_status = ExecutionStatus::Failed;
     outcome.envelope.side_effect_executed = false;
     outcome
+}
+
+fn is_explicit_approval_precheck_denial(call: &ProviderCall, outcome: &ProviderOutcome) -> bool {
+    call.approval_id.is_some()
+        && outcome.decision == PolicyDecision::Denied
+        && outcome.envelope.gate_id == "approval"
+        && outcome.envelope.error_kind == Some(ErrorKind::ApprovalInvalid)
 }
 
 fn provider_policy(session: Option<&SessionManifest>, call: &ProviderCall) -> KernelPolicy {
@@ -581,9 +592,12 @@ fn call_first_party_provider(
             for event in events {
                 store.append(event);
             }
+            let page = store.query(trace_query_from_arguments(&arguments));
+            let events = page.events.clone();
             json!({
                 "verification": verification,
-                "events": store.query(trace_query_from_arguments(&arguments)).events
+                "page": page,
+                "events": events
             })
         }
         "runwarden.report.scaffold" => {
@@ -641,8 +655,12 @@ fn call_first_party_provider(
             ))
         }
         "runwarden.eval.agent-native" => {
-            let root = find_workspace_root(workspace_root.to_path_buf())?;
-            let cases = load_agent_native_cases(&root, Vec::new())?;
+            let cases = if arguments.get("agent_configs").is_some() {
+                inline_agent_native_cases(&arguments)
+            } else {
+                let root = find_workspace_root(workspace_root.to_path_buf())?;
+                load_agent_native_cases(&root, Vec::new())?
+            };
             json!(evaluate_agent_native_configs(&cases))
         }
         "runwarden.bench.run" => {
@@ -689,9 +707,14 @@ fn call_external_provider(
 
     match &provider_record.kind {
         ProviderKind::Shell if provider == "external.shell.command" => {
-            let input_path = string_field(arguments, "input_path").ok_or_else(|| {
-                "--input JSON is required for external.shell.command mediated calls".to_string()
-            })?;
+            let Some(input_path) = string_field(arguments, "input_path") else {
+                return Ok(json!({
+                    "provider": provider,
+                    "execution_status": "incomplete",
+                    "external_adapter_required": true,
+                    "side_effect_executed": false
+                }));
+            };
             let request_body = fs::read_to_string(&input_path).map_err(|err| {
                 format!("failed to read external shell request {input_path}: {err}")
             })?;
@@ -907,6 +930,10 @@ fn read_trace_from_arguments(arguments: &Value) -> Result<Vec<TraceEvent>, Strin
         return serde_json::from_value(trace.clone())
             .map_err(|err| format!("trace is invalid: {err}"));
     }
+    if let Some(trace) = arguments.get("trace_events") {
+        return serde_json::from_value(trace.clone())
+            .map_err(|err| format!("trace_events is invalid: {err}"));
+    }
     let path = string_field(arguments, "trace_path")
         .ok_or_else(|| "trace_path is required".to_string())?;
     let body =
@@ -957,6 +984,28 @@ fn verify_trace_events(events: Vec<TraceEvent>) -> Value {
             }
         }),
     }
+}
+
+fn inline_agent_native_cases(arguments: &Value) -> Vec<AgentNativeConfigCase> {
+    arguments
+        .get("agent_configs")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|case| {
+            let id = case.get("id").and_then(Value::as_str)?.to_string();
+            let config = case.get("config")?.clone();
+            let expectation = match case.get("expectation").and_then(Value::as_str) {
+                Some("raw_tools_denied") => AgentNativeExpectation::RawToolsDenied,
+                _ => AgentNativeExpectation::RunwardenOnlyAllowed,
+            };
+            Some(AgentNativeConfigCase {
+                id,
+                config,
+                expectation,
+            })
+        })
+        .collect()
 }
 
 fn trace_query_from_arguments(arguments: &Value) -> TraceQuery {

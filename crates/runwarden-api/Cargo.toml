@@ -10,6 +10,7 @@ rust-version.workspace = true
 [dependencies]
 runwarden-assurance = { path = "../runwarden-assurance" }
 runwarden-kernel = { path = "../runwarden-kernel" }
+runwarden-platform = { path = "../runwarden-platform" }
 runwarden-providers = { path = "../runwarden-providers" }
 serde.workspace = true
 serde_json.workspace = true

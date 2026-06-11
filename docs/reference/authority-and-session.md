@@ -63,6 +63,14 @@ provider call is recorded with adapter denial semantics; the exact approval may
 already be consumed because consumption happens after digest recheck and before
 trusted execution.
 
+Local API provider routes keep their launch token, Host, and Origin checks at
+the API boundary, then sync in-memory sessions and approval records into the
+Runwarden platform executor before provider execution. Pending, approved, and
+consumed approval state is synced back so `/approvals` and approval decision
+endpoints continue to expose the kernel-owned approval queue. Explicit
+`approval_id` calls are evaluated against platform approval state in the final
+approval pass, not rejected by the executor's pre-approval policy screen.
+
 ## Reviewer Console
 
 The Reviewer Console launch bundle renders pending approval records with the

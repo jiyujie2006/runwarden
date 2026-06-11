@@ -34,6 +34,11 @@ tools/call runwarden.report.render
 `runwarden.provider.call` supports inline safe providers such as
 `runwarden.input.inspect`, `runwarden.audit.summary`,
 `runwarden.accountability.summary`, and `runwarden.eval.agent-native`.
+Provider execution is submitted to the Runwarden platform executor with an
+inline session manifest derived from `session_allowed_providers`,
+`active_assessment`, actor, and authz arguments. The MCP boundary formats
+successful provider output back into the existing tool payload shape and formats
+kernel denials as tool results with `isError: true`.
 
 ## JSON-RPC and Tool Result Semantics
 
@@ -52,6 +57,11 @@ tools/call runwarden.report.render
 - `runwarden.report.lint` checks claim citations against verified observation
   references.
 - `runwarden.report.render` renders only cited reports.
+
+Dedicated `runwarden.trace.export`, `runwarden.report.lint`, and
+`runwarden.report.render` tool calls use the same platform executor path as
+generic provider calls. `runwarden.trace.export` still rejects tampered inline
+trace events before exporting and before returning any event page.
 
 ## Stdio Framing
 

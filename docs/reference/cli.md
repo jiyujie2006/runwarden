@@ -116,3 +116,8 @@ rejected before writing bundles.
 
 `runwarden api serve` starts the Local API used by the Reviewer Console and SDK.
 Control-plane routes require launch token and Host/Origin checks.
+Provider execution routes keep those Local API checks at the API boundary, then
+submit provider calls and non-preview report rendering to the Runwarden platform
+executor. The Local API preserves its operation envelope and approval queue
+response shapes while platform state owns provider-call records and approval
+consumption.

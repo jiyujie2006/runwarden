@@ -3,7 +3,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use runwarden_assurance::accountability::accountability_summary;
 use runwarden_assurance::artifact::{seal_artifact, verify_artifact_manifest};
@@ -11,26 +11,22 @@ use runwarden_assurance::audit::audit_summary;
 use runwarden_assurance::bench::benchmark_workspace;
 use runwarden_assurance::cert::{certify_agent_config, certify_workspace};
 use runwarden_assurance::eval::{
-    AgentNativeConfigCase, AgentNativeExpectation, EvalThresholds, evaluate_agent_native_configs,
-    evaluate_report_assurance,
+    AgentNativeConfigCase, AgentNativeExpectation, evaluate_agent_native_configs,
 };
 use runwarden_assurance::report::{
-    RenderFormat, ReportDraft, lint_report_against_trace, render_report, scaffold_report_from_trace,
+    RenderFormat, ReportDraft, lint_report_against_trace, render_report,
 };
 use runwarden_kernel::artifact::ArtifactManifest;
-use runwarden_kernel::authority::{ApprovalBinding, ApprovalRecord, ApprovalState};
-use runwarden_kernel::contracts::{
-    ErrorKind, ExecutionStatus, PolicyDecision, ProviderCall, ProviderClass, ProviderOutcome,
-    SideEffectKind,
-};
+use runwarden_kernel::authority::{ApprovalRecord, ApprovalState};
+use runwarden_kernel::contracts::{PolicyDecision, ProviderCall, SideEffectKind};
 use runwarden_kernel::evidence::{InMemoryTraceStore, TraceEvent, TraceQuery, hex_sha256};
-use runwarden_kernel::kernel::{KernelEnforcer, KernelPolicy};
 use runwarden_kernel::manifest::{AssessmentManifest, SessionManifest};
+use runwarden_platform::{
+    ApprovalListFilter, ProviderExecutionRequest, ProviderExecutionResult, RunwardenPlatform,
+};
 use runwarden_providers::catalog::{
     EXTERNAL_PROVIDER_IDS, FIRST_PARTY_PROVIDER_IDS, full_provider_registry,
 };
-use runwarden_providers::evidence::{EvidenceInspectPolicy, inspect_evidence_root};
-use runwarden_providers::input::{InputInspectPolicy, InputSource, inspect_input};
 use serde_json::{Value, json};
 
 pub const LOCAL_API_SECURITY_MODEL: &str =
@@ -98,6 +94,7 @@ pub struct LocalApiServerConfig {
 
 pub struct LocalApiRouter {
     security: LocalApiSecurity,
+    platform_root: PathBuf,
 }
 
 struct OperationFailure {
@@ -111,15 +108,30 @@ struct OperationFailure {
 
 impl LocalApiRouter {
     pub fn new(security: LocalApiSecurity) -> Self {
-        Self { security }
+        Self::with_platform_root(security, generated_local_api_platform_root())
+    }
+
+    pub fn with_platform_root(
+        security: LocalApiSecurity,
+        platform_root: impl Into<PathBuf>,
+    ) -> Self {
+        let platform_root = platform_root.into();
+        let _ = fs::create_dir_all(&platform_root);
+        Self {
+            security,
+            platform_root,
+        }
     }
 
     pub fn from_config(config: LocalApiServerConfig) -> Self {
-        Self::new(LocalApiSecurity::new(
-            config.launch_token,
-            [config.allowed_host],
-            [config.allowed_origin],
-        ))
+        Self::with_platform_root(
+            LocalApiSecurity::new(
+                config.launch_token,
+                [config.allowed_host],
+                [config.allowed_origin],
+            ),
+            std::env::current_dir().unwrap_or_else(|_| generated_local_api_platform_root()),
+        )
     }
 
     pub fn handle(&mut self, request: LocalApiRequest, body: Option<Value>) -> LocalApiResponse {
@@ -437,52 +449,27 @@ impl LocalApiRouter {
             );
         };
 
-        let mut enforcer =
-            KernelEnforcer::new(full_provider_registry(), session.to_kernel_policy());
-        for approval in self.security.approvals.values().cloned() {
-            enforcer.add_approval(approval);
-        }
-        let mut outcome = enforcer.evaluate_call(&call);
-        if outcome.decision == PolicyDecision::RequiresReview
-            && outcome.envelope.approval_id.is_none()
-        {
-            let binding = enforcer.approval_binding_for_call(&call);
-            self.enqueue_pending_approval(&mut outcome, binding);
-        }
+        let execution = match self.submit_platform_provider_call(call, Some(session)) {
+            Ok(execution) => execution,
+            Err(message) => {
+                return operation_error_with_headers(
+                    500,
+                    authorization_headers,
+                    "failed",
+                    "internal",
+                    message,
+                    false,
+                );
+            }
+        };
+        let mut outcome = execution.outcome.clone();
         if outcome.decision == PolicyDecision::Allowed {
-            if call
-                .approval_id
-                .as_deref()
-                .and_then(|approval_id| enforcer.approval_state(approval_id))
-                == Some(ApprovalState::Consumed)
-            {
-                self.security
-                    .persist_consumed_approval(&call, &enforcer.approval_binding_for_call(&call));
-            }
-            match execute_first_party_provider_call(&call, Some(&session)) {
-                Ok(output) => {
-                    let side_effect_executed =
-                        provider_output_side_effect_executed(&call.provider, &output);
-                    outcome.execution_status = if output
-                        .get("external_adapter_required")
-                        .and_then(Value::as_bool)
-                        == Some(true)
-                    {
-                        ExecutionStatus::Incomplete
-                    } else {
-                        ExecutionStatus::Completed
-                    };
-                    outcome.envelope.side_effect_executed = side_effect_executed;
-                    outcome.output = output;
-                }
-                Err(message) => {
-                    outcome.decision = PolicyDecision::Denied;
-                    outcome.execution_status = ExecutionStatus::Failed;
-                    outcome.envelope.decision = PolicyDecision::Denied;
-                    outcome.envelope.error_kind = Some(ErrorKind::Internal);
-                    outcome.envelope.reason = message;
-                }
-            }
+            outcome.output = provider_output_for_local_api(&execution);
+            outcome.envelope.side_effect_executed = local_api_provider_side_effect_executed(
+                &execution.call.provider,
+                &outcome.output,
+                outcome.envelope.side_effect_executed,
+            );
         }
 
         let side_effect_executed = outcome.envelope.side_effect_executed;
@@ -661,9 +648,9 @@ impl LocalApiRouter {
         };
         if !preview {
             let call = local_api_report_render_call(&body);
-            let policy = match string_field(&body, "session_id") {
-                Some(session_id) => match self.security.sessions.get(&session_id) {
-                    Some(session) => session.to_kernel_policy(),
+            let session = match string_field(&body, "session_id") {
+                Some(session_id) => match self.security.sessions.get(&session_id).cloned() {
+                    Some(session) => Some(session),
                     None => {
                         return operation_error_with_headers(
                             404,
@@ -675,19 +662,22 @@ impl LocalApiRouter {
                         );
                     }
                 },
-                None => local_api_default_report_render_policy(),
+                None => None,
             };
-            let mut enforcer = KernelEnforcer::new(full_provider_registry(), policy);
-            for approval in self.security.approvals.values().cloned() {
-                enforcer.add_approval(approval);
-            }
-            let mut outcome = enforcer.evaluate_call(&call);
-            if outcome.decision == PolicyDecision::RequiresReview
-                && outcome.envelope.approval_id.is_none()
-            {
-                let binding = enforcer.approval_binding_for_call(&call);
-                self.enqueue_pending_approval(&mut outcome, binding);
-            }
+            let execution = match self.submit_platform_provider_call(call, session) {
+                Ok(execution) => execution,
+                Err(message) => {
+                    return operation_error_with_headers(
+                        500,
+                        authorization_headers,
+                        "failed",
+                        "internal",
+                        message,
+                        false,
+                    );
+                }
+            };
+            let outcome = execution.outcome.clone();
             if outcome.decision != PolicyDecision::Allowed {
                 return operation_response_with_headers(
                     200,
@@ -701,15 +691,16 @@ impl LocalApiRouter {
                     ["review_approval"],
                 );
             }
-            if call
-                .approval_id
-                .as_deref()
-                .and_then(|approval_id| enforcer.approval_state(approval_id))
-                == Some(ApprovalState::Consumed)
-            {
-                self.security
-                    .persist_consumed_approval(&call, &enforcer.approval_binding_for_call(&call));
-            }
+            return operation_response_with_headers(
+                200,
+                authorization_headers,
+                json!({
+                    "preview": false,
+                    "rendered": provider_output_for_local_api(&execution)
+                }),
+                outcome.envelope.side_effect_executed,
+                ["download_rendered_artifact_with_token"],
+            );
         }
         let (report, trace) = match read_report_and_trace_from_body(&body) {
             Ok(values) => values,
@@ -760,46 +751,43 @@ impl LocalApiRouter {
         }
     }
 
-    fn enqueue_pending_approval(
+    fn submit_platform_provider_call(
         &mut self,
-        outcome: &mut ProviderOutcome,
-        binding: ApprovalBinding,
-    ) {
-        let approval_id = pending_approval_id_for_binding(&binding);
-        let should_insert = self
-            .security
-            .approvals
-            .get(&approval_id)
-            .map(|approval| {
-                !matches!(
-                    approval.state,
-                    ApprovalState::Pending | ApprovalState::Approved
-                )
-            })
-            .unwrap_or(true);
-        if should_insert {
-            self.security
-                .insert_approval(ApprovalRecord::new(&approval_id, binding));
+        call: ProviderCall,
+        session: Option<SessionManifest>,
+    ) -> Result<ProviderExecutionResult, String> {
+        let mut platform =
+            RunwardenPlatform::open(&self.platform_root).map_err(|err| err.to_string())?;
+        self.sync_security_into_platform(&platform)?;
+        let execution = platform
+            .submit_provider_call(ProviderExecutionRequest { call, session })
+            .map_err(|err| err.to_string())?;
+        self.sync_approvals_from_platform(&platform)?;
+        Ok(execution)
+    }
+
+    fn sync_security_into_platform(&self, platform: &RunwardenPlatform) -> Result<(), String> {
+        for session in self.security.sessions.values() {
+            platform
+                .write_session(session)
+                .map_err(|err| err.to_string())?;
         }
-        let approval = self
-            .security
-            .approvals
-            .get(&approval_id)
-            .cloned()
-            .expect("pending approval was inserted");
-        outcome.envelope.approval_id = Some(approval_id.clone());
-        outcome.output = json!({
-            "approval": approval,
-            "approval_id": approval_id,
-            "side_effect_executed": false
-        });
-        if !outcome
-            .next_actions
-            .iter()
-            .any(|action| action == "review_approval")
+        for approval in self.security.approvals.values() {
+            platform
+                .write_approval(approval)
+                .map_err(|err| err.to_string())?;
+        }
+        Ok(())
+    }
+
+    fn sync_approvals_from_platform(&mut self, platform: &RunwardenPlatform) -> Result<(), String> {
+        for approval in platform
+            .list_approvals(ApprovalListFilter::All)
+            .map_err(|err| err.to_string())?
         {
-            outcome.next_actions.push("review_approval".to_string());
+            self.security.insert_approval(approval);
         }
+        Ok(())
     }
 
     fn artifact_verify(&self, request: &LocalApiRequest, body: Option<Value>) -> LocalApiResponse {
@@ -1239,6 +1227,19 @@ fn route_path(path: &str) -> &str {
     path.split_once('?').map(|(route, _)| route).unwrap_or(path)
 }
 
+fn generated_local_api_platform_root() -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let root = std::env::temp_dir().join(format!(
+        "runwarden-local-api-{}-{nanos}",
+        std::process::id()
+    ));
+    let _ = fs::create_dir_all(&root);
+    root
+}
+
 fn query_param(path: &str, name: &str) -> Option<String> {
     let (_, query) = path.split_once('?')?;
     query.split('&').find_map(|pair| {
@@ -1247,12 +1248,22 @@ fn query_param(path: &str, name: &str) -> Option<String> {
     })
 }
 
-fn pending_approval_id_for_binding(binding: &ApprovalBinding) -> String {
-    let digest = hex_sha256(&serde_json::to_vec(binding).expect("approval binding serializes"));
-    format!("approval_{}", &digest[..16])
+fn provider_output_for_local_api(execution: &ProviderExecutionResult) -> Value {
+    execution
+        .output
+        .get("output")
+        .cloned()
+        .unwrap_or_else(|| execution.output.clone())
 }
 
-fn provider_output_side_effect_executed(provider_id: &str, output: &Value) -> bool {
+fn local_api_provider_side_effect_executed(
+    provider_id: &str,
+    output: &Value,
+    platform_side_effect_executed: bool,
+) -> bool {
+    if platform_side_effect_executed {
+        return true;
+    }
     if let Some(side_effect_executed) = output.get("side_effect_executed").and_then(Value::as_bool)
     {
         return side_effect_executed;
@@ -1354,13 +1365,6 @@ fn string_field(body: &Value, name: &str) -> Option<String> {
         .map(ToString::to_string)
 }
 
-fn local_api_default_report_render_policy() -> KernelPolicy {
-    let mut policy = KernelPolicy::default();
-    policy.allow_provider("runwarden.report.render");
-    policy.active_assessment = true;
-    policy
-}
-
 fn local_api_report_render_call(body: &Value) -> ProviderCall {
     ProviderCall {
         session_id: string_field(body, "session_id")
@@ -1452,145 +1456,6 @@ fn parse_render_format(format: &str) -> Result<RenderFormat, String> {
     }
 }
 
-fn verify_trace_events(events: Vec<TraceEvent>) -> Value {
-    let event_count = events.len();
-    let mut store = InMemoryTraceStore::default();
-    for event in events {
-        store.append(event);
-    }
-
-    match store.verify_hash_chain() {
-        Ok(()) => json!({
-            "verified": true,
-            "event_count": event_count
-        }),
-        Err(err) => json!({
-            "verified": false,
-            "error_kind": "trace_tampered",
-            "event_count": event_count,
-            "offset": err.offset,
-            "obs_id": err.obs_id,
-            "message": err.reason
-        }),
-    }
-}
-
-fn execute_first_party_provider_call(
-    call: &ProviderCall,
-    session: Option<&SessionManifest>,
-) -> Result<Value, String> {
-    let registry = full_provider_registry();
-    if registry
-        .get(&call.provider)
-        .is_some_and(|provider| provider.class == ProviderClass::External)
-    {
-        return Ok(json!({
-            "provider": call.provider,
-            "execution_status": "not_executed",
-            "external_adapter_required": true,
-            "side_effect_executed": false
-        }));
-    }
-    let arguments = resolve_session_path_arguments(session, &call.arguments)?;
-
-    match call.provider.as_str() {
-        "runwarden.input.inspect" => {
-            let bytes = if let Some(text) = string_field(&arguments, "input_text") {
-                text.into_bytes()
-            } else {
-                let path = string_field(&arguments, "input_path")
-                    .ok_or_else(|| "input_text or input_path is required".to_string())?;
-                fs::read(&path).map_err(|err| format!("failed to read input {path}: {err}"))?
-            };
-            Ok(json!(inspect_input(
-                InputSource::UserPrompt,
-                &bytes,
-                InputInspectPolicy::default()
-            )))
-        }
-        "runwarden.evidence.inspect" => {
-            let root = string_field(&arguments, "root_path")
-                .or_else(|| resolve_session_root_path(session, &arguments))
-                .or_else(|| string_field(&arguments, "root"))
-                .ok_or_else(|| "root_path is required".to_string())?;
-            inspect_evidence_root(Path::new(&root), EvidenceInspectPolicy::default())
-                .map(|inspection| json!(inspection))
-                .map_err(|err| err.to_string())
-        }
-        "runwarden.trace.verify" => read_trace_from_body(&arguments).map(verify_trace_events),
-        "runwarden.trace.export" => {
-            let events = read_trace_from_body(&arguments)?;
-            let mut store = InMemoryTraceStore::default();
-            for event in events {
-                store.append(event);
-            }
-            store
-                .stream_export(trace_query_from_body(&arguments))
-                .map(|page| json!(page))
-                .map_err(|err| err.to_string())
-        }
-        "runwarden.report.scaffold" => {
-            let events = read_trace_from_body(&arguments)?;
-            Ok(json!(scaffold_report_from_trace(&events)))
-        }
-        "runwarden.report.lint" => {
-            let (report, trace) = read_report_and_trace_from_body(&arguments)?;
-            Ok(json!(lint_report_against_trace(&report, &trace)))
-        }
-        "runwarden.report.render" => {
-            let (report, trace) = read_report_and_trace_from_body(&arguments)?;
-            let format = parse_render_format(
-                string_field(&arguments, "format")
-                    .as_deref()
-                    .unwrap_or("markdown"),
-            )?;
-            render_report(&report, &trace, format)
-                .map(|rendered| json!(rendered))
-                .map_err(|err| err.message)
-        }
-        "runwarden.audit.summary" => {
-            let events = read_trace_from_body(&arguments)?;
-            Ok(json!(audit_summary(&events)))
-        }
-        "runwarden.accountability.summary" => {
-            let events = read_trace_from_body(&arguments)?;
-            Ok(json!(accountability_summary(&events)))
-        }
-        "runwarden.cert.all" => {
-            let root = find_workspace_root(
-                std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-            )?;
-            Ok(json!(certify_workspace(&root)))
-        }
-        "runwarden.eval.all" => {
-            let (report, trace) = read_report_and_trace_from_body(&arguments)?;
-            let expected_obs: Vec<_> = trace.iter().map(|event| event.obs_id.clone()).collect();
-            Ok(json!(evaluate_report_assurance(
-                &report,
-                &trace,
-                expected_obs,
-                EvalThresholds::strict()
-            )))
-        }
-        "runwarden.eval.agent-native" => {
-            let root = find_workspace_root(
-                std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-            )?;
-            let cases = load_agent_native_cases(&root, Vec::new())?;
-            Ok(json!(evaluate_agent_native_configs(&cases)))
-        }
-        "runwarden.bench.run" => {
-            let root = find_workspace_root(
-                std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-            )?;
-            benchmark_workspace(&root)
-                .map(|report| json!(report))
-                .map_err(|err| err.to_string())
-        }
-        other => Err(format!("unsupported first-party provider call: {other}")),
-    }
-}
-
 fn trace_query_from_body(body: &Value) -> TraceQuery {
     TraceQuery {
         offset: number_field(body, "offset").unwrap_or(0),
@@ -1600,61 +1465,6 @@ fn trace_query_from_body(body: &Value) -> TraceQuery {
         obs_prefix: string_field(body, "obs_prefix"),
         max_bytes: number_field(body, "max_bytes"),
     }
-}
-
-fn resolve_session_path_arguments(
-    session: Option<&SessionManifest>,
-    arguments: &Value,
-) -> Result<Value, String> {
-    let mut resolved = arguments.clone();
-    let Some(object) = resolved.as_object_mut() else {
-        return Ok(resolved);
-    };
-    for field in ["input_path", "trace_path", "report_path", "root_path"] {
-        let Some(path) = object.get(field).and_then(Value::as_str) else {
-            continue;
-        };
-        let path = PathBuf::from(path);
-        if path.is_absolute() {
-            if !session_path_is_allowed(session, arguments, &path)? {
-                return Err(format!("{field} is outside the session scope"));
-            }
-            continue;
-        }
-        let Some(resolved_path) = resolve_session_relative_path(session, arguments, &path)? else {
-            continue;
-        };
-        if !session_path_is_allowed(session, arguments, &resolved_path)? {
-            return Err(format!("{field} is outside the session scope"));
-        }
-        object.insert(
-            field.to_string(),
-            Value::String(resolved_path.to_string_lossy().into_owned()),
-        );
-    }
-    Ok(resolved)
-}
-
-fn session_path_is_allowed(
-    session: Option<&SessionManifest>,
-    arguments: &Value,
-    path: &Path,
-) -> Result<bool, String> {
-    let Some(session) = session else {
-        return Ok(true);
-    };
-    if let Some(root_name) = string_field(arguments, "root") {
-        let root = session
-            .roots
-            .iter()
-            .find(|root| root.name == root_name)
-            .ok_or_else(|| "requested root is outside the session scope".to_string())?;
-        return Ok(path_is_within_root(path, &root.path));
-    }
-    Ok(session
-        .roots
-        .iter()
-        .any(|root| path_is_within_root(path, &root.path)))
 }
 
 fn path_is_within_root(path: &Path, root: &Path) -> bool {
@@ -1726,42 +1536,6 @@ fn resolve_local_artifact_output_path(root: &Path, requested: &str) -> Result<Pa
         );
     }
     Ok(output_path)
-}
-
-fn resolve_session_relative_path(
-    session: Option<&SessionManifest>,
-    arguments: &Value,
-    path: &Path,
-) -> Result<Option<PathBuf>, String> {
-    let Some(session) = session else {
-        return Ok(None);
-    };
-    if let Some(root_name) = string_field(arguments, "root") {
-        let root = session
-            .roots
-            .iter()
-            .find(|root| root.name == root_name)
-            .ok_or_else(|| "relative path root is outside the session scope".to_string())?;
-        return Ok(Some(root.path.join(path)));
-    }
-    match session.roots.as_slice() {
-        [root] => Ok(Some(root.path.join(path))),
-        [] => Ok(None),
-        _ => Err("relative path requires an explicit scoped root".to_string()),
-    }
-}
-
-fn resolve_session_root_path(
-    session: Option<&SessionManifest>,
-    arguments: &Value,
-) -> Option<String> {
-    let root = string_field(arguments, "root")?;
-    let session = session?;
-    session
-        .roots
-        .iter()
-        .find(|candidate| candidate.name == root)
-        .map(|candidate| candidate.path.to_string_lossy().into_owned())
 }
 
 fn load_agent_native_cases(
@@ -3092,17 +2866,6 @@ impl LocalApiSecurity {
         self.approvals
             .get(approval_id)
             .map(|approval| approval.state.clone())
-    }
-
-    fn persist_consumed_approval(&mut self, call: &ProviderCall, binding: &ApprovalBinding) {
-        let Some(approval_id) = call.approval_id.as_deref() else {
-            return;
-        };
-        if let Some(approval) = self.approvals.get_mut(approval_id)
-            && approval.state == ApprovalState::Approved
-        {
-            let _ = approval.consume_once(binding);
-        }
     }
 
     pub fn approval_queue(&self, request: &LocalApiRequest) -> LocalApiResponse {

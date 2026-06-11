@@ -239,6 +239,44 @@ fn allowed_first_party_provider_executes_once_through_executor() {
 }
 
 #[test]
+fn agent_native_eval_accepts_inline_agent_configs() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let mut platform = RunwardenPlatform::open(workspace.path()).expect("open platform");
+    let session = session_manifest(workspace.path(), &["runwarden.eval.agent-native"]);
+
+    let execution = platform
+        .submit_provider_call(ProviderExecutionRequest {
+            call: provider_call(
+                "runwarden.eval.agent-native",
+                json!({
+                    "agent_configs": [
+                        {
+                            "id": "safe",
+                            "expectation": "runwarden_only_allowed",
+                            "config": {"mcpServers":{"runwarden":{"command":"runwarden-mcp"}}}
+                        },
+                        {
+                            "id": "unsafe",
+                            "expectation": "raw_tools_denied",
+                            "config": {"mcpServers":{"runwarden":{"command":"runwarden-mcp"},"shell":{"command":"bash"}}}
+                        }
+                    ]
+                }),
+            ),
+            session: Some(session),
+        })
+        .expect("submit provider call");
+
+    assert_eq!(execution.outcome.decision, PolicyDecision::Allowed);
+    assert_eq!(execution.output["provider"], "runwarden.eval.agent-native");
+    assert_eq!(execution.output["output"]["passed"], true);
+    assert_eq!(
+        execution.output["output"]["metrics"]["raw_tool_block_rate"],
+        1.0
+    );
+}
+
+#[test]
 fn provider_execution_error_recomputes_denied_observation_id() {
     let workspace = tempfile::tempdir().expect("workspace");
     let mut platform = RunwardenPlatform::open(workspace.path()).expect("open platform");

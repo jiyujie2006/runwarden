@@ -24,11 +24,12 @@ family such as `mcp`, `api`, `scanner`, or `shell`.
 String family prefixes such as `external.mcp.*` are descriptive naming
 conventions, not the source of truth for execution.
 
-Provider calls submitted through the CLI are mediated by the Runwarden platform
-executor. The executor appends a `provider_call_requested` event before policy
-evaluation, applies session-derived or CLI-default kernel policy, writes
-completion/denial/review events, and persists a provider-call record under
-`.runwarden/provider-calls/`.
+Provider calls submitted through the CLI, Local API, and `runwarden-mcp` are
+mediated by the Runwarden platform executor. The executor appends a
+`provider_call_requested` event before policy evaluation, applies
+session-derived or surface-default kernel policy, writes
+completion/denial/review events, and persists a provider-call record under the
+surface platform root at `.runwarden/provider-calls/`.
 
 ## First-Party Providers
 
