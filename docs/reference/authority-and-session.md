@@ -5,8 +5,8 @@ calls.
 
 ## Sessions
 
-Sessions are created from assessment manifests and persisted by the CLI. A
-session carries:
+Sessions are created from assessment manifests and persisted in the local
+Runwarden platform state under `.runwarden/sessions/`. A session carries:
 
 - session id
 - manifest hash
