@@ -1,5 +1,7 @@
 use std::{fs, process::Command};
 
+use runwarden_kernel::authority::{ApprovalBinding, ApprovalRecord, ApprovalState};
+use runwarden_kernel::evidence::hex_sha256;
 use tempfile::tempdir;
 
 fn toml_basic_string(value: &str) -> String {
