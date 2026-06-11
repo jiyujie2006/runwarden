@@ -6,7 +6,7 @@ use runwarden_kernel::manifest::{
     AuthzManifestState, BudgetManifest, RootManifest, SessionManifest, TargetManifest,
 };
 use runwarden_platform::{
-    ApprovalListFilter, RunwardenPlatform, validate_record_id, validate_session_id,
+    ApprovalListFilter, PlatformError, RunwardenPlatform, validate_record_id, validate_session_id,
 };
 
 fn assessment_manifest() -> AssessmentManifest {
@@ -187,4 +187,38 @@ fn invalid_approval_write_does_not_create_state_directory() {
 
     assert_eq!(err.to_string(), "invalid record id: ../approval-1");
     assert!(!workspace.path().join(".runwarden/approvals").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn list_sessions_rejects_symlinked_state_directory_when_sessions_dir_is_missing() {
+    use std::os::unix::fs::symlink;
+
+    let workspace = tempfile::tempdir().expect("workspace");
+    let outside = tempfile::tempdir().expect("outside");
+    symlink(outside.path(), workspace.path().join(".runwarden")).expect("symlink state dir");
+    let platform = RunwardenPlatform::open(workspace.path()).expect("open platform");
+
+    let err = platform.list_sessions().expect_err("symlinked state dir");
+
+    assert!(matches!(err, PlatformError::StatePathSymlink));
+    assert!(!outside.path().join("sessions").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn list_approvals_rejects_symlinked_state_directory_when_approvals_dir_is_missing() {
+    use std::os::unix::fs::symlink;
+
+    let workspace = tempfile::tempdir().expect("workspace");
+    let outside = tempfile::tempdir().expect("outside");
+    symlink(outside.path(), workspace.path().join(".runwarden")).expect("symlink state dir");
+    let platform = RunwardenPlatform::open(workspace.path()).expect("open platform");
+
+    let err = platform
+        .list_approvals(ApprovalListFilter::All)
+        .expect_err("symlinked state dir");
+
+    assert!(matches!(err, PlatformError::StatePathSymlink));
+    assert!(!outside.path().join("approvals").exists());
 }

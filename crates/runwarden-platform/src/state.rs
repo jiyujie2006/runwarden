@@ -77,6 +77,7 @@ impl PlatformState {
     }
 
     pub(crate) fn list_sessions(&self) -> Result<Vec<SessionManifest>, PlatformError> {
+        self.reject_state_path_symlink_components(Path::new(STATE_DIR))?;
         let dir = self.sessions_dir();
         match fs::symlink_metadata(&dir) {
             Ok(_) => {}
@@ -121,6 +122,7 @@ impl PlatformState {
         &self,
         filter: ApprovalListFilter,
     ) -> Result<Vec<ApprovalRecord>, PlatformError> {
+        self.reject_state_path_symlink_components(Path::new(STATE_DIR))?;
         let dir = self.approvals_dir();
         match fs::symlink_metadata(&dir) {
             Ok(_) => {}

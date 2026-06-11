@@ -112,6 +112,36 @@ fn authority_create_rejects_path_traversal_approval_ids() {
     assert!(!dir.path().join(".runwarden/approvals").exists());
 }
 
+#[test]
+fn authority_create_reports_invalid_approval_id_before_malformed_arguments() {
+    let dir = tempdir().expect("tempdir");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_runwarden"))
+        .current_dir(dir.path())
+        .args([
+            "authority",
+            "create",
+            "--approval",
+            "../approval-1",
+            "--session",
+            "enterprise_ops",
+            "--provider",
+            "runwarden.report.render",
+            "--action",
+            "render",
+            "--arguments",
+            "{",
+        ])
+        .output()
+        .expect("authority create invalid id and malformed arguments");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
+    assert!(stderr.contains("invalid record id: ../approval-1"));
+    assert!(!stderr.contains("EOF while parsing"));
+    assert!(!dir.path().join(".runwarden/approvals").exists());
+}
+
 #[cfg(unix)]
 #[test]
 fn provider_call_executes_external_mcp_stdio_adapter_from_manifest() {

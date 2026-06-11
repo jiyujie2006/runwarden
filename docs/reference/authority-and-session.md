@@ -39,6 +39,8 @@ Authority records bind a reviewer decision to one exact provider call:
 - authz id
 - actor id
 
+Approval records are persisted under `.runwarden/approvals/`.
+
 Use:
 
 ```bash
