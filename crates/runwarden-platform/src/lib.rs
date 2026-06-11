@@ -16,6 +16,10 @@ pub enum PlatformError {
     InvalidArtifactOutputPath,
     #[error("artifact output path must not contain symlink components")]
     ArtifactOutputSymlink,
+    #[error("platform state path must stay under .runwarden")]
+    InvalidStatePath,
+    #[error("platform state path must not contain symlink components")]
+    StatePathSymlink,
 }
 
 #[derive(Debug, Clone)]
@@ -26,7 +30,7 @@ pub struct RunwardenPlatform {
 impl RunwardenPlatform {
     pub fn open(workspace_root: impl Into<PathBuf>) -> Result<Self, PlatformError> {
         Ok(Self {
-            state: PlatformState::open(workspace_root.into()),
+            state: PlatformState::open(workspace_root.into())?,
         })
     }
 

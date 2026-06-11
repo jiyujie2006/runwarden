@@ -12,27 +12,38 @@ pub struct PlatformState {
 }
 
 impl PlatformState {
-    pub(crate) fn open(workspace_root: PathBuf) -> Self {
-        Self { workspace_root }
+    pub(crate) fn open(workspace_root: PathBuf) -> Result<Self, PlatformError> {
+        Ok(Self {
+            workspace_root: workspace_root.canonicalize()?,
+        })
     }
 
     pub fn ensure_layout(&self) -> Result<(), PlatformError> {
-        for dir in [
-            self.state_dir(),
-            self.sessions_dir(),
-            self.approvals_dir(),
-            self.provider_calls_dir(),
-            self.provider_catalog_dir(),
-            self.traces_dir(),
-            self.artifacts_dir(),
+        for (relative_path, dir) in [
+            (PathBuf::from(STATE_DIR), self.state_dir()),
+            (state_relative_path("sessions"), self.sessions_dir()),
+            (state_relative_path("approvals"), self.approvals_dir()),
+            (
+                state_relative_path("provider-calls"),
+                self.provider_calls_dir(),
+            ),
+            (
+                state_relative_path("provider-catalog"),
+                self.provider_catalog_dir(),
+            ),
+            (state_relative_path("traces"), self.traces_dir()),
+            (state_relative_path("artifacts"), self.artifacts_dir()),
         ] {
+            self.reject_state_path_symlink_components(&relative_path)?;
             fs::create_dir_all(dir)?;
         }
         Ok(())
     }
 
     pub fn append_event(&self, event: &PlatformEvent) -> Result<(), PlatformError> {
+        self.reject_state_path_symlink_components(Path::new(STATE_DIR))?;
         fs::create_dir_all(self.state_dir())?;
+        self.reject_state_path_symlink_components(Path::new(STATE_DIR).join("events.jsonl"))?;
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -115,6 +126,42 @@ impl PlatformState {
         }
         Ok(())
     }
+
+    fn reject_state_path_symlink_components(
+        &self,
+        relative_path: impl AsRef<Path>,
+    ) -> Result<(), PlatformError> {
+        let relative_path = relative_path.as_ref();
+        if relative_path.is_absolute() {
+            return Err(PlatformError::InvalidStatePath);
+        }
+
+        let mut components = relative_path.components();
+        if components.next() != Some(Component::Normal(STATE_DIR.as_ref())) {
+            return Err(PlatformError::InvalidStatePath);
+        }
+
+        let mut current = self.workspace_root.clone();
+        for component in relative_path.components() {
+            let Component::Normal(part) = component else {
+                return Err(PlatformError::InvalidStatePath);
+            };
+            current.push(part);
+            match fs::symlink_metadata(&current) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    return Err(PlatformError::StatePathSymlink);
+                }
+                Ok(_) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(PlatformError::Io(err)),
+            }
+        }
+        Ok(())
+    }
+}
+
+fn state_relative_path(child: &str) -> PathBuf {
+    Path::new(STATE_DIR).join(child)
 }
 
 fn path_is_within_root(candidate: &Path, root: &Path) -> bool {
