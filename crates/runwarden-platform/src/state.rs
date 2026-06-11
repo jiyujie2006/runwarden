@@ -117,11 +117,13 @@ impl PlatformState {
                 return Err(PlatformError::InvalidArtifactOutputPath);
             };
             current.push(part);
-            if fs::symlink_metadata(&current)
-                .map(|metadata| metadata.file_type().is_symlink())
-                .unwrap_or(false)
-            {
-                return Err(PlatformError::ArtifactOutputSymlink);
+            match fs::symlink_metadata(&current) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    return Err(PlatformError::ArtifactOutputSymlink);
+                }
+                Ok(_) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(PlatformError::Io(err)),
             }
         }
         Ok(())

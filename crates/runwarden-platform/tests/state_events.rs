@@ -1,7 +1,7 @@
 use std::fs;
 use std::sync::{Mutex, OnceLock};
 
-use runwarden_platform::{PlatformEvent, RunwardenPlatform};
+use runwarden_platform::{PlatformError, PlatformEvent, RunwardenPlatform};
 use serde_json::json;
 
 #[test]
@@ -112,6 +112,33 @@ fn platform_rejects_artifact_output_paths_outside_workspace() {
             "artifact output paths must reject symlink escapes"
         );
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn platform_artifact_path_validation_fails_closed_on_metadata_errors() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let workspace = tempfile::tempdir().expect("temp workspace");
+    let blocked = workspace.path().join("blocked");
+    fs::create_dir(&blocked).expect("blocked dir");
+    fs::set_permissions(&blocked, fs::Permissions::from_mode(0o000)).expect("block permissions");
+    let inaccessible_child = blocked.join("child");
+    let metadata_error = fs::symlink_metadata(&inaccessible_child).expect_err("metadata error");
+    if metadata_error.kind() != std::io::ErrorKind::PermissionDenied {
+        fs::set_permissions(&blocked, fs::Permissions::from_mode(0o700))
+            .expect("restore permissions");
+        return;
+    }
+
+    let platform = RunwardenPlatform::open(workspace.path()).expect("open platform");
+    let result = platform.validate_artifact_output_path("blocked/child");
+
+    fs::set_permissions(&blocked, fs::Permissions::from_mode(0o700)).expect("restore permissions");
+    assert!(
+        matches!(result, Err(PlatformError::Io(err)) if err.kind() == std::io::ErrorKind::PermissionDenied),
+        "metadata errors other than NotFound must fail closed"
+    );
 }
 
 #[cfg(unix)]
