@@ -67,3 +67,10 @@ artifact-writing providers require approval before trusted side effects.
 When such a call lacks a usable matching approval, the platform executor returns
 `requires_review`, writes or returns a pending approval record, and preserves
 `side_effect_executed: false`.
+
+Provider adapters that reject an approved call must return provider-shaped
+denial output so the executor records the public error kind instead of collapsing
+the failure to `internal`. For example, `runwarden.report.render` citation
+failures are recorded as `report_citation_invalid` with execution status
+`failed`, and `runwarden.eval.agent-native` inline `agent_configs` must contain
+at least one well-formed case or fail with `argument_schema_invalid`.

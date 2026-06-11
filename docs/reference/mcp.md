@@ -61,7 +61,10 @@ kernel denials as tool results with `isError: true`.
 Dedicated `runwarden.trace.export`, `runwarden.report.lint`, and
 `runwarden.report.render` tool calls use the same platform executor path as
 generic provider calls. `runwarden.trace.export` still rejects tampered inline
-trace events before exporting and before returning any event page.
+trace events before exporting and before returning any event page. Approved
+trace export calls preserve the platform executor's page contract, including
+offset, limit, total matching count, next offset, byte truncation metadata, and
+compact obs refs derived from the returned page.
 
 ## Stdio Framing
 
@@ -75,6 +78,9 @@ Limits:
 - Oversized headers are rejected before allocating the body.
 - MCP helper encoders reject messages that do not serialize to JSON instead of
   emitting malformed frames.
+- Handler-generated MCP platform roots are removed after request handling.
+  Explicit platform roots passed by embedding tests or callers are not cleaned
+  up by `runwarden-mcp`.
 
 ## External MCP Egress
 

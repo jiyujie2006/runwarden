@@ -64,12 +64,14 @@ already be consumed because consumption happens after digest recheck and before
 trusted execution.
 
 Local API provider routes keep their launch token, Host, and Origin checks at
-the API boundary, then sync in-memory sessions and approval records into the
-Runwarden platform executor before provider execution. Pending, approved, and
-consumed approval state is synced back so `/approvals` and approval decision
-endpoints continue to expose the kernel-owned approval queue. Explicit
-`approval_id` calls are evaluated against platform approval state in the final
-approval pass, not rejected by the executor's pre-approval policy screen.
+the API boundary, then sync in-memory sessions into the Runwarden platform
+executor before provider execution. In-memory approval records may only fill
+missing platform records; they must not overwrite an existing platform approval,
+including consumed, denied, or revoked states. Pending, approved, and consumed
+approval state is synced back so `/approvals` and approval decision endpoints
+continue to expose the kernel-owned approval queue. Explicit `approval_id` calls
+are evaluated against platform approval state in the final approval pass, not
+rejected by the executor's pre-approval policy screen.
 
 ## Reviewer Console
 

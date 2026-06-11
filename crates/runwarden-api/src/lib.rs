@@ -186,7 +186,7 @@ impl LocalApiRouter {
                     "side_effect_executed": false
                 }),
             },
-            ("GET", "/approvals") => self.security.approval_queue(&request),
+            ("GET", "/approvals") => self.approval_queue(&request),
             ("GET", "/dashboard") => self.operation_response(
                 &request,
                 json!({
@@ -330,7 +330,38 @@ impl LocalApiRouter {
             reviewer: string_field(&body, "reviewer").unwrap_or_default(),
             reason: string_field(&body, "reason").unwrap_or_default(),
         };
-        self.security.decide_approval(request, approval_id, input)
+        if let Err(message) = self.sync_approvals_from_platform_root() {
+            return self.operation_error(request, 500, "failed", "internal", message, false);
+        }
+        let response = self.security.decide_approval(request, approval_id, input);
+        if response.status == 200
+            && let Some(approval) = self.security.approvals.get(approval_id)
+        {
+            let platform = match RunwardenPlatform::open(&self.platform_root) {
+                Ok(platform) => platform,
+                Err(err) => {
+                    return self.operation_error(
+                        request,
+                        500,
+                        "failed",
+                        "internal",
+                        err.to_string(),
+                        false,
+                    );
+                }
+            };
+            if let Err(err) = platform.write_approval(approval) {
+                return self.operation_error(
+                    request,
+                    500,
+                    "failed",
+                    "internal",
+                    err.to_string(),
+                    false,
+                );
+            }
+        }
+        response
     }
 
     fn session_create(
@@ -679,6 +710,25 @@ impl LocalApiRouter {
             };
             let outcome = execution.outcome.clone();
             if outcome.decision != PolicyDecision::Allowed {
+                let provider_output = provider_output_for_local_api(&execution);
+                if provider_output.get("error_kind").and_then(Value::as_str)
+                    == Some("report_citation_invalid")
+                {
+                    return operation_error_with_headers(
+                        422,
+                        authorization_headers,
+                        "denied",
+                        "report_citation_invalid",
+                        provider_output
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .unwrap_or("report citation render failed"),
+                        provider_output
+                            .get("side_effect_executed")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false),
+                    );
+                }
                 return operation_response_with_headers(
                     200,
                     authorization_headers,
@@ -772,12 +822,27 @@ impl LocalApiRouter {
                 .write_session(session)
                 .map_err(|err| err.to_string())?;
         }
+        let platform_approvals = platform
+            .list_approvals(ApprovalListFilter::All)
+            .map_err(|err| err.to_string())?;
+        let platform_approval_ids: BTreeSet<_> = platform_approvals
+            .iter()
+            .map(|approval| approval.approval_id.as_str())
+            .collect();
         for approval in self.security.approvals.values() {
-            platform
-                .write_approval(approval)
-                .map_err(|err| err.to_string())?;
+            if !platform_approval_ids.contains(approval.approval_id.as_str()) {
+                platform
+                    .write_approval(approval)
+                    .map_err(|err| err.to_string())?;
+            }
         }
         Ok(())
+    }
+
+    fn sync_approvals_from_platform_root(&mut self) -> Result<(), String> {
+        let platform =
+            RunwardenPlatform::open(&self.platform_root).map_err(|err| err.to_string())?;
+        self.sync_approvals_from_platform(&platform)
     }
 
     fn sync_approvals_from_platform(&mut self, platform: &RunwardenPlatform) -> Result<(), String> {
@@ -788,6 +853,13 @@ impl LocalApiRouter {
             self.security.insert_approval(approval);
         }
         Ok(())
+    }
+
+    fn approval_queue(&mut self, request: &LocalApiRequest) -> LocalApiResponse {
+        if let Err(message) = self.sync_approvals_from_platform_root() {
+            return self.operation_error(request, 500, "failed", "internal", message, false);
+        }
+        self.security.approval_queue(request)
     }
 
     fn artifact_verify(&self, request: &LocalApiRequest, body: Option<Value>) -> LocalApiResponse {

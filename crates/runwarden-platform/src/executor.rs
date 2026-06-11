@@ -91,35 +91,34 @@ impl RunwardenPlatform {
             return self.finish_provider_call(call, outcome, Value::Null);
         }
 
-        if provider_is_external_mcp(&call.provider) {
-            if let Some(input_path) = call
+        if provider_is_external_mcp(&call.provider)
+            && let Some(input_path) = call
                 .arguments
                 .get("input_path")
                 .and_then(Value::as_str)
                 .map(PathBuf::from)
+        {
+            if let Err(err) = resolve_external_mcp_manifest_argument(
+                call.arguments.as_object_mut().ok_or_else(|| {
+                    PlatformError::ProviderExecution(
+                        "provider call arguments must be an object".to_string(),
+                    )
+                })?,
+                &input_path,
+            ) {
+                let outcome = failed_before_side_effect(
+                    &call,
+                    "external_mcp_manifest",
+                    err.to_string(),
+                    ErrorKind::ArgumentSchemaInvalid,
+                );
+                return self.finish_provider_call(call, outcome, Value::Null);
+            }
+            outcome = evaluate_call_without_approvals(&call, request.session.as_ref());
+            if outcome.decision == PolicyDecision::Denied
+                && !is_explicit_approval_precheck_denial(&call, &outcome)
             {
-                if let Err(err) = resolve_external_mcp_manifest_argument(
-                    call.arguments.as_object_mut().ok_or_else(|| {
-                        PlatformError::ProviderExecution(
-                            "provider call arguments must be an object".to_string(),
-                        )
-                    })?,
-                    &input_path,
-                ) {
-                    let outcome = failed_before_side_effect(
-                        &call,
-                        "external_mcp_manifest",
-                        err.to_string(),
-                        ErrorKind::ArgumentSchemaInvalid,
-                    );
-                    return self.finish_provider_call(call, outcome, Value::Null);
-                }
-                outcome = evaluate_call_without_approvals(&call, request.session.as_ref());
-                if outcome.decision == PolicyDecision::Denied
-                    && !is_explicit_approval_precheck_denial(&call, &outcome)
-                {
-                    return self.finish_provider_call(call, outcome, Value::Null);
-                }
+                return self.finish_provider_call(call, outcome, Value::Null);
             }
         }
 
@@ -638,7 +637,27 @@ fn call_first_party_provider(
                     .as_deref()
                     .unwrap_or("markdown"),
             )?;
-            json!(render_report(&report, &trace, format).map_err(|err| err.message)?)
+            match render_report(&report, &trace, format) {
+                Ok(rendered) => json!(rendered),
+                Err(err) => {
+                    let message = err.message;
+                    let side_effect_executed = err.side_effect_executed;
+                    return Ok(json!({
+                        "provider": call.provider,
+                        "decision": "denied",
+                        "execution_status": "failed",
+                        "gate_id": "report_render",
+                        "error_kind": "report_citation_invalid",
+                        "reason": message.clone(),
+                        "side_effect_executed": side_effect_executed,
+                        "output": {
+                            "error_kind": "report_citation_invalid",
+                            "message": message,
+                            "side_effect_executed": side_effect_executed
+                        }
+                    }));
+                }
+            }
         }
         "runwarden.cert.all" => {
             let root = find_workspace_root(workspace_root.to_path_buf())?;
@@ -656,7 +675,25 @@ fn call_first_party_provider(
         }
         "runwarden.eval.agent-native" => {
             let cases = if arguments.get("agent_configs").is_some() {
-                inline_agent_native_cases(&arguments)
+                match inline_agent_native_cases(&arguments) {
+                    Ok(cases) => cases,
+                    Err(reason) => {
+                        return Ok(json!({
+                            "provider": call.provider,
+                            "decision": "denied",
+                            "execution_status": "failed",
+                            "gate_id": "argument_schema",
+                            "error_kind": "argument_schema_invalid",
+                            "reason": reason.clone(),
+                            "side_effect_executed": false,
+                            "output": {
+                                "error_kind": "argument_schema_invalid",
+                                "message": reason,
+                                "side_effect_executed": false
+                            }
+                        }));
+                    }
+                }
             } else {
                 let root = find_workspace_root(workspace_root.to_path_buf())?;
                 load_agent_native_cases(&root, Vec::new())?
@@ -986,20 +1023,41 @@ fn verify_trace_events(events: Vec<TraceEvent>) -> Value {
     }
 }
 
-fn inline_agent_native_cases(arguments: &Value) -> Vec<AgentNativeConfigCase> {
-    arguments
+fn inline_agent_native_cases(arguments: &Value) -> Result<Vec<AgentNativeConfigCase>, String> {
+    let cases = arguments
         .get("agent_configs")
         .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|case| {
-            let id = case.get("id").and_then(Value::as_str)?.to_string();
-            let config = case.get("config")?.clone();
+        .ok_or_else(|| "agent_configs must be an array".to_string())?;
+    if cases.is_empty() {
+        return Err("agent_configs must contain at least one case".to_string());
+    }
+
+    cases
+        .iter()
+        .enumerate()
+        .map(|(index, case)| {
+            let id = case
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.trim().is_empty())
+                .ok_or_else(|| format!("agent_configs[{index}].id is required"))?
+                .to_string();
+            let config = case
+                .get("config")
+                .cloned()
+                .ok_or_else(|| format!("agent_configs[{index}].config is required"))?;
             let expectation = match case.get("expectation").and_then(Value::as_str) {
                 Some("raw_tools_denied") => AgentNativeExpectation::RawToolsDenied,
-                _ => AgentNativeExpectation::RunwardenOnlyAllowed,
+                Some("runwarden_only_allowed") | None => {
+                    AgentNativeExpectation::RunwardenOnlyAllowed
+                }
+                Some(other) => {
+                    return Err(format!(
+                        "agent_configs[{index}].expectation is unsupported: {other}"
+                    ));
+                }
             };
-            Some(AgentNativeConfigCase {
+            Ok(AgentNativeConfigCase {
                 id,
                 config,
                 expectation,

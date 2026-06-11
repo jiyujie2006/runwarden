@@ -1881,19 +1881,55 @@ fn canonical_existing_parent(path: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use runwarden_kernel::contracts::{ProviderClass, ProviderKind};
 
     #[test]
     fn provider_external_dispatch_uses_registry_class() {
-        assert!(provider_is_external("external.api.request"));
-        assert!(provider_is_external("external.mcp.browser.open_page"));
-        assert!(!provider_is_external("runwarden.input.inspect"));
+        let registry = full_provider_registry();
+        assert_eq!(
+            registry
+                .get("external.api.request")
+                .expect("provider")
+                .class,
+            ProviderClass::External
+        );
+        assert_eq!(
+            registry
+                .get("external.mcp.browser.open_page")
+                .expect("provider")
+                .class,
+            ProviderClass::External
+        );
+        assert_eq!(
+            registry
+                .get("runwarden.input.inspect")
+                .expect("provider")
+                .class,
+            ProviderClass::FirstParty
+        );
     }
 
     #[test]
     fn provider_mcp_adapter_dispatch_uses_manifest_kind() {
-        assert!(provider_is_external_mcp("external.mcp.browser.open_page"));
-        assert!(!provider_is_external_mcp("external.api.request"));
-        assert!(!provider_is_external_mcp("external.shell.command"));
+        let registry = full_provider_registry();
+        assert_eq!(
+            registry
+                .get("external.mcp.browser.open_page")
+                .expect("provider")
+                .kind,
+            ProviderKind::Mcp
+        );
+        assert_eq!(
+            registry.get("external.api.request").expect("provider").kind,
+            ProviderKind::Api
+        );
+        assert_eq!(
+            registry
+                .get("external.shell.command")
+                .expect("provider")
+                .kind,
+            ProviderKind::Shell
+        );
     }
 }
 

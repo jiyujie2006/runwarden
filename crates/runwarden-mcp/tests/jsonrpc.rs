@@ -1,6 +1,8 @@
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use runwarden_kernel::authority::ApprovalRecord;
+use runwarden_kernel::evidence::TraceEvent;
 use runwarden_mcp::{
     handle_jsonrpc_body, handle_jsonrpc_body_with_platform_root, handle_jsonrpc_message,
     handle_stdio_payload,
@@ -408,6 +410,58 @@ fn report_lint_tool_returns_tool_error_for_uncited_claims() {
 }
 
 #[test]
+fn trace_export_approved_call_preserves_page_metadata() {
+    let root = temp_platform_root("mcp-trace-export");
+    let first = TraceEvent::sealed(
+        "obs_1".to_string(),
+        "provider_completed".to_string(),
+        Some("runwarden.input.inspect".to_string()),
+        json!({"decision":"allowed"}),
+        None,
+    );
+    let second = TraceEvent::sealed(
+        "obs_2".to_string(),
+        "provider_denied".to_string(),
+        Some("external.shell.command".to_string()),
+        json!({"decision":"denied"}),
+        Some(first.event_hash.clone()),
+    );
+    let third = TraceEvent::sealed(
+        "obs_3".to_string(),
+        "provider_completed".to_string(),
+        Some("runwarden.report.lint".to_string()),
+        json!({"decision":"allowed"}),
+        Some(second.event_hash.clone()),
+    );
+    let request = json!({
+        "trace_events": [first, second, third],
+        "limit": 1,
+        "compact_refs": true
+    });
+
+    let review = call_tool_with_platform_root(51, "runwarden.trace.export", request.clone(), &root);
+    assert_eq!(review["result"]["isError"], true);
+    approve_first_pending_approval(&root);
+
+    let response = call_tool_with_platform_root(52, "runwarden.trace.export", request, &root);
+    let payload = tool_payload(&response);
+
+    assert_eq!(response["result"]["isError"], false);
+    assert_eq!(payload["exported"], true);
+    assert_eq!(payload["verified"], true);
+    assert_eq!(payload["page"]["offset"], 0);
+    assert_eq!(payload["page"]["limit"], 1);
+    assert_eq!(payload["page"]["total_matching"], 3);
+    assert_eq!(payload["page"]["next_offset"], 1);
+    assert_eq!(
+        payload["page"]["events"].as_array().expect("events").len(),
+        1
+    );
+    assert_eq!(payload["compact_refs"][0], "obs_1");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn stdio_payload_uses_mcp_content_length_framing() {
     let request = r#"{"jsonrpc":"2.0","id":4,"method":"initialize","params":{}}"#;
     let framed = format!("Content-Length: {}\r\n\r\n{}", request.len(), request);
@@ -434,11 +488,53 @@ fn call_tool(id: u64, name: &str, arguments: Value) -> Value {
     .expect("tools/call response")
 }
 
+fn call_tool_with_platform_root(
+    id: u64,
+    name: &str,
+    arguments: Value,
+    platform_root: &std::path::Path,
+) -> Value {
+    handle_jsonrpc_body_with_platform_root(
+        &json!({
+            "jsonrpc":"2.0",
+            "id": id,
+            "method":"tools/call",
+            "params":{
+                "name": name,
+                "arguments": arguments
+            }
+        })
+        .to_string(),
+        platform_root,
+    )
+    .expect("tools/call response")
+}
+
 fn tool_payload(response: &Value) -> Value {
     let text = response["result"]["content"][0]["text"]
         .as_str()
         .expect("text content");
     serde_json::from_str(text).expect("tool payload JSON")
+}
+
+fn approve_first_pending_approval(platform_root: &std::path::Path) {
+    let approvals_dir = platform_root.join(".runwarden/approvals");
+    let path = fs::read_dir(&approvals_dir)
+        .unwrap_or_else(|err| panic!("read {}: {err}", approvals_dir.display()))
+        .next()
+        .expect("pending approval")
+        .expect("approval entry")
+        .path();
+    let body = fs::read_to_string(&path).expect("approval body");
+    let mut approval: ApprovalRecord = serde_json::from_str(&body).expect("approval json");
+    approval
+        .approve("reviewer-alice", "reviewed exact trace export")
+        .expect("approve");
+    fs::write(
+        &path,
+        serde_json::to_string_pretty(&approval).expect("approval json"),
+    )
+    .expect("write approval");
 }
 
 fn temp_platform_root(label: &str) -> std::path::PathBuf {

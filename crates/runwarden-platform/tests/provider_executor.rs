@@ -277,6 +277,34 @@ fn agent_native_eval_accepts_inline_agent_configs() {
 }
 
 #[test]
+fn malformed_inline_agent_configs_are_denied() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let mut platform = RunwardenPlatform::open(workspace.path()).expect("open platform");
+    let session = session_manifest(workspace.path(), &["runwarden.eval.agent-native"]);
+
+    let execution = platform
+        .submit_provider_call(ProviderExecutionRequest {
+            call: provider_call(
+                "runwarden.eval.agent-native",
+                json!({
+                    "agent_configs": []
+                }),
+            ),
+            session: Some(session),
+        })
+        .expect("submit provider call");
+
+    assert_eq!(execution.outcome.decision, PolicyDecision::Denied);
+    assert_eq!(execution.outcome.execution_status, ExecutionStatus::Failed);
+    assert_eq!(
+        execution.outcome.envelope.error_kind,
+        Some(ErrorKind::ArgumentSchemaInvalid)
+    );
+    assert_eq!(execution.output["decision"], "denied");
+    assert_ne!(execution.output["output"]["passed"], true);
+}
+
+#[test]
 fn provider_execution_error_recomputes_denied_observation_id() {
     let workspace = tempfile::tempdir().expect("workspace");
     let mut platform = RunwardenPlatform::open(workspace.path()).expect("open platform");
@@ -303,6 +331,59 @@ fn provider_execution_error_recomputes_denied_observation_id() {
         )
         .observation_id
     );
+    assert_eq!(
+        events(workspace.path()).last().expect("last event")["event_type"],
+        "provider_call_failed"
+    );
+}
+
+#[test]
+fn report_render_failure_is_recorded_as_citation_denial() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let trace_path = workspace.path().join("trace.json");
+    let report_path = workspace.path().join("report.json");
+    fs::write(&trace_path, trace_json("runwarden.input.inspect")).expect("trace");
+    fs::write(
+        &report_path,
+        r#"{"claims":[{"id":"finding-1","text":"uncited finding","obs_refs":[]}]}"#,
+    )
+    .expect("report");
+    let mut platform = RunwardenPlatform::open(workspace.path()).expect("open platform");
+    let session = session_manifest(workspace.path(), &["runwarden.report.render"]);
+    let call = provider_call(
+        "runwarden.report.render",
+        json!({
+            "trace_path": trace_path,
+            "report_path": report_path,
+            "format": "html"
+        }),
+    );
+
+    let review_outcome = submit(&mut platform, call.clone(), Some(session.clone()));
+    let approval_id = review_outcome
+        .envelope
+        .approval_id
+        .expect("pending approval id");
+    let mut approval = platform.read_approval(&approval_id).expect("approval");
+    approval
+        .approve("reviewer-alice", "reviewed exact report render")
+        .expect("approve");
+    platform.write_approval(&approval).expect("write approval");
+
+    let execution = platform
+        .submit_provider_call(ProviderExecutionRequest {
+            call,
+            session: Some(session),
+        })
+        .expect("submit provider call");
+
+    assert_eq!(execution.outcome.decision, PolicyDecision::Denied);
+    assert_eq!(execution.outcome.execution_status, ExecutionStatus::Failed);
+    assert_eq!(
+        execution.outcome.envelope.error_kind,
+        Some(ErrorKind::ReportCitationInvalid)
+    );
+    assert_eq!(execution.output["error_kind"], "report_citation_invalid");
     assert_eq!(
         events(workspace.path()).last().expect("last event")["event_type"],
         "provider_call_failed"
