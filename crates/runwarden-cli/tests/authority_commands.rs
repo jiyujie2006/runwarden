@@ -1,5 +1,7 @@
 use std::{fs, process::Command};
 
+use runwarden_kernel::authority::{ApprovalBinding, ApprovalRecord, ApprovalState};
+use runwarden_kernel::evidence::hex_sha256;
 use tempfile::tempdir;
 
 fn toml_basic_string(value: &str) -> String {
@@ -107,6 +109,36 @@ fn authority_create_rejects_path_traversal_approval_ids() {
     assert!(!output.status.success());
     let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
     assert!(stderr.contains("invalid record id"));
+    assert!(!dir.path().join(".runwarden/approvals").exists());
+}
+
+#[test]
+fn authority_create_reports_invalid_approval_id_before_malformed_arguments() {
+    let dir = tempdir().expect("tempdir");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_runwarden"))
+        .current_dir(dir.path())
+        .args([
+            "authority",
+            "create",
+            "--approval",
+            "../approval-1",
+            "--session",
+            "enterprise_ops",
+            "--provider",
+            "runwarden.report.render",
+            "--action",
+            "render",
+            "--arguments",
+            "{",
+        ])
+        .output()
+        .expect("authority create invalid id and malformed arguments");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
+    assert!(stderr.contains("invalid record id: ../approval-1"));
+    assert!(!stderr.contains("EOF while parsing"));
     assert!(!dir.path().join(".runwarden/approvals").exists());
 }
 
@@ -360,12 +392,12 @@ enabled = true
 
 #[test]
 fn provider_call_verifies_bound_files_before_persisting_consumed_approval() {
-    let source = include_str!("../src/main.rs");
+    let source = include_str!("../../runwarden-platform/src/executor.rs");
     let verify_index = source
-        .find("verify_cli_file_digests(call)?;")
+        .find("verify_file_digests(&call)")
         .expect("provider call digest verification");
     let persist_index = source
-        .find("persist_consumed_cli_approval(")
+        .find("persist_consumed_approval(self,")
         .expect("approval persistence");
 
     assert!(

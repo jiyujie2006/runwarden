@@ -966,13 +966,18 @@ pub mod external {
     #[cfg(unix)]
     use std::os::unix::process::CommandExt;
     use std::path::{Path, PathBuf};
+    #[cfg(unix)]
     use std::process::{Command, ExitStatus, Stdio};
+    #[cfg(unix)]
     use std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     };
+    #[cfg(unix)]
     use std::thread;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
+    #[cfg(unix)]
+    use std::time::Instant;
 
     use runwarden_kernel::{
         ProviderClass, ProviderContract, ProviderKind, ProviderManifest, ProviderRisk,
@@ -981,9 +986,9 @@ pub mod external {
     use serde::{Deserialize, Serialize};
     use serde_json::{Value, json};
 
-    use super::runtime::{
-        ProviderRuntime, ProviderRuntimeDenialKind, ProviderRuntimePolicy, ProviderRuntimeRequest,
-    };
+    use super::runtime::ProviderRuntimePolicy;
+    #[cfg(unix)]
+    use super::runtime::{ProviderRuntime, ProviderRuntimeDenialKind, ProviderRuntimeRequest};
 
     #[derive(Debug, Clone, PartialEq, Serialize)]
     pub struct ExternalProviderCertReport {
@@ -1104,62 +1109,34 @@ pub mod external {
         }
     }
 
+    #[cfg(not(unix))]
+    fn execute_stdio(
+        manifest: &ProviderManifest,
+        request: &ExternalMcpAdapterRequest,
+        _runtime_root: Option<&Path>,
+    ) -> Value {
+        if let Err(denial) = validate_stdio_static_preflight(manifest, request, "stdio") {
+            return denial;
+        }
+        adapter_denial(
+            &manifest.provider_id,
+            "stdio",
+            "provider_not_allowed",
+            "stdio MCP adapter process-tree cleanup is not supported on this platform",
+        )
+    }
+
+    #[cfg(unix)]
     fn execute_stdio(
         manifest: &ProviderManifest,
         request: &ExternalMcpAdapterRequest,
         runtime_root: Option<&Path>,
     ) -> Value {
         let transport = "stdio";
-        let Some(command) = request.command.as_deref() else {
-            return adapter_denial(
-                &manifest.provider_id,
-                transport,
-                "argument_schema_invalid",
-                "stdio MCP adapter requires a command",
-            );
+        let command = match validate_stdio_static_preflight(manifest, request, transport) {
+            Ok(command) => command,
+            Err(denial) => return denial,
         };
-        if !command_is_allowlisted(command, &manifest.command_allowlist) {
-            return adapter_denial(
-                &manifest.provider_id,
-                transport,
-                "provider_not_allowed",
-                "stdio MCP adapter command is not allowlisted by the provider manifest",
-            );
-        }
-        if command_is_shell_capable(command) {
-            return adapter_denial(
-                &manifest.provider_id,
-                transport,
-                "provider_not_allowed",
-                "stdio MCP adapter command cannot be a shell-capable interpreter",
-            );
-        }
-        if !request.args.is_empty() {
-            return adapter_denial(
-                &manifest.provider_id,
-                transport,
-                "provider_not_allowed",
-                "stdio MCP adapter does not accept request-supplied command arguments",
-            );
-        }
-        if stdio_requires_unsupported_egress_controls(manifest) {
-            return adapter_denial(
-                &manifest.provider_id,
-                transport,
-                "egress_denied",
-                "stdio MCP adapter execution cannot enforce network egress or credential policies",
-            );
-        }
-        #[cfg(not(unix))]
-        {
-            return adapter_denial(
-                &manifest.provider_id,
-                transport,
-                "provider_not_allowed",
-                "stdio MCP adapter process-tree cleanup is not supported on this platform",
-            );
-        }
-
         let cwd = request
             .cwd
             .clone()
@@ -1275,6 +1252,54 @@ pub mod external {
                 true,
             ),
         }
+    }
+
+    fn validate_stdio_static_preflight<'a>(
+        manifest: &ProviderManifest,
+        request: &'a ExternalMcpAdapterRequest,
+        transport: &str,
+    ) -> Result<&'a str, Value> {
+        let Some(command) = request.command.as_deref() else {
+            return Err(adapter_denial(
+                &manifest.provider_id,
+                transport,
+                "argument_schema_invalid",
+                "stdio MCP adapter requires a command",
+            ));
+        };
+        if !command_is_allowlisted(command, &manifest.command_allowlist) {
+            return Err(adapter_denial(
+                &manifest.provider_id,
+                transport,
+                "provider_not_allowed",
+                "stdio MCP adapter command is not allowlisted by the provider manifest",
+            ));
+        }
+        if command_is_shell_capable(command) {
+            return Err(adapter_denial(
+                &manifest.provider_id,
+                transport,
+                "provider_not_allowed",
+                "stdio MCP adapter command cannot be a shell-capable interpreter",
+            ));
+        }
+        if !request.args.is_empty() {
+            return Err(adapter_denial(
+                &manifest.provider_id,
+                transport,
+                "provider_not_allowed",
+                "stdio MCP adapter does not accept request-supplied command arguments",
+            ));
+        }
+        if stdio_requires_unsupported_egress_controls(manifest) {
+            return Err(adapter_denial(
+                &manifest.provider_id,
+                transport,
+                "egress_denied",
+                "stdio MCP adapter execution cannot enforce network egress or credential policies",
+            ));
+        }
+        Ok(command)
     }
 
     fn execute_http(
@@ -1575,22 +1600,26 @@ pub mod external {
         })
     }
 
+    #[cfg(unix)]
     fn content_length_frame(value: &Value) -> String {
         let body = serde_json::to_string(value).expect("MCP request serializes");
         format!("Content-Length: {}\r\n\r\n{}", body.len(), body)
     }
 
+    #[cfg(unix)]
     fn bounded_utf8(bytes: &[u8], limit: usize) -> String {
         let end = bytes.len().min(limit);
         String::from_utf8_lossy(&bytes[..end]).into_owned()
     }
 
+    #[cfg(unix)]
     struct StdioOutput {
         status: ExitStatus,
         stdout: Vec<u8>,
         stderr: Vec<u8>,
     }
 
+    #[cfg(unix)]
     fn wait_with_limited_output(
         child: &mut std::process::Child,
         timeout_ms: u64,
@@ -1649,15 +1678,13 @@ pub mod external {
         })
     }
 
+    #[cfg(unix)]
     fn configure_process_group(command: &mut Command) {
-        #[cfg(unix)]
-        {
-            command.process_group(0);
-        }
+        command.process_group(0);
     }
 
+    #[cfg(unix)]
     fn terminate_child(child: &mut std::process::Child, kill_process_tree: bool) {
-        #[cfg(unix)]
         if kill_process_tree {
             let pid = child.id() as i32;
             unsafe {
@@ -1675,6 +1702,7 @@ pub mod external {
         fn kill(pid: i32, sig: i32) -> i32;
     }
 
+    #[cfg(unix)]
     fn read_limited_pipe<R: Read + Send + 'static>(
         mut reader: R,
         limit: usize,
@@ -1735,6 +1763,7 @@ pub mod external {
         })
     }
 
+    #[cfg(unix)]
     fn runtime_denial_error_kind(kind: &ProviderRuntimeDenialKind) -> &'static str {
         match kind {
             ProviderRuntimeDenialKind::ShellDenied => "provider_not_allowed",

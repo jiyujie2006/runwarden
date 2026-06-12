@@ -5,8 +5,8 @@ calls.
 
 ## Sessions
 
-Sessions are created from assessment manifests and persisted by the CLI. A
-session carries:
+Sessions are created from assessment manifests and persisted in the local
+Runwarden platform state under `.runwarden/sessions/`. A session carries:
 
 - session id
 - manifest hash
@@ -39,6 +39,13 @@ Authority records bind a reviewer decision to one exact provider call:
 - authz id
 - actor id
 
+Approval records are persisted under `.runwarden/approvals/`.
+Provider calls that require review create deterministic pending approval records
+from the exact approval binding when no usable matching approval exists. File
+arguments such as `input_path`, `trace_path`, `report_path`, and external MCP
+`manifest_path` are digest-bound before approval matching so reviewer decisions
+apply to the approved contents, not only the path strings.
+
 Use:
 
 ```bash
@@ -47,7 +54,24 @@ runwarden authority inspect approval-1 --json
 runwarden approval approve approval-1 --reviewer reviewer_alice --reason "reviewed scope and risk" --json
 ```
 
-Approval records are consumed once by matching high-risk calls.
+Approval records are consumed once by matching high-risk calls after the
+executor rechecks the bound file digests and before trusted provider execution.
+Calls denied or review-required before approval consumption keep
+`side_effect_executed: false` and do not consume approved records. If a mediated
+adapter rejects an already approved request during final preparation, the
+provider call is recorded with adapter denial semantics; the exact approval may
+already be consumed because consumption happens after digest recheck and before
+trusted execution.
+
+Local API provider routes keep their launch token, Host, and Origin checks at
+the API boundary, then sync in-memory sessions into the Runwarden platform
+executor before provider execution. In-memory approval records may only fill
+missing platform records; they must not overwrite an existing platform approval,
+including consumed, denied, or revoked states. Pending, approved, and consumed
+approval state is synced back so `/approvals` and approval decision endpoints
+continue to expose the kernel-owned approval queue. Explicit `approval_id` calls
+are evaluated against platform approval state in the final approval pass, not
+rejected by the executor's pre-approval policy screen.
 
 ## Reviewer Console
 

@@ -11,9 +11,7 @@ use runwarden_api::{
     LocalApiRouter, LocalApiServerConfig, UiLaunchSnapshot, serve_next_request, serve_one_request,
     write_ui_launch_bundle,
 };
-use runwarden_assurance::accountability::accountability_summary;
 use runwarden_assurance::artifact::{seal_artifact, verify_artifact_manifest};
-use runwarden_assurance::audit::audit_summary;
 use runwarden_assurance::bench::benchmark_workspace;
 use runwarden_assurance::cert::{CertCheck, CertReport, certify_agent_config, certify_workspace};
 use runwarden_assurance::eval::{
@@ -24,29 +22,19 @@ use runwarden_assurance::report::{
     RenderFormat, ReportDraft, lint_report_against_trace, render_report, scaffold_report_from_trace,
 };
 use runwarden_kernel::artifact::ArtifactManifest;
-use runwarden_kernel::authority::{ApprovalBinding, ApprovalRecord, ApprovalState};
-use runwarden_kernel::contracts::{
-    PolicyDecision, ProviderCall, ProviderClass, ProviderKind, ProviderOutcome,
-};
+use runwarden_kernel::authority::{ApprovalBinding, ApprovalRecord};
+use runwarden_kernel::contracts::{PolicyDecision, ProviderCall, ProviderOutcome};
 use runwarden_kernel::evidence::{InMemoryTraceStore, TraceEvent, TraceQuery, hex_sha256};
-use runwarden_kernel::kernel::{KernelEnforcer, KernelPolicy, ScopedRoot};
 use runwarden_kernel::manifest::{AssessmentManifest, SessionManifest};
+use runwarden_platform::{
+    ApprovalListFilter, ProviderExecutionRequest, RunwardenPlatform, validate_record_id,
+};
 use runwarden_providers::catalog::{
-    EXTERNAL_PROVIDER_IDS, FIRST_PARTY_PROVIDER_IDS, default_external_provider_manifest,
-    default_external_providers, first_party_registry, full_provider_registry,
+    EXTERNAL_PROVIDER_IDS, FIRST_PARTY_PROVIDER_IDS, default_external_providers,
+    first_party_registry, full_provider_registry,
 };
-use runwarden_providers::evidence::{EvidenceInspectPolicy, inspect_evidence_root};
-use runwarden_providers::external::{
-    ExternalMcpAdapterRequest, certify_external_provider_manifest, execute_external_mcp_adapter,
-    load_provider_manifest,
-};
-use runwarden_providers::input::{InputInspectPolicy, InputSource, inspect_input};
-use runwarden_providers::runtime::{
-    ProviderRuntime, ProviderRuntimeDenialKind, ProviderRuntimePolicy, ProviderRuntimeRequest,
-};
-use serde::Deserialize;
+use runwarden_providers::external::{certify_external_provider_manifest, load_provider_manifest};
 use serde_json::json;
-use time::OffsetDateTime;
 
 #[derive(Debug, Parser)]
 #[command(name = "runwarden")]
@@ -717,7 +705,9 @@ fn run() -> anyhow::Result<()> {
         Command::Provider { command } => match command {
             ProviderCommand::List { session, json } => {
                 let providers = if let Some(session_id) = session {
-                    read_session(&session_id)?.allowed_providers
+                    RunwardenPlatform::open(env::current_dir()?)?
+                        .read_session(&session_id)?
+                        .allowed_providers
                 } else {
                     FIRST_PARTY_PROVIDER_IDS
                         .iter()
@@ -746,11 +736,12 @@ fn run() -> anyhow::Result<()> {
                 format,
                 json,
             } => {
-                let session_manifest = session.as_deref().map(read_session).transpose()?;
-                let mut execution_input = input.clone();
-                let mut execution_trace = trace.clone();
-                let mut execution_report = report.clone();
-                let mut provider_call = Some(match session_manifest.as_ref() {
+                let mut platform = RunwardenPlatform::open(env::current_dir()?)?;
+                let session_manifest = session
+                    .as_deref()
+                    .map(|session_id| platform.read_session(session_id))
+                    .transpose()?;
+                let provider_call = match session_manifest.as_ref() {
                     Some(session_manifest) => provider_call_from_cli(CliProviderCallInput {
                         session_id: &session_manifest.session_id,
                         actor_id: session_manifest.actor_id.clone(),
@@ -775,116 +766,21 @@ fn run() -> anyhow::Result<()> {
                         report: report.as_ref(),
                         format: format.as_deref(),
                     }),
-                });
-                if let Some(call) = provider_call.as_mut() {
-                    if let Some(session_manifest) = session_manifest.as_ref() {
-                        let resolved_paths =
-                            resolve_session_provider_argument_paths(session_manifest, call)?;
-                        if let Some(path) = resolved_paths.input {
-                            execution_input = Some(path);
-                        }
-                        if let Some(path) = resolved_paths.trace {
-                            execution_trace = Some(path);
-                        }
-                        if let Some(path) = resolved_paths.report {
-                            execution_report = Some(path);
-                        }
-                    }
-                    let mut enforcer = KernelEnforcer::new(
-                        full_provider_registry(),
-                        cli_provider_policy(
-                            session_manifest.as_ref(),
-                            &provider,
-                            input.as_ref(),
-                            root.as_ref(),
-                            trace.as_ref(),
-                            report.as_ref(),
-                        ),
-                    );
-                    let outcome = enforcer.evaluate_call(call);
-                    if outcome.decision == PolicyDecision::Denied {
-                        emit_provider_policy_outcome(&outcome, json)?;
-                        return Ok(());
-                    }
-                    if provider_is_external_mcp(&call.provider)
-                        && let Some(input_path) = call
-                            .arguments
-                            .get("input_path")
-                            .and_then(serde_json::Value::as_str)
-                            .map(PathBuf::from)
-                    {
-                        resolve_external_mcp_manifest_argument(
-                            call.arguments
-                                .as_object_mut()
-                                .expect("CLI provider call arguments are an object"),
-                            &input_path,
-                        )?;
-                        let mut enforcer = KernelEnforcer::new(
-                            full_provider_registry(),
-                            cli_provider_policy(
-                                session_manifest.as_ref(),
-                                &provider,
-                                input.as_ref(),
-                                root.as_ref(),
-                                trace.as_ref(),
-                                report.as_ref(),
-                            ),
-                        );
-                        let outcome = enforcer.evaluate_call(call);
-                        if outcome.decision == PolicyDecision::Denied {
-                            emit_provider_policy_outcome(&outcome, json)?;
-                            return Ok(());
-                        }
-                    }
-                    bind_cli_file_digests(call)?;
-                    attach_matching_approval(call)?;
-                    let mut enforcer = KernelEnforcer::new(
-                        full_provider_registry(),
-                        cli_provider_policy(
-                            session_manifest.as_ref(),
-                            &provider,
-                            input.as_ref(),
-                            root.as_ref(),
-                            trace.as_ref(),
-                            report.as_ref(),
-                        ),
-                    );
-                    for approval in read_all_approvals()? {
-                        enforcer.add_approval(approval);
-                    }
-                    let outcome = enforcer.evaluate_call(call);
-                    if outcome.decision != PolicyDecision::Allowed {
-                        emit_provider_policy_outcome(&outcome, json)?;
-                        return Ok(());
-                    }
-                    verify_cli_file_digests(call)?;
-                    if call
-                        .approval_id
-                        .as_deref()
-                        .and_then(|approval_id| enforcer.approval_state(approval_id))
-                        == Some(ApprovalState::Consumed)
-                    {
-                        persist_consumed_cli_approval(
-                            call,
-                            &enforcer.approval_binding_for_call(call),
-                        )?;
-                    }
-                }
-                let execution_root = resolve_cli_execution_root(session_manifest.as_ref(), root);
-                let result = if provider_is_external(&provider) {
-                    call_external_provider(&provider, execution_input, execution_root)?
-                } else {
-                    call_first_party_provider(
-                        &provider,
-                        execution_input,
-                        execution_root,
-                        execution_trace,
-                        execution_report,
-                        format,
-                    )?
                 };
+                let result = platform.submit_provider_call(ProviderExecutionRequest {
+                    call: provider_call,
+                    session: session_manifest,
+                })?;
+                if result.outcome.decision != PolicyDecision::Allowed {
+                    if json && !result.output.is_null() {
+                        println!("{}", serde_json::to_string_pretty(&result.output)?);
+                    } else {
+                        emit_provider_policy_outcome(&result.outcome, json)?;
+                    }
+                    return Ok(());
+                }
                 if json {
-                    println!("{}", serde_json::to_string_pretty(&result)?);
+                    println!("{}", serde_json::to_string_pretty(&result.output)?);
                 } else {
                     println!("provider call completed: {provider}");
                 }
@@ -974,7 +870,7 @@ fn run() -> anyhow::Result<()> {
                 let assessment = AssessmentManifest::from_toml_str(&manifest_body)?;
                 let assessment = assessment_with_manifest_relative_roots(&manifest, assessment)?;
                 let session_manifest = SessionManifest::from_assessment(session, &assessment);
-                write_session(&session_manifest)?;
+                RunwardenPlatform::open(env::current_dir()?)?.write_session(&session_manifest)?;
                 if json {
                     println!("{}", serde_json::to_string_pretty(&session_manifest)?);
                 } else {
@@ -982,7 +878,8 @@ fn run() -> anyhow::Result<()> {
                 }
             }
             SessionCommand::Inspect { session, json } => {
-                let session_manifest = read_session(&session)?;
+                let session_manifest =
+                    RunwardenPlatform::open(env::current_dir()?)?.read_session(&session)?;
                 if json {
                     println!("{}", serde_json::to_string_pretty(&session_manifest)?);
                 } else {
@@ -1026,11 +923,8 @@ fn run() -> anyhow::Result<()> {
         },
         Command::Approval { command } => match command {
             ApprovalCommand::Pending { json } => {
-                let approvals = read_all_approvals()?;
-                let pending: Vec<_> = approvals
-                    .into_iter()
-                    .filter(|approval| approval.state == ApprovalState::Pending)
-                    .collect();
+                let pending = RunwardenPlatform::open(env::current_dir()?)?
+                    .list_approvals(ApprovalListFilter::Pending)?;
                 if json {
                     println!(
                         "{}",
@@ -1054,9 +948,10 @@ fn run() -> anyhow::Result<()> {
                 reason,
                 json,
             } => {
-                let mut approval = read_approval(&approval_id)?;
+                let platform = RunwardenPlatform::open(env::current_dir()?)?;
+                let mut approval = platform.read_approval(&approval_id)?;
                 approval.approve(reviewer, reason)?;
-                write_approval(&approval)?;
+                platform.write_approval(&approval)?;
                 if json {
                     println!("{}", serde_json::to_string_pretty(&approval)?);
                 } else {
@@ -1069,9 +964,10 @@ fn run() -> anyhow::Result<()> {
                 reason,
                 json,
             } => {
-                let mut approval = read_approval(&approval_id)?;
+                let platform = RunwardenPlatform::open(env::current_dir()?)?;
+                let mut approval = platform.read_approval(&approval_id)?;
                 approval.deny(reviewer, reason)?;
-                write_approval(&approval)?;
+                platform.write_approval(&approval)?;
                 if json {
                     println!("{}", serde_json::to_string_pretty(&approval)?);
                 } else {
@@ -1091,7 +987,7 @@ fn run() -> anyhow::Result<()> {
                 actor,
                 json,
             } => {
-                safe_record_id(&approval)?;
+                validate_record_id(&approval)?;
                 let computed_hash = match argument_hash {
                     Some(hash) => hash,
                     None => argument_hash_from_json(&arguments)?,
@@ -1107,7 +1003,7 @@ fn run() -> anyhow::Result<()> {
                         actor_id: actor,
                     },
                 );
-                write_approval(&approval)?;
+                RunwardenPlatform::open(env::current_dir()?)?.write_approval(&approval)?;
                 if json {
                     println!("{}", serde_json::to_string_pretty(&approval)?);
                 } else {
@@ -1115,7 +1011,8 @@ fn run() -> anyhow::Result<()> {
                 }
             }
             AuthorityCommand::Inspect { approval_id, json } => {
-                let approval = read_approval(&approval_id)?;
+                let approval =
+                    RunwardenPlatform::open(env::current_dir()?)?.read_approval(&approval_id)?;
                 if json {
                     println!("{}", serde_json::to_string_pretty(&approval)?);
                 } else {
@@ -1153,13 +1050,14 @@ fn run() -> anyhow::Result<()> {
         } => {
             let root = find_workspace_root(env::current_dir()?)?;
             let artifacts = resolve_local_artifact_output_path(&root, &artifacts)?;
+            let platform = RunwardenPlatform::open(env::current_dir()?)?;
             let result = write_ui_launch_bundle(
                 &bind,
                 port,
                 &artifacts,
                 UiLaunchSnapshot {
-                    approvals: read_all_approvals()?,
-                    sessions: read_all_sessions()?,
+                    approvals: platform.list_approvals(ApprovalListFilter::All)?,
+                    sessions: platform.list_sessions()?,
                 },
             )
             .map_err(anyhow::Error::msg)?;
@@ -1234,152 +1132,6 @@ fn run() -> anyhow::Result<()> {
         },
     }
     Ok(())
-}
-
-#[derive(Debug, Deserialize)]
-struct ExternalShellRequest {
-    executable: String,
-    #[serde(default)]
-    args: Vec<String>,
-    cwd: Option<PathBuf>,
-    #[serde(default)]
-    use_shell: bool,
-    timeout_ms: Option<u64>,
-    stdout_limit_bytes: Option<usize>,
-    stderr_limit_bytes: Option<usize>,
-}
-
-fn call_external_provider(
-    provider: &str,
-    input: Option<PathBuf>,
-    root: Option<PathBuf>,
-) -> anyhow::Result<serde_json::Value> {
-    let registry = full_provider_registry();
-    let Some(provider_record) = registry.get(provider) else {
-        anyhow::bail!("unsupported external provider call: {provider}");
-    };
-    if provider_record.class != ProviderClass::External {
-        anyhow::bail!("unsupported external provider call: {provider}");
-    }
-
-    match &provider_record.kind {
-        ProviderKind::Shell if provider == "external.shell.command" => {
-            let input_path = input.ok_or_else(|| {
-                anyhow::anyhow!(
-                    "--input JSON is required for external.shell.command mediated calls"
-                )
-            })?;
-            let request_body = fs::read_to_string(&input_path)?;
-            let shell_request: ExternalShellRequest = serde_json::from_str(&request_body)?;
-            let command_allowlist = ["git", "cargo", "pnpm"];
-            if !command_allowlist.contains(&shell_request.executable.as_str()) {
-                return Ok(json!({
-                    "provider": provider,
-                    "decision": "denied",
-                    "execution_status": "not_executed",
-                    "error_kind": "provider_not_allowed",
-                    "reason": "external shell executable is not allowlisted",
-                    "side_effect_executed": false
-                }));
-            }
-
-            let cwd = shell_request.cwd.unwrap_or_else(|| PathBuf::from("."));
-            let runtime_root = root.unwrap_or_else(|| cwd.clone());
-            let policy = ProviderRuntimePolicy::locked_to_root(runtime_root);
-            let mut runtime_request = ProviderRuntimeRequest::new(shell_request.executable.clone())
-                .cwd(cwd)
-                .use_shell(shell_request.use_shell);
-            for arg in shell_request.args {
-                runtime_request = runtime_request.arg(arg);
-            }
-            if let Some(timeout_ms) = shell_request.timeout_ms {
-                runtime_request = runtime_request.timeout_ms(timeout_ms);
-            }
-            if let Some(stdout_limit_bytes) = shell_request.stdout_limit_bytes {
-                runtime_request = runtime_request.stdout_limit_bytes(stdout_limit_bytes);
-            }
-            if let Some(stderr_limit_bytes) = shell_request.stderr_limit_bytes {
-                runtime_request = runtime_request.stderr_limit_bytes(stderr_limit_bytes);
-            }
-
-            match ProviderRuntime::prepare(&policy, &runtime_request) {
-                Ok(prepared_process) => Ok(json!({
-                    "provider": provider,
-                    "decision": "requires_review",
-                    "execution_status": "not_executed",
-                    "reason": "external shell command was prepared by runtime mediation and awaits human approval",
-                    "prepared_process": prepared_process,
-                    "side_effect_executed": false
-                })),
-                Err(denial) => Ok(json!({
-                    "provider": provider,
-                    "decision": "denied",
-                    "execution_status": "not_executed",
-                    "error_kind": runtime_denial_error_kind(&denial.kind),
-                    "reason": denial.reason,
-                    "side_effect_executed": denial.side_effect_executed
-                })),
-            }
-        }
-        ProviderKind::Mcp => {
-            let input_path = input.ok_or_else(|| {
-                anyhow::anyhow!("--input JSON is required for external MCP adapter calls")
-            })?;
-            let request_body = fs::read_to_string(&input_path)?;
-            let request: ExternalMcpAdapterRequest = serde_json::from_str(&request_body)?;
-            let manifest = if let Some(manifest_path) = &request.manifest_path {
-                let manifest_path = resolve_external_mcp_manifest_path(&input_path, manifest_path);
-                let manifest_body = fs::read_to_string(manifest_path)?;
-                load_provider_manifest(&manifest_body)?
-            } else {
-                default_external_provider_manifest(provider).ok_or_else(|| {
-                    anyhow::anyhow!("missing default external provider manifest: {provider}")
-                })?
-            };
-            if manifest.provider_id != provider {
-                anyhow::bail!(
-                    "external MCP manifest provider_id {} does not match requested provider {provider}",
-                    manifest.provider_id
-                );
-            }
-            Ok(execute_external_mcp_adapter(
-                &manifest,
-                &request,
-                root.as_deref(),
-            ))
-        }
-        _ => Ok(json!({
-            "provider": provider,
-            "decision": "requires_review",
-            "execution_status": "not_executed",
-            "external_adapter_required": true,
-            "reason": "external provider is registered and must be invoked through its mediated downstream adapter",
-            "side_effect_executed": false
-        })),
-    }
-}
-
-fn provider_is_external(provider: &str) -> bool {
-    full_provider_registry()
-        .get(provider)
-        .is_some_and(|record| record.class == ProviderClass::External)
-}
-
-fn provider_is_external_mcp(provider: &str) -> bool {
-    default_external_provider_manifest(provider)
-        .is_some_and(|manifest| manifest.kind == ProviderKind::Mcp)
-}
-
-fn runtime_denial_error_kind(kind: &ProviderRuntimeDenialKind) -> &'static str {
-    match kind {
-        ProviderRuntimeDenialKind::ShellDenied => "provider_not_allowed",
-        ProviderRuntimeDenialKind::CwdEscape => "root_escape",
-        ProviderRuntimeDenialKind::EnvInheritanceDenied
-        | ProviderRuntimeDenialKind::EnvNotAllowed => "scope_violation",
-        ProviderRuntimeDenialKind::NetworkDenied => "egress_denied",
-        ProviderRuntimeDenialKind::TimeoutTooLarge
-        | ProviderRuntimeDenialKind::OutputLimitTooLarge => "budget_exceeded",
-    }
 }
 
 struct CliProviderCallInput<'a> {
@@ -1460,465 +1212,8 @@ fn emit_provider_policy_outcome(outcome: &ProviderOutcome, json: bool) -> anyhow
     Ok(())
 }
 
-#[derive(Debug, Default)]
-struct ResolvedProviderArgumentPaths {
-    input: Option<PathBuf>,
-    trace: Option<PathBuf>,
-    report: Option<PathBuf>,
-}
-
-fn resolve_session_provider_argument_paths(
-    session_manifest: &SessionManifest,
-    call: &mut ProviderCall,
-) -> anyhow::Result<ResolvedProviderArgumentPaths> {
-    let Some(arguments) = call.arguments.as_object_mut() else {
-        return Ok(ResolvedProviderArgumentPaths::default());
-    };
-    let selected_root = arguments
-        .get("root")
-        .and_then(serde_json::Value::as_str)
-        .and_then(|root_name| {
-            session_manifest
-                .roots
-                .iter()
-                .find(|root| root.name == root_name)
-                .map(|root| root.path.clone())
-        });
-    let implicit_root = if selected_root.is_none() && session_manifest.roots.len() == 1 {
-        Some(session_manifest.roots[0].path.clone())
-    } else {
-        None
-    };
-    let scoped_root = selected_root
-        .or(implicit_root)
-        .map(|root| absolute_cli_path(&root))
-        .transpose()?;
-
-    let input = resolve_session_provider_path_field(arguments, "input_path", scoped_root.as_ref())?;
-    let trace = resolve_session_provider_path_field(arguments, "trace_path", scoped_root.as_ref())?;
-    let report =
-        resolve_session_provider_path_field(arguments, "report_path", scoped_root.as_ref())?;
-
-    Ok(ResolvedProviderArgumentPaths {
-        input,
-        trace,
-        report,
-    })
-}
-
-fn resolve_session_provider_path_field(
-    arguments: &mut serde_json::Map<String, serde_json::Value>,
-    field: &str,
-    scoped_root: Option<&PathBuf>,
-) -> anyhow::Result<Option<PathBuf>> {
-    let Some(path_text) = arguments
-        .get(field)
-        .and_then(serde_json::Value::as_str)
-        .map(ToOwned::to_owned)
-    else {
-        return Ok(None);
-    };
-    let path = PathBuf::from(path_text);
-    let resolved = if path.is_absolute() {
-        path
-    } else {
-        let Some(scoped_root) = scoped_root else {
-            anyhow::bail!(
-                "session relative provider path {field} requires a scoped --root or exactly one session root"
-            );
-        };
-        scoped_root.join(path)
-    };
-    arguments.insert(
-        field.to_string(),
-        serde_json::Value::String(resolved.to_string_lossy().into_owned()),
-    );
-    Ok(Some(resolved))
-}
-
-fn bind_cli_file_digests(call: &mut ProviderCall) -> anyhow::Result<()> {
-    let Some(arguments) = call.arguments.as_object_mut() else {
-        return Ok(());
-    };
-    for &field in provider_path_digest_fields() {
-        let Some(path) = arguments.get(field).and_then(serde_json::Value::as_str) else {
-            continue;
-        };
-        let digest = digest_file(Path::new(path))?;
-        arguments.insert(format!("{field}_sha256"), serde_json::Value::String(digest));
-    }
-    Ok(())
-}
-
-fn verify_cli_file_digests(call: &ProviderCall) -> anyhow::Result<()> {
-    let Some(arguments) = call.arguments.as_object() else {
-        return Ok(());
-    };
-    for &field in provider_path_digest_fields() {
-        let Some(path) = arguments.get(field).and_then(serde_json::Value::as_str) else {
-            continue;
-        };
-        let digest_key = format!("{field}_sha256");
-        let Some(expected) = arguments
-            .get(&digest_key)
-            .and_then(serde_json::Value::as_str)
-        else {
-            continue;
-        };
-        let actual = digest_file(Path::new(path))?;
-        if actual != expected {
-            anyhow::bail!("{field} changed after approval binding");
-        }
-    }
-    Ok(())
-}
-
-fn provider_path_digest_fields() -> &'static [&'static str] {
-    &["input_path", "trace_path", "report_path", "manifest_path"]
-}
-
-fn resolve_external_mcp_manifest_argument(
-    arguments: &mut serde_json::Map<String, serde_json::Value>,
-    input_path: &Path,
-) -> anyhow::Result<()> {
-    if arguments.contains_key("manifest_path") {
-        return Ok(());
-    }
-    let request_body = fs::read_to_string(input_path)?;
-    let request: ExternalMcpAdapterRequest = serde_json::from_str(&request_body)?;
-    let Some(manifest_path) = request.manifest_path.as_ref() else {
-        return Ok(());
-    };
-    let resolved = resolve_external_mcp_manifest_path(input_path, manifest_path);
-    arguments.insert(
-        "manifest_path".to_string(),
-        serde_json::Value::String(resolved.to_string_lossy().into_owned()),
-    );
-    Ok(())
-}
-
-fn resolve_external_mcp_manifest_path(input_path: &Path, manifest_path: &Path) -> PathBuf {
-    if manifest_path.is_absolute() {
-        manifest_path.to_path_buf()
-    } else {
-        input_path
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join(manifest_path)
-    }
-}
-
-fn digest_file(path: &Path) -> anyhow::Result<String> {
-    let bytes = fs::read(path)?;
-    Ok(hex_sha256(&bytes))
-}
-
-fn default_cli_provider_policy(
-    provider: &str,
-    input: Option<&PathBuf>,
-    root: Option<&PathBuf>,
-    trace: Option<&PathBuf>,
-    report: Option<&PathBuf>,
-) -> KernelPolicy {
-    let mut policy = KernelPolicy::default();
-    policy.allow_provider(provider);
-    policy.active_assessment = true;
-    for (name, path) in [
-        ("input", input),
-        ("root", root),
-        ("trace", trace),
-        ("report", report),
-    ] {
-        if let Some(root) = default_cli_scoped_root(path) {
-            policy.add_scoped_root(ScopedRoot::new(format!("cli-{name}"), root));
-        }
-    }
-    policy
-}
-
-fn cli_provider_policy(
-    session_manifest: Option<&SessionManifest>,
-    provider: &str,
-    input: Option<&PathBuf>,
-    root: Option<&PathBuf>,
-    trace: Option<&PathBuf>,
-    report: Option<&PathBuf>,
-) -> KernelPolicy {
-    session_manifest
-        .map(SessionManifest::to_kernel_policy)
-        .unwrap_or_else(|| default_cli_provider_policy(provider, input, root, trace, report))
-}
-
-fn default_cli_scoped_root(path: Option<&PathBuf>) -> Option<PathBuf> {
-    let path = path?;
-    if path.is_dir() {
-        Some(path.clone())
-    } else {
-        path.parent().map(Path::to_path_buf)
-    }
-}
-
 fn provider_action(provider: &str) -> &str {
     provider.rsplit('.').next().unwrap_or("call")
-}
-
-fn resolve_cli_execution_root(
-    session_manifest: Option<&SessionManifest>,
-    root: Option<PathBuf>,
-) -> Option<PathBuf> {
-    let root = root?;
-    let root_text = root.to_string_lossy();
-    session_manifest
-        .and_then(|session| {
-            session
-                .roots
-                .iter()
-                .find(|candidate| candidate.name == root_text)
-                .map(|candidate| candidate.path.clone())
-        })
-        .or(Some(root))
-}
-
-fn attach_matching_approval(call: &mut ProviderCall) -> anyhow::Result<()> {
-    let binding = cli_approval_binding(call)?;
-    if let Some(approval) = read_all_approvals()?
-        .into_iter()
-        .find(|approval| approval.binding == binding && approval_is_usable_for_cli(approval))
-    {
-        call.approval_id = Some(approval.approval_id);
-    }
-    Ok(())
-}
-
-fn approval_is_usable_for_cli(approval: &ApprovalRecord) -> bool {
-    approval.state == ApprovalState::Approved
-        && approval
-            .expires_at
-            .is_none_or(|expires_at| expires_at > OffsetDateTime::now_utc())
-}
-
-fn persist_consumed_cli_approval(
-    call: &ProviderCall,
-    binding: &ApprovalBinding,
-) -> anyhow::Result<()> {
-    let Some(approval_id) = call.approval_id.as_deref() else {
-        return Ok(());
-    };
-    let mut approval = read_approval(approval_id)?;
-    if approval.state == ApprovalState::Approved {
-        approval.consume_once(binding)?;
-        write_approval(&approval)?;
-    }
-    Ok(())
-}
-
-fn cli_approval_binding(call: &ProviderCall) -> anyhow::Result<ApprovalBinding> {
-    Ok(ApprovalBinding {
-        session_id: call.session_id.clone(),
-        provider: call.provider.clone(),
-        action: call.action.clone(),
-        argument_hash: hex_sha256(&serde_json::to_vec(&call.arguments)?),
-        authz_id: call.authz_id.clone(),
-        actor_id: call.actor_id.clone(),
-    })
-}
-
-fn call_first_party_provider(
-    provider: &str,
-    input: Option<PathBuf>,
-    root: Option<PathBuf>,
-    trace: Option<PathBuf>,
-    report: Option<PathBuf>,
-    format: Option<String>,
-) -> anyhow::Result<serde_json::Value> {
-    match provider {
-        "runwarden.input.inspect" => {
-            let input_path =
-                input.ok_or_else(|| anyhow::anyhow!("--input is required for input.inspect"))?;
-            let bytes = fs::read(&input_path)?;
-            let inspection = inspect_input(
-                InputSource::UserPrompt,
-                &bytes,
-                InputInspectPolicy::default(),
-            );
-            Ok(json!({
-                "provider": provider,
-                "decision": "allowed",
-                "execution_status": "completed",
-                "side_effect_executed": false,
-                "output": inspection
-            }))
-        }
-        "runwarden.evidence.inspect" => {
-            let root_path =
-                root.ok_or_else(|| anyhow::anyhow!("--root is required for evidence.inspect"))?;
-            let inspection = inspect_evidence_root(&root_path, EvidenceInspectPolicy::default())?;
-            Ok(json!({
-                "provider": provider,
-                "decision": "allowed",
-                "execution_status": "completed",
-                "side_effect_executed": false,
-                "output": inspection
-            }))
-        }
-        "runwarden.audit.summary" => {
-            let trace_path =
-                trace.ok_or_else(|| anyhow::anyhow!("--trace is required for audit.summary"))?;
-            let events = read_trace(&trace_path)?;
-            Ok(json!({
-                "provider": provider,
-                "decision": "allowed",
-                "execution_status": "completed",
-                "side_effect_executed": false,
-                "output": audit_summary(&events)
-            }))
-        }
-        "runwarden.accountability.summary" => {
-            let trace_path = trace
-                .ok_or_else(|| anyhow::anyhow!("--trace is required for accountability.summary"))?;
-            let events = read_trace(&trace_path)?;
-            Ok(json!({
-                "provider": provider,
-                "decision": "allowed",
-                "execution_status": "completed",
-                "side_effect_executed": false,
-                "output": accountability_summary(&events)
-            }))
-        }
-        "runwarden.trace.verify" => {
-            let trace_path =
-                trace.ok_or_else(|| anyhow::anyhow!("--trace is required for trace.verify"))?;
-            let events = read_trace(&trace_path)?;
-            Ok(json!({
-                "provider": provider,
-                "decision": "allowed",
-                "execution_status": "completed",
-                "side_effect_executed": false,
-                "output": verify_trace_events(events)
-            }))
-        }
-        "runwarden.trace.export" => {
-            let trace_path =
-                trace.ok_or_else(|| anyhow::anyhow!("--trace is required for trace.export"))?;
-            let events = read_trace(&trace_path)?;
-            let verification = verify_trace_events(events.clone());
-            if verification["verified"].as_bool() != Some(true) {
-                return Ok(json!({
-                    "provider": provider,
-                    "decision": "denied",
-                    "execution_status": "failed",
-                    "side_effect_executed": false,
-                    "output": {
-                        "verification": verification
-                    }
-                }));
-            }
-            Ok(json!({
-                "provider": provider,
-                "decision": "allowed",
-                "execution_status": "completed",
-                "side_effect_executed": false,
-                "output": {
-                    "verification": verification,
-                    "events": events
-                }
-            }))
-        }
-        "runwarden.report.scaffold" => {
-            let trace_path =
-                trace.ok_or_else(|| anyhow::anyhow!("--trace is required for report.scaffold"))?;
-            let events = read_trace(&trace_path)?;
-            Ok(json!({
-                "provider": provider,
-                "decision": "allowed",
-                "execution_status": "completed",
-                "side_effect_executed": false,
-                "output": scaffold_report_from_trace(&events)
-            }))
-        }
-        "runwarden.report.lint" => {
-            let report_path =
-                report.ok_or_else(|| anyhow::anyhow!("--report is required for report.lint"))?;
-            let trace_path =
-                trace.ok_or_else(|| anyhow::anyhow!("--trace is required for report.lint"))?;
-            let report = read_report(&report_path)?;
-            let events = read_trace(&trace_path)?;
-            let result = lint_report_against_trace(&report, &events);
-            Ok(json!({
-                "provider": provider,
-                "decision": if result.ok { "allowed" } else { "denied" },
-                "execution_status": "completed",
-                "side_effect_executed": false,
-                "output": result
-            }))
-        }
-        "runwarden.report.render" => {
-            let report_path =
-                report.ok_or_else(|| anyhow::anyhow!("--report is required for report.render"))?;
-            let trace_path =
-                trace.ok_or_else(|| anyhow::anyhow!("--trace is required for report.render"))?;
-            let report = read_report(&report_path)?;
-            let events = read_trace(&trace_path)?;
-            let format = parse_render_format(format.as_deref().unwrap_or("markdown"))?;
-            let rendered = render_report(&report, &events, format)
-                .map_err(|err| anyhow::anyhow!(err.message))?;
-            Ok(json!({
-                "provider": provider,
-                "decision": "allowed",
-                "execution_status": "completed",
-                "side_effect_executed": false,
-                "output": rendered
-            }))
-        }
-        "runwarden.cert.all" => {
-            let workspace_root = find_workspace_root(env::current_dir()?)?;
-            Ok(json!({
-                "provider": provider,
-                "decision": "allowed",
-                "execution_status": "completed",
-                "side_effect_executed": false,
-                "output": certify_workspace(&workspace_root)
-            }))
-        }
-        "runwarden.eval.all" => {
-            let report_path =
-                report.ok_or_else(|| anyhow::anyhow!("--report is required for eval.all"))?;
-            let trace_path =
-                trace.ok_or_else(|| anyhow::anyhow!("--trace is required for eval.all"))?;
-            let report = read_report(&report_path)?;
-            let events = read_trace(&trace_path)?;
-            let expected_obs: Vec<_> = events.iter().map(|event| event.obs_id.clone()).collect();
-            Ok(json!({
-                "provider": provider,
-                "decision": "allowed",
-                "execution_status": "completed",
-                "side_effect_executed": false,
-                "output": evaluate_report_assurance(&report, &events, expected_obs, EvalThresholds::strict())
-            }))
-        }
-        "runwarden.eval.agent-native" => {
-            let workspace_root = find_workspace_root(env::current_dir()?)?;
-            let cases = load_agent_native_cases(&workspace_root, Vec::new())?;
-            Ok(json!({
-                "provider": provider,
-                "decision": "allowed",
-                "execution_status": "completed",
-                "side_effect_executed": false,
-                "output": evaluate_agent_native_configs(&cases)
-            }))
-        }
-        "runwarden.bench.run" => {
-            let workspace_root = find_workspace_root(env::current_dir()?)?;
-            Ok(json!({
-                "provider": provider,
-                "decision": "allowed",
-                "execution_status": "completed",
-                "side_effect_executed": false,
-                "output": benchmark_workspace(&workspace_root)?
-            }))
-        }
-        other => anyhow::bail!("unsupported first-party provider call: {other}"),
-    }
 }
 
 fn load_agent_native_cases(
@@ -2513,98 +1808,6 @@ fn absolute_cli_path(path: &Path) -> anyhow::Result<PathBuf> {
     }
 }
 
-fn write_session(session: &SessionManifest) -> anyhow::Result<()> {
-    let dir = PathBuf::from(".runwarden").join("sessions");
-    fs::create_dir_all(&dir)?;
-    let path = dir.join(format!("{}.json", safe_session_id(&session.session_id)?));
-    fs::write(path, serde_json::to_string_pretty(session)?)?;
-    Ok(())
-}
-
-fn read_session(session_id: &str) -> anyhow::Result<SessionManifest> {
-    let path = PathBuf::from(".runwarden")
-        .join("sessions")
-        .join(format!("{}.json", safe_session_id(session_id)?));
-    let body = fs::read_to_string(&path)?;
-    Ok(serde_json::from_str(&body)?)
-}
-
-fn read_all_sessions() -> anyhow::Result<Vec<SessionManifest>> {
-    let dir = PathBuf::from(".runwarden").join("sessions");
-    if !dir.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut sessions = Vec::new();
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        if entry.path().extension().and_then(|ext| ext.to_str()) != Some("json") {
-            continue;
-        }
-        let body = fs::read_to_string(entry.path())?;
-        sessions.push(serde_json::from_str(&body)?);
-    }
-    sessions.sort_by(|left: &SessionManifest, right: &SessionManifest| {
-        left.session_id.cmp(&right.session_id)
-    });
-    Ok(sessions)
-}
-
-fn safe_session_id(session_id: &str) -> anyhow::Result<&str> {
-    if session_id.is_empty()
-        || !session_id
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
-    {
-        anyhow::bail!("invalid session id: {session_id}");
-    }
-    Ok(session_id)
-}
-
-fn approvals_dir() -> PathBuf {
-    PathBuf::from(".runwarden").join("approvals")
-}
-
-fn approval_path(approval_id: &str) -> anyhow::Result<PathBuf> {
-    Ok(approvals_dir().join(format!("{}.json", safe_record_id(approval_id)?)))
-}
-
-fn read_all_approvals() -> anyhow::Result<Vec<ApprovalRecord>> {
-    let dir = approvals_dir();
-    if !dir.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut approvals = Vec::new();
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        if entry.path().extension().and_then(|ext| ext.to_str()) != Some("json") {
-            continue;
-        }
-        let body = fs::read_to_string(entry.path())?;
-        approvals.push(serde_json::from_str(&body)?);
-    }
-    approvals.sort_by(|left: &ApprovalRecord, right: &ApprovalRecord| {
-        left.approval_id.cmp(&right.approval_id)
-    });
-    Ok(approvals)
-}
-
-fn read_approval(approval_id: &str) -> anyhow::Result<ApprovalRecord> {
-    let body = fs::read_to_string(approval_path(approval_id)?)?;
-    Ok(serde_json::from_str(&body)?)
-}
-
-fn write_approval(approval: &ApprovalRecord) -> anyhow::Result<()> {
-    let dir = approvals_dir();
-    fs::create_dir_all(&dir)?;
-    fs::write(
-        dir.join(format!("{}.json", safe_record_id(&approval.approval_id)?)),
-        serde_json::to_string_pretty(approval)?,
-    )?;
-    Ok(())
-}
-
 fn argument_hash_from_json(arguments: &str) -> anyhow::Result<String> {
     let value: serde_json::Value = serde_json::from_str(arguments)?;
     let bytes = serde_json::to_vec(&value)?;
@@ -2675,33 +1878,58 @@ fn canonical_existing_parent(path: &Path) -> Option<PathBuf> {
     }
 }
 
-fn safe_record_id(record_id: &str) -> anyhow::Result<&str> {
-    if record_id.is_empty()
-        || !record_id
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
-    {
-        anyhow::bail!("invalid record id: {record_id}");
-    }
-    Ok(record_id)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use runwarden_kernel::contracts::{ProviderClass, ProviderKind};
 
     #[test]
     fn provider_external_dispatch_uses_registry_class() {
-        assert!(provider_is_external("external.api.request"));
-        assert!(provider_is_external("external.mcp.browser.open_page"));
-        assert!(!provider_is_external("runwarden.input.inspect"));
+        let registry = full_provider_registry();
+        assert_eq!(
+            registry
+                .get("external.api.request")
+                .expect("provider")
+                .class,
+            ProviderClass::External
+        );
+        assert_eq!(
+            registry
+                .get("external.mcp.browser.open_page")
+                .expect("provider")
+                .class,
+            ProviderClass::External
+        );
+        assert_eq!(
+            registry
+                .get("runwarden.input.inspect")
+                .expect("provider")
+                .class,
+            ProviderClass::FirstParty
+        );
     }
 
     #[test]
     fn provider_mcp_adapter_dispatch_uses_manifest_kind() {
-        assert!(provider_is_external_mcp("external.mcp.browser.open_page"));
-        assert!(!provider_is_external_mcp("external.api.request"));
-        assert!(!provider_is_external_mcp("external.shell.command"));
+        let registry = full_provider_registry();
+        assert_eq!(
+            registry
+                .get("external.mcp.browser.open_page")
+                .expect("provider")
+                .kind,
+            ProviderKind::Mcp
+        );
+        assert_eq!(
+            registry.get("external.api.request").expect("provider").kind,
+            ProviderKind::Api
+        );
+        assert_eq!(
+            registry
+                .get("external.shell.command")
+                .expect("provider")
+                .kind,
+            ProviderKind::Shell
+        );
     }
 }
 
@@ -2741,6 +1969,9 @@ fn run_strict_check() -> anyhow::Result<()> {
         "schemas/operation-result.schema.json",
         "schemas/approval-record.schema.json",
         "schemas/trace-event.schema.json",
+        "schemas/trace-query.schema.json",
+        "schemas/trace-page.schema.json",
+        "schemas/trace-export-page.schema.json",
         "schemas/report.schema.json",
         "schemas/assessment-manifest.schema.json",
         "schemas/session-manifest.schema.json",

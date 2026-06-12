@@ -63,8 +63,11 @@ runwarden api serve --bind 127.0.0.1 --port 8088 --json
 external provider families declared in the kernel-managed catalog. With a
 session, it returns the session allowlist.
 
-`provider call` evaluates the call through kernel policy before execution. It
-supports first-party trace, report, audit, accountability, cert, eval, and bench
+`provider call` submits the call to the Runwarden platform executor. The
+executor evaluates kernel policy before execution, appends provider-call events,
+persists a provider-call record under `.runwarden/provider-calls/`, and then
+dispatches first-party providers or mediated external adapters. It supports
+first-party trace, report, audit, accountability, cert, eval, and bench
 providers, including `runwarden.eval.agent-native`.
 
 Session-backed provider calls resolve relative `input_path`, `trace_path`, and
@@ -75,6 +78,9 @@ example, `--session enterprise_ops --root safe --input input.txt` reads
 External MCP request `manifest_path` values are promoted into kernel arguments,
 resolved relative to the adapter request file when they are not absolute, and
 root validated before digest binding or execution.
+
+Review-required provider calls return a normalized `ProviderOutcome`, enqueue a
+pending approval record when needed, and preserve `side_effect_executed: false`.
 
 ## Approval and Digest Binding
 
@@ -110,3 +116,16 @@ rejected before writing bundles.
 
 `runwarden api serve` starts the Local API used by the Reviewer Console and SDK.
 Control-plane routes require launch token and Host/Origin checks.
+Provider execution routes keep those Local API checks at the API boundary, then
+submit provider calls and non-preview report rendering to the Runwarden platform
+executor. The Local API preserves its operation envelope and approval queue
+response shapes while platform state owns provider-call records and approval
+consumption.
+
+Non-preview `POST /reports/render` uses the platform executor. A missing
+approval returns HTTP 200 with operation data containing the `ProviderOutcome`
+and `next_actions: ["review_approval"]`. After approval, citation or render
+validation failures map to HTTP 422 with `operation.ok: false`,
+`operation.status: "denied"`, and
+`operation.error.kind: "report_citation_invalid"`. Preview render remains a
+preflight path and does not submit a platform provider call.

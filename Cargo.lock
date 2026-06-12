@@ -420,6 +420,7 @@ version = "0.1.0"
 dependencies = [
  "runwarden-assurance",
  "runwarden-kernel",
+ "runwarden-platform",
  "runwarden-providers",
  "serde",
  "serde_json",
@@ -446,6 +447,7 @@ dependencies = [
  "runwarden-api",
  "runwarden-assurance",
  "runwarden-kernel",
+ "runwarden-platform",
  "runwarden-providers",
  "serde",
  "serde_json",
@@ -476,8 +478,23 @@ dependencies = [
  "anyhow",
  "runwarden-assurance",
  "runwarden-kernel",
+ "runwarden-platform",
  "runwarden-providers",
  "serde_json",
+]
+
+[[package]]
+name = "runwarden-platform"
+version = "0.1.0"
+dependencies = [
+ "runwarden-assurance",
+ "runwarden-kernel",
+ "runwarden-providers",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "time",
 ]
 
 [[package]]

@@ -35,6 +35,26 @@ const interfaceSources = [
     roots: ["ApprovalRecord"]
   },
   {
+    fileName: "trace-event.schema.json",
+    definitions: [],
+    roots: ["TraceEvent"]
+  },
+  {
+    fileName: "trace-query.schema.json",
+    definitions: [],
+    roots: ["TraceQuery"]
+  },
+  {
+    fileName: "trace-page.schema.json",
+    definitions: [],
+    roots: ["TracePage"]
+  },
+  {
+    fileName: "trace-export-page.schema.json",
+    definitions: [],
+    roots: ["TraceExportPage"]
+  },
+  {
     fileName: "operation-result.schema.json",
     definitions: ["OperationError"],
     roots: ["OperationResultForProviderOutcome"]
@@ -178,15 +198,29 @@ function generate() {
   ].join("\n");
 }
 
-const generated = generate();
+export function normalizeNewlines(value) {
+  return value.replace(/\r\n?/g, "\n");
+}
 
-if (process.argv.includes("--check")) {
-  const existing = fs.existsSync(outputPath) ? fs.readFileSync(outputPath, "utf8") : "";
-  if (existing !== generated) {
-    console.error("generated TypeScript contracts are stale; run packages/agent-sdk/scripts/generate-contracts.mjs");
-    process.exit(1);
+export function contractsAreCurrent(existing, generated) {
+  return normalizeNewlines(existing) === normalizeNewlines(generated);
+}
+
+function main() {
+  const generated = generate();
+
+  if (process.argv.includes("--check")) {
+    const existing = fs.existsSync(outputPath) ? fs.readFileSync(outputPath, "utf8") : "";
+    if (!contractsAreCurrent(existing, generated)) {
+      console.error("generated TypeScript contracts are stale; run packages/agent-sdk/scripts/generate-contracts.mjs");
+      process.exit(1);
+    }
+  } else {
+    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+    fs.writeFileSync(outputPath, generated);
   }
-} else {
-  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-  fs.writeFileSync(outputPath, generated);
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
+  main();
 }

@@ -1,0 +1,81 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TracePage",
+  "type": "object",
+  "required": [
+    "events",
+    "limit",
+    "offset",
+    "total_matching",
+    "truncated_by_bytes"
+  ],
+  "properties": {
+    "events": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/TraceEvent"
+      }
+    },
+    "limit": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0.0
+    },
+    "next_offset": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint",
+      "minimum": 0.0
+    },
+    "offset": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0.0
+    },
+    "total_matching": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0.0
+    },
+    "truncated_by_bytes": {
+      "type": "boolean"
+    }
+  },
+  "definitions": {
+    "TraceEvent": {
+      "type": "object",
+      "required": [
+        "event_hash",
+        "event_type",
+        "obs_id",
+        "payload"
+      ],
+      "properties": {
+        "event_hash": {
+          "type": "string"
+        },
+        "event_type": {
+          "type": "string"
+        },
+        "obs_id": {
+          "type": "string"
+        },
+        "payload": true,
+        "previous_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}

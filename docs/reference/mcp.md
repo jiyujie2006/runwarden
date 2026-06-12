@@ -34,6 +34,15 @@ tools/call runwarden.report.render
 `runwarden.provider.call` supports inline safe providers such as
 `runwarden.input.inspect`, `runwarden.audit.summary`,
 `runwarden.accountability.summary`, and `runwarden.eval.agent-native`.
+`runwarden.provider.list` and `runwarden.provider.status` report the full
+Runwarden-managed provider catalog, including external provider families such as
+`external.shell.command`; those external capabilities are still invoked only via
+Runwarden provider calls, not exposed as raw MCP tools.
+Provider execution is submitted to the Runwarden platform executor with an
+inline session manifest derived from `session_allowed_providers`,
+`active_assessment`, actor, and authz arguments. The MCP boundary formats
+successful provider output back into the existing tool payload shape and formats
+kernel denials as tool results with `isError: true`.
 
 ## JSON-RPC and Tool Result Semantics
 
@@ -53,6 +62,22 @@ tools/call runwarden.report.render
   references.
 - `runwarden.report.render` renders only cited reports.
 
+Dedicated `runwarden.trace.export`, `runwarden.report.lint`, and
+`runwarden.report.render` tool calls use the same platform executor path as
+generic provider calls. `runwarden.trace.export` still rejects tampered inline
+trace events before exporting and before returning any event page. Approved
+trace export calls preserve the platform executor's page contract, including
+offset, limit, total matching count, next offset, byte truncation metadata, and
+compact obs refs derived from the returned page.
+
+Approval-required dedicated tools return a normal MCP tool result with
+`isError: true` before approval. The payload is the platform `ProviderOutcome`
+and includes `decision: "requires_review"`, `envelope.approval_id`, and
+`next_actions: ["review_approval"]`. After the matching approval is recorded,
+`runwarden.trace.export` returns `exported`, `verified`, `compact_refs`,
+`side_effect_executed`, and `page` with `offset`, `limit`, `total_matching`,
+`next_offset`, `truncated_by_bytes`, and `events`.
+
 ## Stdio Framing
 
 Stdio accepts `Content-Length` frames and EOF-terminated raw JSON payloads,
@@ -65,6 +90,9 @@ Limits:
 - Oversized headers are rejected before allocating the body.
 - MCP helper encoders reject messages that do not serialize to JSON instead of
   emitting malformed frames.
+- Handler-generated MCP platform roots are removed after request handling.
+  Explicit platform roots passed by embedding tests or callers are not cleaned
+  up by `runwarden-mcp`.
 
 ## External MCP Egress
 

@@ -118,6 +118,39 @@ export interface ApprovalRecord {
   state: ApprovalState;
 }
 
+export interface TraceEvent {
+  event_hash: string;
+  event_type: string;
+  obs_id: string;
+  payload: unknown;
+  previous_hash?: string | null;
+  provider?: string | null;
+}
+
+export interface TraceQuery {
+  event_type?: string | null;
+  limit: number;
+  max_bytes?: number | null;
+  obs_prefix?: string | null;
+  offset: number;
+  provider?: string | null;
+}
+
+export interface TracePage {
+  events: TraceEvent[];
+  limit: number;
+  next_offset?: number | null;
+  offset: number;
+  total_matching: number;
+  truncated_by_bytes: boolean;
+}
+
+export interface TraceExportPage {
+  compact_refs: string[];
+  page: TracePage;
+  verified: boolean;
+}
+
 export interface OperationError {
   code: ErrorCode;
   developer_message: string;

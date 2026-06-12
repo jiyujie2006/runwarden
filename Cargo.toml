@@ -7,6 +7,7 @@ members = [
   "crates/runwarden-api",
   "crates/runwarden-providers",
   "crates/runwarden-assurance",
+  "crates/runwarden-platform",
 ]
 
 [workspace.package]

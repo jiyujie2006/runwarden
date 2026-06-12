@@ -2,7 +2,7 @@ use std::{fs, path::Path};
 
 use runwarden_kernel::artifact::ArtifactManifest;
 use runwarden_kernel::authority::ApprovalRecord;
-use runwarden_kernel::evidence::TraceEvent;
+use runwarden_kernel::evidence::{TraceEvent, TraceExportPage, TracePage, TraceQuery};
 use runwarden_kernel::manifest::{AssessmentManifest, SessionManifest};
 use runwarden_kernel::{
     OperationResult, ProviderCall, ProviderContract, ProviderManifest, ProviderOutcome,
@@ -32,6 +32,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     write_schema(
         out_dir.join("trace-event.schema.json"),
         schema_for!(TraceEvent),
+    )?;
+    write_schema(
+        out_dir.join("trace-query.schema.json"),
+        schema_for!(TraceQuery),
+    )?;
+    write_schema(
+        out_dir.join("trace-page.schema.json"),
+        schema_for!(TracePage),
+    )?;
+    write_schema(
+        out_dir.join("trace-export-page.schema.json"),
+        schema_for!(TraceExportPage),
     )?;
     write_schema(
         out_dir.join("assessment-manifest.schema.json"),

@@ -55,11 +55,14 @@ bash scripts/artifact_leak_scan.sh
 
 once. `scripts/generate_artifacts.sh` uses
 `scripts/artifact_bundle_gate.sh` for artifact submission and verification.
+GitHub workflows pass `RUNWARDEN_SKIP_ARTIFACT_BUNDLE` through step `env:`
+rather than inline shell assignment so the release evidence matrix remains
+portable across Linux, macOS, and Windows runners.
 
 ## CI Tiers
 
 - Pull requests and pushes to `main` run `scripts/pr_fast_gate.sh`.
-- Manual CI workflow dispatch runs `scripts/nightly_full_gate.sh`.
+- Manual `Full Gate` workflow dispatch runs `scripts/nightly_full_gate.sh`.
 - Scheduled CI is disabled.
 - Release evidence runs on tags and workflow dispatch with OS matrix smoke,
   schema generation, artifact bundle generation and verification, leak scan,

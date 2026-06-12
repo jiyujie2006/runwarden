@@ -12,7 +12,9 @@ import type {
   OperationStatus,
   PolicyDecision,
   ProviderCall,
-  ProviderOutcome
+  ProviderOutcome,
+  TraceExportPage,
+  TraceQuery
 } from "./generated/contracts";
 
 export type {
@@ -29,12 +31,29 @@ export type {
   OperationStatus,
   PolicyDecision,
   ProviderCall,
-  ProviderOutcome
+  ProviderOutcome,
+  TraceEvent,
+  TraceExportPage,
+  TracePage,
+  TraceQuery
 } from "./generated/contracts";
 
 export interface ApprovalQueueResponse {
   approvals: ApprovalRecord[];
   side_effect_executed: false;
+}
+
+export interface OperationEnvelope<T> {
+  operation: {
+    ok: boolean;
+    status: OperationStatus;
+    data: T;
+    error: OperationError | null;
+    obs_refs: string[];
+    artifacts: ArtifactRef[];
+    next_actions: string[];
+  };
+  side_effect_executed: boolean;
 }
 
 export interface ApprovalReviewInput {
@@ -54,6 +73,12 @@ export interface SessionCreateInput {
 
 export interface TraceExportInput {
   trace_path: string;
+  offset?: TraceQuery["offset"];
+  limit?: TraceQuery["limit"];
+  provider?: TraceQuery["provider"];
+  event_type?: TraceQuery["event_type"];
+  obs_prefix?: TraceQuery["obs_prefix"];
+  max_bytes?: TraceQuery["max_bytes"];
 }
 
 export interface ReportLintInput {
@@ -164,8 +189,13 @@ export class RunwardenClient {
     return this.request("/provider-calls", "POST", call);
   }
 
-  async traceExport(input: TraceExportInput): Promise<unknown> {
-    return this.request("/trace/export", "POST", input);
+  async traceExport(input: TraceExportInput): Promise<TraceExportPage> {
+    const response = await this.request<OperationEnvelope<TraceExportPage>>(
+      "/trace/export",
+      "POST",
+      input
+    );
+    return response.operation.data;
   }
 
   async reportLint(input: ReportLintInput): Promise<unknown> {
