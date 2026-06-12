@@ -1112,9 +1112,12 @@ pub mod external {
     #[cfg(not(unix))]
     fn execute_stdio(
         manifest: &ProviderManifest,
-        _request: &ExternalMcpAdapterRequest,
+        request: &ExternalMcpAdapterRequest,
         _runtime_root: Option<&Path>,
     ) -> Value {
+        if let Err(denial) = validate_stdio_static_preflight(manifest, request, "stdio") {
+            return denial;
+        }
         adapter_denial(
             &manifest.provider_id,
             "stdio",
@@ -1130,46 +1133,10 @@ pub mod external {
         runtime_root: Option<&Path>,
     ) -> Value {
         let transport = "stdio";
-        let Some(command) = request.command.as_deref() else {
-            return adapter_denial(
-                &manifest.provider_id,
-                transport,
-                "argument_schema_invalid",
-                "stdio MCP adapter requires a command",
-            );
+        let command = match validate_stdio_static_preflight(manifest, request, transport) {
+            Ok(command) => command,
+            Err(denial) => return denial,
         };
-        if !command_is_allowlisted(command, &manifest.command_allowlist) {
-            return adapter_denial(
-                &manifest.provider_id,
-                transport,
-                "provider_not_allowed",
-                "stdio MCP adapter command is not allowlisted by the provider manifest",
-            );
-        }
-        if command_is_shell_capable(command) {
-            return adapter_denial(
-                &manifest.provider_id,
-                transport,
-                "provider_not_allowed",
-                "stdio MCP adapter command cannot be a shell-capable interpreter",
-            );
-        }
-        if !request.args.is_empty() {
-            return adapter_denial(
-                &manifest.provider_id,
-                transport,
-                "provider_not_allowed",
-                "stdio MCP adapter does not accept request-supplied command arguments",
-            );
-        }
-        if stdio_requires_unsupported_egress_controls(manifest) {
-            return adapter_denial(
-                &manifest.provider_id,
-                transport,
-                "egress_denied",
-                "stdio MCP adapter execution cannot enforce network egress or credential policies",
-            );
-        }
         let cwd = request
             .cwd
             .clone()
@@ -1285,6 +1252,54 @@ pub mod external {
                 true,
             ),
         }
+    }
+
+    fn validate_stdio_static_preflight<'a>(
+        manifest: &ProviderManifest,
+        request: &'a ExternalMcpAdapterRequest,
+        transport: &str,
+    ) -> Result<&'a str, Value> {
+        let Some(command) = request.command.as_deref() else {
+            return Err(adapter_denial(
+                &manifest.provider_id,
+                transport,
+                "argument_schema_invalid",
+                "stdio MCP adapter requires a command",
+            ));
+        };
+        if !command_is_allowlisted(command, &manifest.command_allowlist) {
+            return Err(adapter_denial(
+                &manifest.provider_id,
+                transport,
+                "provider_not_allowed",
+                "stdio MCP adapter command is not allowlisted by the provider manifest",
+            ));
+        }
+        if command_is_shell_capable(command) {
+            return Err(adapter_denial(
+                &manifest.provider_id,
+                transport,
+                "provider_not_allowed",
+                "stdio MCP adapter command cannot be a shell-capable interpreter",
+            ));
+        }
+        if !request.args.is_empty() {
+            return Err(adapter_denial(
+                &manifest.provider_id,
+                transport,
+                "provider_not_allowed",
+                "stdio MCP adapter does not accept request-supplied command arguments",
+            ));
+        }
+        if stdio_requires_unsupported_egress_controls(manifest) {
+            return Err(adapter_denial(
+                &manifest.provider_id,
+                transport,
+                "egress_denied",
+                "stdio MCP adapter execution cannot enforce network egress or credential policies",
+            ));
+        }
+        Ok(command)
     }
 
     fn execute_http(
@@ -1540,7 +1555,6 @@ pub mod external {
         ) || manifest.side_effects.contains(&SideEffectKind::Network)
     }
 
-    #[cfg(unix)]
     fn stdio_requires_unsupported_egress_controls(manifest: &ProviderManifest) -> bool {
         requires_egress(manifest)
             || manifest
@@ -1549,12 +1563,10 @@ pub mod external {
             || !manifest.allowed_origins.is_empty()
     }
 
-    #[cfg(unix)]
     fn command_is_allowlisted(command: &str, allowlist: &[String]) -> bool {
         allowlist.iter().any(|allowed| allowed == command)
     }
 
-    #[cfg(unix)]
     fn command_is_shell_capable(command: &str) -> bool {
         let name = Path::new(command)
             .file_name()
