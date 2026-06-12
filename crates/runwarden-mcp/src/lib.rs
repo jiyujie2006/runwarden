@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, bail};
@@ -55,6 +56,7 @@ const RUNWARDEN_TOOLS: &[(&str, &str)] = &[
     ),
 ];
 const MAX_STDIO_FRAME_BYTES: usize = 1_048_576;
+static MCP_PLATFORM_ROOT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub fn handle_stdio_payload(payload: &str) -> anyhow::Result<String> {
     let body = decode_stdio_body(payload)?;
@@ -678,7 +680,11 @@ fn generated_mcp_platform_root() -> anyhow::Result<PathBuf> {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
-    let root = std::env::temp_dir().join(format!("runwarden-mcp-{}-{nanos}", std::process::id()));
+    let counter = MCP_PLATFORM_ROOT_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let root = std::env::temp_dir().join(format!(
+        "runwarden-mcp-{}-{nanos}-{counter}",
+        std::process::id()
+    ));
     fs::create_dir_all(&root).context("create MCP platform root")?;
     Ok(root)
 }
@@ -688,11 +694,19 @@ fn with_generated_mcp_platform_root<T>(
 ) -> anyhow::Result<T> {
     let root = generated_mcp_platform_root()?;
     let result = handler(&root);
-    let cleanup = fs::remove_dir_all(&root).context("remove MCP platform root");
+    let cleanup = remove_generated_mcp_platform_root(&root);
     match (result, cleanup) {
         (Ok(value), Ok(())) => Ok(value),
         (Ok(_), Err(err)) => Err(err),
         (Err(err), _) => Err(err),
+    }
+}
+
+fn remove_generated_mcp_platform_root(root: &Path) -> anyhow::Result<()> {
+    match fs::remove_dir_all(root) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err).context("remove MCP platform root"),
     }
 }
 
@@ -772,5 +786,15 @@ mod tests {
             !observed_root.borrow().exists(),
             "generated MCP platform root should be removed after request handling"
         );
+    }
+
+    #[test]
+    fn generated_platform_roots_are_unique_within_process() {
+        let first = generated_mcp_platform_root().expect("first generated root");
+        let second = generated_mcp_platform_root().expect("second generated root");
+
+        assert_ne!(first, second);
+        let _ = remove_generated_mcp_platform_root(&first);
+        let _ = remove_generated_mcp_platform_root(&second);
     }
 }
