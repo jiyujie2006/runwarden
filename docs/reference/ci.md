@@ -24,6 +24,10 @@ the manual run URL and head SHA against the pull request head.
 
 `scripts/dev_gate.sh` currently runs the same local checks.
 
+The generated TypeScript contract check compares normalized LF content so
+Windows checkouts with CRLF line endings do not fail when the generated
+contract semantics are unchanged.
+
 ## Full and Release Gates
 
 `scripts/release_gate_local.sh` adds:
