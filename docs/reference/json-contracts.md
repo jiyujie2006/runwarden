@@ -10,6 +10,9 @@ Rust types where possible. Rust is the source of truth.
 - `operation-result.schema.json`
 - `approval-record.schema.json`
 - `trace-event.schema.json`
+- `trace-query.schema.json`
+- `trace-page.schema.json`
+- `trace-export-page.schema.json`
 - `assessment-manifest.schema.json`
 - `session-manifest.schema.json`
 - `provider-manifest.schema.json`

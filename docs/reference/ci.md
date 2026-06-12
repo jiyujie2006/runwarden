@@ -1,8 +1,14 @@
 # CI
 
 Runwarden uses tiered gates. Pull requests and pushes to `main` run the fast
-gate. Manual workflow dispatch runs the full gate. Release evidence runs on
-tags and manual dispatch.
+gate through the `CI` workflow. Manual workflow dispatch runs the full gate
+through the separate `Full Gate` workflow. Release evidence runs on tags and
+manual dispatch.
+
+The manual full gate is a separate `workflow_dispatch` run on a branch or SHA.
+It does not appear as a passing PR check and is not present as a skipped job in
+pull request runs. When a reviewer requires the full gate before merge, verify
+the manual run URL and head SHA against the pull request head.
 
 ## Fast Gate
 
@@ -35,7 +41,9 @@ tags and manual dispatch.
 Composite gates such as manual full CI and release evidence set
 `RUNWARDEN_SKIP_ARTIFACT_BUNDLE=1` before calling the release gate, then run
 `scripts/generate_artifacts.sh` and `scripts/artifact_leak_scan.sh` once so
-artifact generation is not duplicated.
+artifact generation is not duplicated. GitHub workflows must pass this value
+through a YAML `env:` block instead of POSIX inline assignment so release
+evidence works across Linux, macOS, and Windows runners.
 
 ## Tooling
 

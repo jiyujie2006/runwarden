@@ -56,6 +56,7 @@ are evaluated by the same kernel policy path.
 | Component | Role |
 | --- | --- |
 | `crates/runwarden-kernel` | Rust source of truth for contracts, manifests, policy gates, approvals, trace, artifacts, and provider outcomes. |
+| `crates/runwarden-platform` | Shared platform executor and `.runwarden` state layer for sessions, approvals, provider-call records, platform events, and artifact path validation. |
 | `crates/runwarden-mcp` | Agent-facing MCP server. It exposes only `runwarden.*` tools. |
 | `crates/runwarden-cli` | Human control plane for sessions, providers, approvals, trace, reports, eval, cert, bench, artifacts, UI, and Local API. |
 | `crates/runwarden-api` | Token-protected Local API used by the Reviewer Console and SDK. |

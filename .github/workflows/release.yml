@@ -31,7 +31,9 @@ jobs:
           cache: pnpm
       - run: cargo install cargo-deny --version 0.19.6 --locked
       - run: pnpm install --frozen-lockfile
-      - run: RUNWARDEN_SKIP_ARTIFACT_BUNDLE=1 bash scripts/release_gate_local.sh
+      - run: bash scripts/release_gate_local.sh
+        env:
+          RUNWARDEN_SKIP_ARTIFACT_BUNDLE: "1"
       - run: bash scripts/generate_artifacts.sh
       - run: bash scripts/artifact_leak_scan.sh
       - run: cargo build --workspace --release

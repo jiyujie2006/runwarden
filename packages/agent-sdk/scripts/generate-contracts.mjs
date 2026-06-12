@@ -35,6 +35,26 @@ const interfaceSources = [
     roots: ["ApprovalRecord"]
   },
   {
+    fileName: "trace-event.schema.json",
+    definitions: [],
+    roots: ["TraceEvent"]
+  },
+  {
+    fileName: "trace-query.schema.json",
+    definitions: [],
+    roots: ["TraceQuery"]
+  },
+  {
+    fileName: "trace-page.schema.json",
+    definitions: [],
+    roots: ["TracePage"]
+  },
+  {
+    fileName: "trace-export-page.schema.json",
+    definitions: [],
+    roots: ["TraceExportPage"]
+  },
+  {
     fileName: "operation-result.schema.json",
     definitions: ["OperationError"],
     roots: ["OperationResultForProviderOutcome"]

@@ -1,12 +1,10 @@
-name: CI
+name: Full Gate
 
 on:
-  pull_request:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 jobs:
-  pr-fast-gate:
+  manual-full-gate:
     runs-on: ubuntu-latest
     steps:
       # actions/checkout@v4
@@ -26,4 +24,4 @@ jobs:
           cache: pnpm
       - run: cargo install cargo-deny --version 0.19.6 --locked
       - run: pnpm install --frozen-lockfile
-      - run: bash scripts/pr_fast_gate.sh
+      - run: bash scripts/nightly_full_gate.sh

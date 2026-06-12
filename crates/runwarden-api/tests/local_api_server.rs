@@ -990,6 +990,36 @@ fn local_api_provider_call_records_execution_in_router_platform_root() {
 }
 
 #[test]
+fn local_api_session_create_persists_session_in_platform_root() {
+    let dir = tempfile::tempdir().expect("platform root");
+    let session_id = "persisted_api_session";
+    let provider = "runwarden.input.inspect";
+    let mut router = LocalApiRouter::with_platform_root(
+        LocalApiSecurity::new("launch-secret", ["127.0.0.1:0"], ["http://127.0.0.1:0"]),
+        dir.path(),
+    );
+
+    let create_session = router.handle(
+        authed("POST", "/sessions"),
+        Some(manifest_body(session_id, &[provider])),
+    );
+
+    let platform = RunwardenPlatform::open(dir.path()).expect("open platform");
+    let persisted = platform
+        .read_session(session_id)
+        .expect("persisted session");
+
+    assert_eq!(create_session.status, 200);
+    assert_eq!(persisted.session_id, session_id);
+    assert!(
+        persisted
+            .allowed_providers
+            .iter()
+            .any(|allowed| allowed == provider)
+    );
+}
+
+#[test]
 fn local_api_provider_call_enqueues_pending_approval_when_review_required() {
     let session_id = "review_session";
     let provider = "runwarden.report.render";

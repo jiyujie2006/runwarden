@@ -1254,6 +1254,9 @@ pub mod cert {
                     "schemas/approval-record.schema.json",
                     "schemas/artifact-manifest.schema.json",
                     "schemas/trace-event.schema.json",
+                    "schemas/trace-query.schema.json",
+                    "schemas/trace-page.schema.json",
+                    "schemas/trace-export-page.schema.json",
                     "schemas/report.schema.json",
                 ],
             ),
@@ -1406,17 +1409,21 @@ pub mod cert {
     }
 
     fn ci_tiered_gates_check(root: &Path) -> CertCheck {
-        let body = fs::read_to_string(root.join(".github/workflows/ci.yml")).unwrap_or_default();
-        let passed = active_yaml_contains(&body, "pull_request:")
-            && active_yaml_contains(&body, "workflow_dispatch:")
-            && !active_yaml_contains(&body, "schedule:")
-            && active_yaml_contains(&body, "manual-full-gate:")
-            && active_yaml_contains(&body, "scripts/pr_fast_gate.sh")
-            && active_yaml_contains(&body, "scripts/nightly_full_gate.sh");
+        let ci_body = fs::read_to_string(root.join(".github/workflows/ci.yml")).unwrap_or_default();
+        let full_gate_body =
+            fs::read_to_string(root.join(".github/workflows/full-gate.yml")).unwrap_or_default();
+        let passed = active_yaml_contains(&ci_body, "pull_request:")
+            && !active_yaml_contains(&ci_body, "workflow_dispatch:")
+            && !active_yaml_contains(&ci_body, "schedule:")
+            && !active_yaml_contains(&ci_body, "manual-full-gate:")
+            && active_yaml_contains(&ci_body, "scripts/pr_fast_gate.sh")
+            && active_yaml_contains(&full_gate_body, "workflow_dispatch:")
+            && active_yaml_contains(&full_gate_body, "manual-full-gate:")
+            && active_yaml_contains(&full_gate_body, "scripts/nightly_full_gate.sh");
         check(
             "ci_tiered_gates",
             passed,
-            "CI runs fast gate on changes and manual full gate on dispatch",
+            "CI runs fast gate on changes; separate Full Gate workflow runs manual full gate",
         )
     }
 

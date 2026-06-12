@@ -321,6 +321,36 @@ fn provider_list_returns_kernel_managed_registry_metadata() {
 }
 
 #[test]
+fn provider_list_and_status_include_external_provider_families() {
+    let response = call_tool(
+        61,
+        "runwarden.provider.list",
+        json!({
+            "session_allowed_providers": ["external.shell.command"]
+        }),
+    );
+
+    let payload = tool_payload(&response);
+    let providers = payload["providers"].as_array().expect("providers");
+
+    assert_eq!(providers.len(), 1);
+    assert_eq!(providers[0]["id"], "external.shell.command");
+    assert_eq!(providers[0]["class"], "external");
+    assert_eq!(providers[0]["kind"], "shell");
+
+    let status = call_tool(
+        62,
+        "runwarden.provider.status",
+        json!({ "provider": "external.shell.command" }),
+    );
+    let status_payload = tool_payload(&status);
+
+    assert_eq!(status_payload["provider"], "external.shell.command");
+    assert_eq!(status_payload["available"], true);
+    assert_eq!(status_payload["side_effect_executed"], false);
+}
+
+#[test]
 fn provider_status_reports_availability_without_side_effects() {
     let response = call_tool(
         7,

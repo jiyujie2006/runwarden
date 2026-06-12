@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use runwarden_kernel::artifact::ArtifactManifest;
 use runwarden_kernel::authority::ApprovalRecord;
-use runwarden_kernel::evidence::TraceEvent;
+use runwarden_kernel::evidence::{TraceEvent, TraceExportPage, TracePage, TraceQuery};
 use runwarden_kernel::manifest::{AssessmentManifest, SessionManifest};
 use runwarden_kernel::{
     OperationResult, ProviderCall, ProviderContract, ProviderManifest, ProviderOutcome,
@@ -17,11 +17,17 @@ fn rust_contracts_generate_json_schemas() {
     let provider_outcome = schema_for!(ProviderOutcome);
     let approval_record = schema_for!(ApprovalRecord);
     let operation_result = schema_for!(OperationResult<ProviderOutcome>);
+    let trace_query = schema_for!(TraceQuery);
+    let trace_page = schema_for!(TracePage);
+    let trace_export_page = schema_for!(TraceExportPage);
 
     assert_schema_title(provider_call, "ProviderCall");
     assert_schema_title(provider_outcome, "ProviderOutcome");
     assert_schema_title(approval_record, "ApprovalRecord");
     assert_schema_title(operation_result, "OperationResult_for_ProviderOutcome");
+    assert_schema_title(trace_query, "TraceQuery");
+    assert_schema_title(trace_page, "TracePage");
+    assert_schema_title(trace_export_page, "TraceExportPage");
 }
 
 #[test]
@@ -52,6 +58,21 @@ fn checked_in_schema_artifacts_match_rust_contracts() {
         &root,
         "trace-event.schema.json",
         serde_json::to_value(schema_for!(TraceEvent)).expect("schema value"),
+    );
+    assert_schema_file_matches(
+        &root,
+        "trace-query.schema.json",
+        serde_json::to_value(schema_for!(TraceQuery)).expect("schema value"),
+    );
+    assert_schema_file_matches(
+        &root,
+        "trace-page.schema.json",
+        serde_json::to_value(schema_for!(TracePage)).expect("schema value"),
+    );
+    assert_schema_file_matches(
+        &root,
+        "trace-export-page.schema.json",
+        serde_json::to_value(schema_for!(TraceExportPage)).expect("schema value"),
     );
     assert_schema_file_matches(
         &root,

@@ -74,3 +74,22 @@ the failure to `internal`. For example, `runwarden.report.render` citation
 failures are recorded as `report_citation_invalid` with execution status
 `failed`, and `runwarden.eval.agent-native` inline `agent_configs` must contain
 at least one well-formed case or fail with `argument_schema_invalid`.
+
+Inline `runwarden.eval.agent-native` cases use:
+
+```json
+{
+  "agent_configs": [
+    {
+      "id": "case-id",
+      "config": {},
+      "expectation": "runwarden_only_allowed"
+    }
+  ]
+}
+```
+
+`agent_configs` must be a non-empty array. Each case must include a non-empty
+string `id`, a `config` value, and an optional `expectation` of
+`runwarden_only_allowed` or `raw_tools_denied`. Empty arrays, missing `id` or
+`config`, and unsupported expectations fail with `argument_schema_invalid`.

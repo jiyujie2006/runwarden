@@ -121,3 +121,11 @@ submit provider calls and non-preview report rendering to the Runwarden platform
 executor. The Local API preserves its operation envelope and approval queue
 response shapes while platform state owns provider-call records and approval
 consumption.
+
+Non-preview `POST /reports/render` uses the platform executor. A missing
+approval returns HTTP 200 with operation data containing the `ProviderOutcome`
+and `next_actions: ["review_approval"]`. After approval, citation or render
+validation failures map to HTTP 422 with `operation.ok: false`,
+`operation.status: "denied"`, and
+`operation.error.kind: "report_citation_invalid"`. Preview render remains a
+preflight path and does not submit a platform provider call.

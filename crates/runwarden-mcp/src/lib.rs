@@ -11,7 +11,9 @@ use runwarden_kernel::manifest::{
 };
 use runwarden_kernel::{ErrorKind, KernelProvider, PolicyDecision, ProviderCall, ProviderOutcome};
 use runwarden_platform::{ProviderExecutionRequest, ProviderExecutionResult, RunwardenPlatform};
-use runwarden_providers::catalog::default_first_party_providers;
+use runwarden_providers::catalog::{
+    default_external_providers, default_first_party_providers, full_provider_registry,
+};
 use serde_json::{Value, json};
 
 const RUNWARDEN_TOOLS: &[(&str, &str)] = &[
@@ -479,6 +481,7 @@ fn handle_provider_list(id: Value, params: Option<&Value>) -> Value {
 
     let providers: Vec<_> = default_first_party_providers()
         .into_iter()
+        .chain(default_external_providers())
         .filter(|provider| allowed.is_empty() || allowed.contains(&provider.id.as_str()))
         .collect();
 
@@ -504,7 +507,8 @@ fn handle_provider_status(id: Value, params: Option<&Value>) -> Value {
         );
     };
 
-    let Some(provider) = find_first_party_provider(provider_id) else {
+    let registry = full_provider_registry();
+    let Some(provider) = registry.get(provider_id) else {
         return tool_error_result(
             id,
             json!({
@@ -521,10 +525,11 @@ fn handle_provider_status(id: Value, params: Option<&Value>) -> Value {
         json!({
             "provider": provider.id,
             "available": true,
+            "class": provider.class,
             "kind": provider.kind,
             "risk": provider.risk,
             "side_effects": provider.side_effects,
-            "approval_required": approval_required(&provider),
+            "approval_required": approval_required(provider),
             "side_effect_executed": false
         }),
     )
@@ -636,12 +641,6 @@ fn report_and_trace_args(params: Option<&Value>) -> Option<(ReportDraft, Vec<Tra
     )
     .ok()?;
     Some((report, trace_events))
-}
-
-fn find_first_party_provider(provider_id: &str) -> Option<KernelProvider> {
-    default_first_party_providers()
-        .into_iter()
-        .find(|provider| provider.id == provider_id)
 }
 
 fn approval_required(provider: &KernelProvider) -> bool {

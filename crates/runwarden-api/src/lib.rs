@@ -423,6 +423,29 @@ impl LocalApiRouter {
             }
         };
         let session = SessionManifest::from_assessment(session_id, &assessment);
+        let platform = match RunwardenPlatform::open(&self.platform_root) {
+            Ok(platform) => platform,
+            Err(err) => {
+                return operation_error_with_headers(
+                    500,
+                    authorization.headers,
+                    "failed",
+                    "internal",
+                    err.to_string(),
+                    false,
+                );
+            }
+        };
+        if let Err(err) = platform.write_session(&session) {
+            return operation_error_with_headers(
+                500,
+                authorization.headers,
+                "failed",
+                "internal",
+                err.to_string(),
+                false,
+            );
+        }
         self.security
             .sessions
             .insert(session.session_id.clone(), session.clone());

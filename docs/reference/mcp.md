@@ -34,6 +34,10 @@ tools/call runwarden.report.render
 `runwarden.provider.call` supports inline safe providers such as
 `runwarden.input.inspect`, `runwarden.audit.summary`,
 `runwarden.accountability.summary`, and `runwarden.eval.agent-native`.
+`runwarden.provider.list` and `runwarden.provider.status` report the full
+Runwarden-managed provider catalog, including external provider families such as
+`external.shell.command`; those external capabilities are still invoked only via
+Runwarden provider calls, not exposed as raw MCP tools.
 Provider execution is submitted to the Runwarden platform executor with an
 inline session manifest derived from `session_allowed_providers`,
 `active_assessment`, actor, and authz arguments. The MCP boundary formats
@@ -65,6 +69,14 @@ trace events before exporting and before returning any event page. Approved
 trace export calls preserve the platform executor's page contract, including
 offset, limit, total matching count, next offset, byte truncation metadata, and
 compact obs refs derived from the returned page.
+
+Approval-required dedicated tools return a normal MCP tool result with
+`isError: true` before approval. The payload is the platform `ProviderOutcome`
+and includes `decision: "requires_review"`, `envelope.approval_id`, and
+`next_actions: ["review_approval"]`. After the matching approval is recorded,
+`runwarden.trace.export` returns `exported`, `verified`, `compact_refs`,
+`side_effect_executed`, and `page` with `offset`, `limit`, `total_matching`,
+`next_offset`, `truncated_by_bytes`, and `events`.
 
 ## Stdio Framing
 

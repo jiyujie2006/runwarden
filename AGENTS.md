@@ -8,9 +8,10 @@ Use these gates: `bash scripts/pr_fast_gate.sh`,
 `bash scripts/release_gate_local.sh`, `cargo test --workspace`, `pnpm test`,
 and `pnpm build`.
 
-Before changing provider, report, artifact, approval, or MCP behavior, read the
-matching reference page under `docs/reference/` and update it with the code
-change. Keep `docs/README.md` as the documentation index.
+Before changing provider, report, artifact, approval, MCP, Local API, Reviewer
+Console, or platform executor/state behavior, read the matching reference page
+under `docs/reference/` and update it with the code change. Keep
+`docs/README.md` as the documentation index.
 
 Preserve these invariants:
 

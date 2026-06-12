@@ -5,7 +5,8 @@ import {
   type FetchInit,
   type OperationError,
   type OperationResultForProviderOutcome,
-  type ProviderOutcome
+  type ProviderOutcome,
+  type TraceExportPage
 } from "./index";
 
 describe("RunwardenClient", () => {
@@ -227,10 +228,36 @@ describe("RunwardenClient", () => {
       launchToken: "launch-secret",
       fetch: async (url, init) => {
         calls.push({ url, init });
+        const path = new URL(url).pathname;
         return {
           ok: true,
           status: 200,
-          json: async () => ({ ok: true, url })
+          json: async () =>
+            path === "/trace/export"
+              ? {
+                  operation: {
+                    ok: true,
+                    status: "ok",
+                    data: {
+                      compact_refs: [],
+                      page: {
+                        events: [],
+                        limit: 100,
+                        next_offset: null,
+                        offset: 0,
+                        total_matching: 0,
+                        truncated_by_bytes: false
+                      },
+                      verified: true
+                    },
+                    error: null,
+                    obs_refs: [],
+                    artifacts: [],
+                    next_actions: []
+                  },
+                  side_effect_executed: false
+                }
+              : { ok: true, url }
         };
       }
     });
@@ -275,6 +302,75 @@ describe("RunwardenClient", () => {
         authorization: "Bearer launch-secret",
         "content-type": "application/json"
       }
+    });
+  });
+
+  it("models trace export pagination and filtering through the Local API", async () => {
+    const calls: Array<{ url: string; init: FetchInit | undefined }> = [];
+    const page: TraceExportPage = {
+      compact_refs: ["obs_1"],
+      page: {
+        events: [
+          {
+            event_hash: "hash_1",
+            event_type: "provider_call_completed",
+            obs_id: "obs_1",
+            payload: { decision: "allowed" },
+            previous_hash: null,
+            provider: "runwarden.input.inspect"
+          }
+        ],
+        limit: 1,
+        next_offset: 1,
+        offset: 0,
+        total_matching: 2,
+        truncated_by_bytes: false
+      },
+      verified: true
+    };
+    const client = new RunwardenClient("http://127.0.0.1:8088/", {
+      launchToken: "launch-secret",
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            operation: {
+              ok: true,
+              status: "ok",
+              data: page,
+              error: null,
+              obs_refs: [],
+              artifacts: [],
+              next_actions: ["query_next_trace_page"]
+            },
+            side_effect_executed: false
+          })
+        };
+      }
+    });
+
+    const result = await client.traceExport({
+      event_type: "provider_call_completed",
+      limit: 1,
+      max_bytes: 2048,
+      obs_prefix: "obs_",
+      offset: 0,
+      provider: "runwarden.input.inspect",
+      trace_path: "trace.json"
+    });
+
+    expect(result.page.next_offset).toBe(1);
+    expect(result.page.truncated_by_bytes).toBe(false);
+    expect(JSON.parse(calls[0]!.init!.body!)).toMatchObject({
+      event_type: "provider_call_completed",
+      limit: 1,
+      max_bytes: 2048,
+      obs_prefix: "obs_",
+      offset: 0,
+      provider: "runwarden.input.inspect",
+      trace_path: "trace.json"
     });
   });
 
