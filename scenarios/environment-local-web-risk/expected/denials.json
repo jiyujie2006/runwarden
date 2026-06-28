@@ -1,0 +1,22 @@
+[
+  {
+    "provider": "external.mcp.browser.open_page",
+    "action": "open_page",
+    "decision": "denied",
+    "execution_status": "not_executed",
+    "side_effect_executed": false,
+    "obs_ref": "obs_local_web_browser_denied",
+    "error_kind": "egress_denied",
+    "reason": "localhost browser egress is denied"
+  },
+  {
+    "provider": "external.api.request",
+    "action": "request",
+    "decision": "denied",
+    "execution_status": "not_executed",
+    "side_effect_executed": false,
+    "obs_ref": "obs_local_web_metadata_denied",
+    "error_kind": "egress_denied",
+    "reason": "metadata-service egress is denied"
+  }
+]

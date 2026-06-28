@@ -5,16 +5,16 @@ use tempfile::tempdir;
 fn manifest_toml() -> &'static str {
     r#"
     version = "0.1"
-    name = "enterprise-agent-security"
+    name = "contest-red-team"
     mode = "offline"
     provider_allowlist = [
       "runwarden.input.inspect",
-      "runwarden.evidence.inspect"
+      "external.api.request"
     ]
 
     [[roots]]
-    name = "evidence"
-    path = "/srv/runwarden/evidence"
+    name = "workspace"
+    path = "/srv/runwarden/demo"
 
     [actor]
     id = "agent-1"
@@ -38,7 +38,7 @@ fn session_create_persists_manifest_backed_session() {
         .current_dir(dir.path())
         .args(["session", "create", "--manifest"])
         .arg(&manifest_path)
-        .args(["--session", "enterprise_ops", "--json"])
+        .args(["--session", "contest_ops", "--json"])
         .output()
         .expect("run session create");
 
@@ -48,11 +48,11 @@ fn session_create_persists_manifest_backed_session() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
-    assert!(stdout.contains(r#""session_id": "enterprise_ops""#));
+    assert!(stdout.contains(r#""session_id": "contest_ops""#));
     assert!(stdout.contains(r#""authz_id": "authz-active""#));
     assert!(
         dir.path()
-            .join(".runwarden/sessions/enterprise_ops.json")
+            .join(".runwarden/sessions/contest_ops.json")
             .exists()
     );
 }
@@ -66,20 +66,14 @@ fn session_inspect_and_provider_list_read_persisted_session() {
         .current_dir(dir.path())
         .args(["session", "create", "--manifest"])
         .arg(&manifest_path)
-        .args(["--session", "enterprise_ops", "--json"])
+        .args(["--session", "contest_ops", "--json"])
         .output()
         .expect("run session create");
     assert!(create.status.success());
 
     let inspect = Command::new(env!("CARGO_BIN_EXE_runwarden"))
         .current_dir(dir.path())
-        .args([
-            "session",
-            "inspect",
-            "--session",
-            "enterprise_ops",
-            "--json",
-        ])
+        .args(["session", "inspect", "--session", "contest_ops", "--json"])
         .output()
         .expect("run session inspect");
     assert!(inspect.status.success());
@@ -88,12 +82,12 @@ fn session_inspect_and_provider_list_read_persisted_session() {
 
     let provider_list = Command::new(env!("CARGO_BIN_EXE_runwarden"))
         .current_dir(dir.path())
-        .args(["provider", "list", "--session", "enterprise_ops", "--json"])
+        .args(["provider", "list", "--session", "contest_ops", "--json"])
         .output()
         .expect("run provider list");
     assert!(provider_list.status.success());
     let list_stdout = String::from_utf8(provider_list.stdout).expect("utf8 stdout");
     assert!(list_stdout.contains("runwarden.input.inspect"));
-    assert!(list_stdout.contains("runwarden.evidence.inspect"));
+    assert!(list_stdout.contains("external.api.request"));
     assert!(!list_stdout.contains("external.shell.command"));
 }

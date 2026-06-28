@@ -1,0 +1,5 @@
+[
+  "obs_prompt_file_inspect",
+  "obs_prompt_file_read_review",
+  "obs_prompt_file_exfil_denied"
+]

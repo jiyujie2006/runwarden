@@ -1,0 +1,5 @@
+[
+  {"provider": "runwarden.input.inspect", "action": "inspect"},
+  {"provider": "external.knowledge.write", "action": "write"},
+  {"provider": "external.memory.write", "action": "write"}
+]

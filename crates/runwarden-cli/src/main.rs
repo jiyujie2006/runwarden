@@ -1,56 +1,37 @@
 use std::{
-    collections::BTreeSet,
     env, fs,
-    net::TcpListener,
     path::{Path, PathBuf},
     process::ExitCode,
 };
 
 use clap::{Parser, Subcommand};
-use runwarden_api::{
-    LocalApiRouter, LocalApiServerConfig, UiLaunchSnapshot, serve_next_request, serve_one_request,
-    write_ui_launch_bundle,
-};
-use runwarden_assurance::accountability::accountability_summary;
-use runwarden_assurance::artifact::{seal_artifact, verify_artifact_manifest};
-use runwarden_assurance::audit::audit_summary;
-use runwarden_assurance::bench::benchmark_workspace;
-use runwarden_assurance::cert::{CertCheck, CertReport, certify_agent_config, certify_workspace};
-use runwarden_assurance::eval::{
-    AgentNativeConfigCase, AgentNativeExpectation, EvalThresholds, evaluate_agent_native_configs,
-    evaluate_report_assurance,
-};
+use runwarden_assurance::eval::{EvalThresholds, evaluate_report_assurance};
 use runwarden_assurance::report::{
-    RenderFormat, ReportDraft, lint_report_against_trace, render_report, scaffold_report_from_trace,
+    RenderFormat, ReportDraft, lint_report_against_trace, render_report,
 };
-use runwarden_kernel::artifact::ArtifactManifest;
 use runwarden_kernel::authority::{ApprovalBinding, ApprovalRecord, ApprovalState};
-use runwarden_kernel::contracts::{
-    PolicyDecision, ProviderCall, ProviderClass, ProviderKind, ProviderOutcome,
-};
+use runwarden_kernel::contracts::{PolicyDecision, ProviderCall, ProviderClass, ProviderOutcome};
 use runwarden_kernel::evidence::{InMemoryTraceStore, TraceEvent, TraceQuery, hex_sha256};
 use runwarden_kernel::kernel::{KernelEnforcer, KernelPolicy, ScopedRoot};
 use runwarden_kernel::manifest::{AssessmentManifest, SessionManifest};
 use runwarden_providers::catalog::{
-    EXTERNAL_PROVIDER_IDS, FIRST_PARTY_PROVIDER_IDS, default_external_provider_manifest,
-    default_external_providers, first_party_registry, full_provider_registry,
-};
-use runwarden_providers::evidence::{EvidenceInspectPolicy, inspect_evidence_root};
-use runwarden_providers::external::{
-    ExternalMcpAdapterRequest, certify_external_provider_manifest, execute_external_mcp_adapter,
-    load_provider_manifest,
+    EXTERNAL_PROVIDER_IDS, FIRST_PARTY_PROVIDER_IDS, full_provider_registry,
 };
 use runwarden_providers::input::{InputInspectPolicy, InputSource, inspect_input};
-use runwarden_providers::runtime::{
-    ProviderRuntime, ProviderRuntimeDenialKind, ProviderRuntimePolicy, ProviderRuntimeRequest,
-};
-use serde::Deserialize;
-use serde_json::json;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use time::OffsetDateTime;
+
+const CONTEST_SCENARIOS: &[&str] = &[
+    "prompt-injection-file-exfil",
+    "tool-hijack-email-api",
+    "memory-knowledge-poisoning",
+    "environment-local-web-risk",
+];
 
 #[derive(Debug, Parser)]
 #[command(name = "runwarden")]
-#[command(about = "Human control plane for Runwarden")]
+#[command(about = "Contest red-team range for Runwarden-mediated agent tools")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -63,25 +44,9 @@ enum Command {
         #[arg(long)]
         strict: bool,
     },
-    Agent {
+    Session {
         #[command(subcommand)]
-        command: AgentCommand,
-    },
-    Report {
-        #[command(subcommand)]
-        command: ReportCommand,
-    },
-    Eval {
-        #[command(subcommand)]
-        command: EvalCommand,
-    },
-    Cert {
-        #[command(subcommand)]
-        command: CertCommand,
-    },
-    Bench {
-        #[command(subcommand)]
-        command: BenchCommand,
+        command: SessionCommand,
     },
     Provider {
         #[command(subcommand)]
@@ -91,13 +56,21 @@ enum Command {
         #[command(subcommand)]
         command: TraceCommand,
     },
-    Session {
+    Report {
         #[command(subcommand)]
-        command: SessionCommand,
+        command: ReportCommand,
     },
-    Artifact {
+    Eval {
         #[command(subcommand)]
-        command: ArtifactCommand,
+        command: EvalCommand,
+    },
+    Demo {
+        #[command(subcommand)]
+        command: DemoCommand,
+    },
+    Ui {
+        #[command(subcommand)]
+        command: UiCommand,
     },
     Approval {
         #[command(subcommand)]
@@ -107,142 +80,21 @@ enum Command {
         #[command(subcommand)]
         command: AuthorityCommand,
     },
-    Release {
-        #[command(subcommand)]
-        command: ReleaseCommand,
-    },
-    Ui {
-        #[arg(long, default_value = "127.0.0.1")]
-        bind: String,
-        #[arg(long, default_value_t = 8088)]
-        port: u16,
-        #[arg(long, default_value = "artifacts")]
-        artifacts: PathBuf,
-        #[arg(long)]
-        json: bool,
-    },
-    Api {
-        #[command(subcommand)]
-        command: ApiCommand,
-    },
 }
 
 #[derive(Debug, Subcommand)]
-enum AgentCommand {
-    GenerateConfig {
+enum SessionCommand {
+    Create {
         #[arg(long)]
-        client: String,
+        manifest: PathBuf,
         #[arg(long)]
-        output: PathBuf,
-    },
-    CheckConfig {
-        #[arg(long)]
-        client: String,
-        #[arg(long)]
-        input: PathBuf,
+        session: String,
         #[arg(long)]
         json: bool,
     },
-}
-
-#[derive(Debug, Subcommand)]
-enum ReportCommand {
-    Scaffold {
+    Inspect {
         #[arg(long)]
-        trace: PathBuf,
-        #[arg(long)]
-        json: bool,
-    },
-    Lint {
-        #[arg(long)]
-        report: PathBuf,
-        #[arg(long)]
-        trace: PathBuf,
-        #[arg(long)]
-        json: bool,
-    },
-    Render {
-        #[arg(long)]
-        report: PathBuf,
-        #[arg(long)]
-        trace: PathBuf,
-        #[arg(long)]
-        format: String,
-        #[arg(long)]
-        json: bool,
-    },
-}
-
-#[derive(Debug, Subcommand)]
-enum EvalCommand {
-    All {
-        #[arg(long)]
-        report: Option<PathBuf>,
-        #[arg(long)]
-        trace: Option<PathBuf>,
-        #[arg(long = "expected-obs")]
-        expected_obs: Vec<String>,
-        #[arg(long)]
-        json: bool,
-    },
-    Scenarios {
-        #[arg(long)]
-        json: bool,
-    },
-    AgentNative {
-        #[arg(long = "config")]
-        configs: Vec<PathBuf>,
-        #[arg(long)]
-        json: bool,
-    },
-}
-
-#[derive(Debug, Subcommand)]
-enum CertCommand {
-    All {
-        #[arg(long)]
-        json: bool,
-    },
-    ProviderManifest {
-        #[arg(long)]
-        manifest: Option<PathBuf>,
-        #[arg(long)]
-        json: bool,
-    },
-    Mcp {
-        #[arg(long)]
-        json: bool,
-    },
-    Skill {
-        #[arg(long)]
-        json: bool,
-    },
-    Workflow {
-        #[arg(long)]
-        json: bool,
-    },
-    Script {
-        #[arg(long)]
-        json: bool,
-    },
-    Package {
-        #[arg(long)]
-        json: bool,
-    },
-    ReleaseArtifact {
-        #[arg(long)]
-        json: bool,
-    },
-    AgentConfig {
-        input: PathBuf,
-        #[arg(long)]
-        json: bool,
-    },
-}
-
-#[derive(Debug, Subcommand)]
-enum BenchCommand {
-    Run {
+        session: String,
         #[arg(long)]
         json: bool,
     },
@@ -307,46 +159,70 @@ enum TraceCommand {
 }
 
 #[derive(Debug, Subcommand)]
-enum SessionCommand {
-    Create {
+enum ReportCommand {
+    Lint {
         #[arg(long)]
-        manifest: PathBuf,
+        report: PathBuf,
         #[arg(long)]
-        session: String,
+        trace: PathBuf,
         #[arg(long)]
         json: bool,
     },
-    Inspect {
+    Render {
         #[arg(long)]
-        session: String,
+        report: Option<PathBuf>,
+        #[arg(long)]
+        trace: Option<PathBuf>,
+        #[arg(long = "scenario-suite")]
+        scenario_suite: Option<PathBuf>,
+        #[arg(long, default_value = "markdown")]
+        format: String,
+        #[arg(long)]
+        output: Option<PathBuf>,
         #[arg(long)]
         json: bool,
     },
 }
 
 #[derive(Debug, Subcommand)]
-enum ArtifactCommand {
-    Submission {
+enum EvalCommand {
+    Scenarios {
+        #[arg(long, default_value = "scenarios")]
+        suite: PathBuf,
         #[arg(long)]
-        full: bool,
-        #[arg(long, default_value = "artifacts")]
+        json: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum DemoCommand {
+    Run {
+        #[arg(long)]
+        scenario: String,
+        #[arg(long)]
         output: PathBuf,
         #[arg(long)]
         json: bool,
     },
-    Verify {
-        #[arg(long, default_value = "artifacts")]
-        artifacts: PathBuf,
-        #[arg(long, default_value = "artifacts/artifact-manifest.json")]
-        manifest: PathBuf,
-        #[arg(long)]
-        json: bool,
-    },
 }
 
 #[derive(Debug, Subcommand)]
-enum ReleaseCommand {
-    Smoke {
+enum UiCommand {
+    Build {
+        #[arg(long, default_value = "artifacts/demo")]
+        input: PathBuf,
+        #[arg(long, default_value = "artifacts/reviewer-console.html")]
+        output: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    Serve {
+        #[arg(long, default_value = "127.0.0.1")]
+        bind: String,
+        #[arg(long, default_value_t = 8088)]
+        port: u16,
+        #[arg(long, default_value = "artifacts/reviewer-console.html")]
+        file: PathBuf,
         #[arg(long)]
         json: bool,
     },
@@ -407,24 +283,6 @@ enum AuthorityCommand {
     },
 }
 
-#[derive(Debug, Subcommand)]
-enum ApiCommand {
-    Serve {
-        #[arg(long, default_value = "127.0.0.1")]
-        bind: String,
-        #[arg(long, default_value_t = 8088)]
-        port: u16,
-        #[arg(long)]
-        launch_token: Option<String>,
-        #[arg(long)]
-        once: bool,
-        #[arg(long)]
-        dry_run: bool,
-        #[arg(long)]
-        json: bool,
-    },
-}
-
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
@@ -438,9 +296,7 @@ fn main() -> ExitCode {
 fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Init => {
-            println!("runwarden initialized");
-        }
+        Command::Init => println!("runwarden initialized"),
         Command::Check { strict } => {
             if strict {
                 run_strict_check()?;
@@ -448,677 +304,449 @@ fn run() -> anyhow::Result<()> {
                 println!("runwarden check passed");
             }
         }
-        Command::Agent { command } => match command {
-            AgentCommand::GenerateConfig { client, output } => {
-                let body = generate_runwarden_only_config(&client)?;
-                fs::write(&output, serde_json::to_string_pretty(&body)?)?;
-                println!("wrote {}", output.display());
+        Command::Session { command } => run_session_command(command)?,
+        Command::Provider { command } => run_provider_command(command)?,
+        Command::Trace { command } => run_trace_command(command)?,
+        Command::Report { command } => run_report_command(command)?,
+        Command::Eval { command } => run_eval_command(command)?,
+        Command::Demo { command } => run_demo_command(command)?,
+        Command::Ui { command } => run_ui_command(command)?,
+        Command::Approval { command } => run_approval_command(command)?,
+        Command::Authority { command } => run_authority_command(command)?,
+    }
+    Ok(())
+}
+
+fn run_session_command(command: SessionCommand) -> anyhow::Result<()> {
+    match command {
+        SessionCommand::Create {
+            manifest,
+            session,
+            json,
+        } => {
+            let manifest_body = fs::read_to_string(&manifest)?;
+            let assessment = AssessmentManifest::from_toml_str(&manifest_body)?;
+            let assessment = assessment_with_manifest_relative_roots(&manifest, assessment)?;
+            let session_manifest = SessionManifest::from_assessment(session, &assessment);
+            write_session(&session_manifest)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&session_manifest)?);
+            } else {
+                println!("created session {}", session_manifest.session_id);
             }
-            AgentCommand::CheckConfig {
-                client,
-                input,
-                json,
-            } => {
-                let content = fs::read_to_string(&input)?;
-                let config: serde_json::Value = serde_json::from_str(&content)?;
-                let result = check_runwarden_only_config(&client, &config);
-                if json {
-                    println!("{}", serde_json::to_string_pretty(&result)?);
-                } else if result.safe {
-                    println!("agent config is runwarden-only");
-                } else {
-                    println!("agent config exposes raw or downstream tools");
-                }
-                if !result.safe {
-                    anyhow::bail!("unsafe agent config");
-                }
+        }
+        SessionCommand::Inspect { session, json } => {
+            let session_manifest = read_session(&session)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&session_manifest)?);
+            } else {
+                println!("session {}", session_manifest.session_id);
             }
-        },
-        Command::Report { command } => match command {
-            ReportCommand::Scaffold { trace, json } => {
-                let trace = read_trace(&trace)?;
-                let report = scaffold_report_from_trace(&trace);
-                if json {
-                    println!("{}", serde_json::to_string_pretty(&report)?);
-                } else {
-                    for claim in report.claims {
-                        println!(
-                            "{}: {} [{}]",
-                            claim.id,
-                            claim.text,
-                            claim.obs_refs.join(", ")
-                        );
-                    }
-                }
-            }
-            ReportCommand::Lint {
-                report,
-                trace,
-                json,
-            } => {
-                let report = read_report(&report)?;
-                let trace = read_trace(&trace)?;
-                let result = lint_report_against_trace(&report, &trace);
-                if json {
-                    println!("{}", serde_json::to_string_pretty(&result)?);
-                } else if result.ok {
-                    println!("report lint passed");
-                } else {
-                    println!("report lint failed");
-                }
-                if !result.ok {
-                    anyhow::bail!("report lint failed");
-                }
-            }
-            ReportCommand::Render {
-                report,
-                trace,
-                format,
-                json,
-            } => {
-                let report = read_report(&report)?;
-                let trace = read_trace(&trace)?;
-                let format = parse_render_format(&format)?;
-                let result = render_report(&report, &trace, format)
-                    .map_err(|err| anyhow::anyhow!(err.message))?;
-                if json {
-                    println!("{}", serde_json::to_string_pretty(&result)?);
-                } else {
-                    println!("{}", result.contents);
-                }
-            }
-        },
-        Command::Eval { command } => match command {
-            EvalCommand::All {
-                report,
-                trace,
-                expected_obs,
-                json,
-            } => {
-                let root = find_workspace_root(env::current_dir()?)?;
-                let report =
-                    report.unwrap_or_else(|| root.join("tests/fixtures/default-report.json"));
-                let trace = trace.unwrap_or_else(|| root.join("tests/fixtures/default-trace.json"));
-                let report = read_report(&report)?;
-                let trace = read_trace(&trace)?;
-                let expected_obs = if expected_obs.is_empty() {
-                    trace.iter().map(|event| event.obs_id.clone()).collect()
-                } else {
-                    expected_obs
-                };
-                let result = evaluate_report_assurance(
-                    &report,
-                    &trace,
-                    expected_obs,
-                    EvalThresholds::strict(),
+        }
+    }
+    Ok(())
+}
+
+fn run_provider_command(command: ProviderCommand) -> anyhow::Result<()> {
+    match command {
+        ProviderCommand::List { session, json } => {
+            let providers = if let Some(session_id) = session {
+                read_session(&session_id)?.allowed_providers
+            } else {
+                FIRST_PARTY_PROVIDER_IDS
+                    .iter()
+                    .chain(EXTERNAL_PROVIDER_IDS.iter())
+                    .map(|provider| (*provider).to_string())
+                    .collect()
+            };
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json!({ "providers": providers }))?
                 );
-                if json {
-                    println!("{}", serde_json::to_string_pretty(&result)?);
-                } else if result.passed {
-                    println!("eval all passed");
-                } else {
-                    println!("eval all failed");
-                }
-                if !result.passed {
-                    anyhow::bail!("eval all failed");
+            } else {
+                for provider in providers {
+                    println!("{provider}");
                 }
             }
-            EvalCommand::AgentNative { configs, json } => {
-                let root = find_workspace_root(env::current_dir()?)?;
-                let cases = load_agent_native_cases(&root, configs)?;
-                let result = evaluate_agent_native_configs(&cases);
-                if json {
-                    println!("{}", serde_json::to_string_pretty(&result)?);
-                } else if result.passed {
-                    println!("eval agent-native passed");
-                } else {
-                    println!("eval agent-native failed");
+        }
+        ProviderCommand::Call {
+            session,
+            provider,
+            input,
+            root,
+            trace,
+            report,
+            format,
+            json,
+        } => {
+            let session_manifest = session.as_deref().map(read_session).transpose()?;
+            let mut execution_input = input.clone();
+            let mut execution_trace = trace.clone();
+            let mut execution_report = report.clone();
+            let mut call = provider_call_from_cli(CliProviderCallInput {
+                session_id: session_manifest
+                    .as_ref()
+                    .map(|session| session.session_id.as_str())
+                    .unwrap_or("cli-provider-call"),
+                actor_id: session_manifest
+                    .as_ref()
+                    .and_then(|session| session.actor_id.clone()),
+                authz_id: session_manifest
+                    .as_ref()
+                    .and_then(|session| session.authz_id.clone()),
+                session_manifest: session_manifest.as_ref(),
+                provider: &provider,
+                input: input.as_ref(),
+                root: root.as_ref(),
+                trace: trace.as_ref(),
+                report: report.as_ref(),
+                format: format.as_deref(),
+            });
+
+            if let Some(session_manifest) = session_manifest.as_ref() {
+                let resolved_paths =
+                    resolve_session_provider_argument_paths(session_manifest, &mut call)?;
+                if let Some(path) = resolved_paths.input {
+                    execution_input = Some(path);
                 }
-                if !result.passed {
-                    anyhow::bail!("eval agent-native failed");
+                if let Some(path) = resolved_paths.trace {
+                    execution_trace = Some(path);
                 }
-            }
-            EvalCommand::Scenarios { json } => {
-                let root = find_workspace_root(env::current_dir()?)?;
-                let result = evaluate_scenario_corpora(&root)?;
-                if json {
-                    println!("{}", serde_json::to_string_pretty(&result)?);
-                } else if result["passed"].as_bool() == Some(true) {
-                    println!("eval scenarios passed");
-                } else {
-                    println!("eval scenarios failed");
-                }
-                if result["passed"].as_bool() != Some(true) {
-                    anyhow::bail!("eval scenarios failed");
-                }
-            }
-        },
-        Command::Cert { command } => match command {
-            CertCommand::All { json } => {
-                let root = find_workspace_root(env::current_dir()?)?;
-                let report = certify_workspace(&root);
-                emit_cert_report("cert all", report, json)?;
-            }
-            CertCommand::ProviderManifest { manifest, json } => {
-                let root = find_workspace_root(env::current_dir()?)?;
-                let manifest = manifest.unwrap_or_else(|| {
-                    root.join("examples/providers/external.mcp.browser.open_page.json")
-                });
-                let report = certify_provider_manifest_file(&manifest)?;
-                emit_cert_report("cert provider-manifest", report, json)?;
-            }
-            CertCommand::Mcp { json } => {
-                let root = find_workspace_root(env::current_dir()?)?;
-                emit_cert_report("cert mcp", certify_mcp_surface(&root), json)?;
-            }
-            CertCommand::Skill { json } => {
-                let root = find_workspace_root(env::current_dir()?)?;
-                emit_cert_report(
-                    "cert skill",
-                    certify_required_paths(
-                        &root,
-                        "skill",
-                        &["skills/runwarden-security-assessment/SKILL.md"],
-                    ),
-                    json,
-                )?;
-            }
-            CertCommand::Workflow { json } => {
-                let root = find_workspace_root(env::current_dir()?)?;
-                emit_cert_report(
-                    "cert workflow",
-                    certify_required_paths(
-                        &root,
-                        "workflow",
-                        &[".github/workflows/ci.yml", ".github/workflows/release.yml"],
-                    ),
-                    json,
-                )?;
-            }
-            CertCommand::Script { json } => {
-                let root = find_workspace_root(env::current_dir()?)?;
-                emit_cert_report(
-                    "cert script",
-                    certify_required_paths(
-                        &root,
-                        "script",
-                        &[
-                            "scripts/dev_gate.sh",
-                            "scripts/check_ts_contracts.sh",
-                            "scripts/pr_fast_gate.sh",
-                            "scripts/nightly_full_gate.sh",
-                            "scripts/security_gate_local.sh",
-                            "scripts/release_gate_local.sh",
-                            "scripts/generate_artifacts.sh",
-                            "scripts/artifact_leak_scan.sh",
-                        ],
-                    ),
-                    json,
-                )?;
-            }
-            CertCommand::Package { json } => {
-                let root = find_workspace_root(env::current_dir()?)?;
-                emit_cert_report(
-                    "cert package",
-                    certify_required_paths(
-                        &root,
-                        "package",
-                        &[
-                            "Cargo.toml",
-                            "Cargo.lock",
-                            "package.json",
-                            "pnpm-lock.yaml",
-                            "pnpm-workspace.yaml",
-                        ],
-                    ),
-                    json,
-                )?;
-            }
-            CertCommand::ReleaseArtifact { json } => {
-                let root = find_workspace_root(env::current_dir()?)?;
-                emit_cert_report(
-                    "cert release-artifact",
-                    certify_release_artifact_surface(&root),
-                    json,
-                )?;
-            }
-            CertCommand::AgentConfig { input, json } => {
-                let content = fs::read_to_string(input)?;
-                let config: serde_json::Value = serde_json::from_str(&content)?;
-                let report = certify_agent_config(&config);
-                if json {
-                    println!("{}", serde_json::to_string_pretty(&report)?);
-                } else if report.passed {
-                    println!("agent config cert passed");
-                } else {
-                    println!("agent config cert failed");
-                }
-                if !report.passed {
-                    anyhow::bail!("agent config cert failed");
+                if let Some(path) = resolved_paths.report {
+                    execution_report = Some(path);
                 }
             }
-        },
-        Command::Bench { command } => match command {
-            BenchCommand::Run { json } => {
-                let root = find_workspace_root(env::current_dir()?)?;
-                let report = benchmark_workspace(&root)?;
-                if json {
-                    println!("{}", serde_json::to_string_pretty(&report)?);
-                } else if report.passed {
-                    println!("bench run passed");
-                } else {
-                    println!("bench run failed");
-                }
-                if !report.passed {
-                    anyhow::bail!("bench run failed");
-                }
+
+            let mut pre_read_enforcer = KernelEnforcer::new(
+                full_provider_registry(),
+                cli_provider_policy(
+                    session_manifest.as_ref(),
+                    &provider,
+                    input.as_ref(),
+                    root.as_ref(),
+                    trace.as_ref(),
+                    report.as_ref(),
+                ),
+            );
+            let pre_read_outcome = pre_read_enforcer.evaluate_call(&call);
+            if pre_read_outcome.decision == PolicyDecision::Denied {
+                emit_provider_policy_outcome(&pre_read_outcome, json)?;
+                return Ok(());
             }
-        },
-        Command::Provider { command } => match command {
-            ProviderCommand::List { session, json } => {
-                let providers = if let Some(session_id) = session {
-                    read_session(&session_id)?.allowed_providers
-                } else {
-                    FIRST_PARTY_PROVIDER_IDS
-                        .iter()
-                        .chain(EXTERNAL_PROVIDER_IDS.iter())
-                        .map(|provider| (*provider).to_string())
-                        .collect()
-                };
-                if json {
-                    println!(
-                        "{}",
-                        serde_json::to_string_pretty(&json!({ "providers": providers }))?
-                    );
-                } else {
-                    for provider in providers {
-                        println!("{provider}");
-                    }
-                }
+
+            bind_cli_file_digests(&mut call)?;
+            attach_matching_approval(&mut call)?;
+            let mut enforcer = KernelEnforcer::new(
+                full_provider_registry(),
+                cli_provider_policy(
+                    session_manifest.as_ref(),
+                    &provider,
+                    input.as_ref(),
+                    root.as_ref(),
+                    trace.as_ref(),
+                    report.as_ref(),
+                ),
+            );
+            for approval in read_all_approvals()? {
+                enforcer.add_approval(approval);
             }
-            ProviderCommand::Call {
-                session,
-                provider,
-                input,
-                root,
-                trace,
-                report,
-                format,
-                json,
-            } => {
-                let session_manifest = session.as_deref().map(read_session).transpose()?;
-                let mut execution_input = input.clone();
-                let mut execution_trace = trace.clone();
-                let mut execution_report = report.clone();
-                let mut provider_call = Some(match session_manifest.as_ref() {
-                    Some(session_manifest) => provider_call_from_cli(CliProviderCallInput {
-                        session_id: &session_manifest.session_id,
-                        actor_id: session_manifest.actor_id.clone(),
-                        authz_id: session_manifest.authz_id.clone(),
-                        session_manifest: Some(session_manifest),
-                        provider: &provider,
-                        input: input.as_ref(),
-                        root: root.as_ref(),
-                        trace: trace.as_ref(),
-                        report: report.as_ref(),
-                        format: format.as_deref(),
-                    }),
-                    None => provider_call_from_cli(CliProviderCallInput {
-                        session_id: "cli-provider-call",
-                        actor_id: None,
-                        authz_id: None,
-                        session_manifest: None,
-                        provider: &provider,
-                        input: input.as_ref(),
-                        root: root.as_ref(),
-                        trace: trace.as_ref(),
-                        report: report.as_ref(),
-                        format: format.as_deref(),
-                    }),
-                });
-                if let Some(call) = provider_call.as_mut() {
-                    if let Some(session_manifest) = session_manifest.as_ref() {
-                        let resolved_paths =
-                            resolve_session_provider_argument_paths(session_manifest, call)?;
-                        if let Some(path) = resolved_paths.input {
-                            execution_input = Some(path);
-                        }
-                        if let Some(path) = resolved_paths.trace {
-                            execution_trace = Some(path);
-                        }
-                        if let Some(path) = resolved_paths.report {
-                            execution_report = Some(path);
-                        }
-                    }
-                    let mut enforcer = KernelEnforcer::new(
-                        full_provider_registry(),
-                        cli_provider_policy(
-                            session_manifest.as_ref(),
-                            &provider,
-                            input.as_ref(),
-                            root.as_ref(),
-                            trace.as_ref(),
-                            report.as_ref(),
-                        ),
-                    );
-                    let outcome = enforcer.evaluate_call(call);
-                    if outcome.decision == PolicyDecision::Denied {
-                        emit_provider_policy_outcome(&outcome, json)?;
-                        return Ok(());
-                    }
-                    if provider_is_external_mcp(&call.provider)
-                        && let Some(input_path) = call
-                            .arguments
-                            .get("input_path")
-                            .and_then(serde_json::Value::as_str)
-                            .map(PathBuf::from)
-                    {
-                        resolve_external_mcp_manifest_argument(
-                            call.arguments
-                                .as_object_mut()
-                                .expect("CLI provider call arguments are an object"),
-                            &input_path,
-                        )?;
-                        let mut enforcer = KernelEnforcer::new(
-                            full_provider_registry(),
-                            cli_provider_policy(
-                                session_manifest.as_ref(),
-                                &provider,
-                                input.as_ref(),
-                                root.as_ref(),
-                                trace.as_ref(),
-                                report.as_ref(),
-                            ),
-                        );
-                        let outcome = enforcer.evaluate_call(call);
-                        if outcome.decision == PolicyDecision::Denied {
-                            emit_provider_policy_outcome(&outcome, json)?;
-                            return Ok(());
-                        }
-                    }
-                    bind_cli_file_digests(call)?;
-                    attach_matching_approval(call)?;
-                    let mut enforcer = KernelEnforcer::new(
-                        full_provider_registry(),
-                        cli_provider_policy(
-                            session_manifest.as_ref(),
-                            &provider,
-                            input.as_ref(),
-                            root.as_ref(),
-                            trace.as_ref(),
-                            report.as_ref(),
-                        ),
-                    );
-                    for approval in read_all_approvals()? {
-                        enforcer.add_approval(approval);
-                    }
-                    let outcome = enforcer.evaluate_call(call);
-                    if outcome.decision != PolicyDecision::Allowed {
-                        emit_provider_policy_outcome(&outcome, json)?;
-                        return Ok(());
-                    }
-                    verify_cli_file_digests(call)?;
-                    if call
-                        .approval_id
-                        .as_deref()
-                        .and_then(|approval_id| enforcer.approval_state(approval_id))
-                        == Some(ApprovalState::Consumed)
-                    {
-                        persist_consumed_cli_approval(
-                            call,
-                            &enforcer.approval_binding_for_call(call),
-                        )?;
-                    }
-                }
-                let execution_root = resolve_cli_execution_root(session_manifest.as_ref(), root);
-                let result = if provider_is_external(&provider) {
-                    call_external_provider(&provider, execution_input, execution_root)?
-                } else {
-                    call_first_party_provider(
-                        &provider,
-                        execution_input,
-                        execution_root,
-                        execution_trace,
-                        execution_report,
-                        format,
-                    )?
-                };
-                if json {
-                    println!("{}", serde_json::to_string_pretty(&result)?);
-                } else {
-                    println!("provider call completed: {provider}");
-                }
+            let outcome = enforcer.evaluate_call(&call);
+            if outcome.decision != PolicyDecision::Allowed {
+                emit_provider_policy_outcome(&outcome, json)?;
+                return Ok(());
             }
-        },
-        Command::Trace { command } => match command {
-            TraceCommand::Verify { trace, json } => {
-                let events = read_trace(&trace)?;
-                let verification = verify_trace_events(events);
+            verify_cli_file_digests(&call)?;
+            if call
+                .approval_id
+                .as_deref()
+                .and_then(|approval_id| enforcer.approval_state(approval_id))
+                == Some(ApprovalState::Consumed)
+            {
+                persist_consumed_cli_approval(&call, &enforcer.approval_binding_for_call(&call))?;
+            }
+
+            let result = if provider_is_external(&provider) {
+                call_external_provider(&provider)
+            } else {
+                call_first_party_provider(
+                    &provider,
+                    execution_input,
+                    execution_trace,
+                    execution_report,
+                    format,
+                )?
+            };
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("provider call completed: {provider}");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn run_trace_command(command: TraceCommand) -> anyhow::Result<()> {
+    match command {
+        TraceCommand::Verify { trace, json } => {
+            let events = read_trace(&trace)?;
+            let verification = verify_trace_events(events);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&verification)?);
+            } else if verification["verified"].as_bool() == Some(true) {
+                println!("trace verified");
+            } else {
+                println!("trace verification failed");
+            }
+            if verification["verified"].as_bool() != Some(true) {
+                anyhow::bail!("trace verification failed");
+            }
+        }
+        TraceCommand::Export {
+            trace,
+            offset,
+            limit,
+            provider,
+            event_type,
+            obs_prefix,
+            max_bytes,
+            compact_refs,
+            json,
+        } => {
+            let events = read_trace(&trace)?;
+            let verification = verify_trace_events(events.clone());
+            if verification["verified"].as_bool() != Some(true) {
                 if json {
                     println!("{}", serde_json::to_string_pretty(&verification)?);
-                } else if verification["verified"].as_bool() == Some(true) {
-                    println!("trace verified");
-                } else {
-                    println!("trace verification failed");
                 }
-                if verification["verified"].as_bool() != Some(true) {
-                    anyhow::bail!("trace verification failed");
-                }
+                anyhow::bail!("trace verification failed");
             }
-            TraceCommand::Export {
-                trace,
+
+            let mut store = InMemoryTraceStore::default();
+            for event in events {
+                store.append(event);
+            }
+            let page = store.query(TraceQuery {
                 offset,
                 limit,
                 provider,
                 event_type,
                 obs_prefix,
                 max_bytes,
-                compact_refs,
-                json,
-            } => {
-                let events = read_trace(&trace)?;
-                let verification = verify_trace_events(events.clone());
-                if verification["verified"].as_bool() != Some(true) {
-                    if json {
-                        println!("{}", serde_json::to_string_pretty(&verification)?);
-                    }
-                    anyhow::bail!("trace verification failed");
-                }
+            });
+            let refs = if compact_refs {
+                json!(
+                    page.events
+                        .iter()
+                        .map(|event| event.obs_id.clone())
+                        .collect::<Vec<_>>()
+                )
+            } else {
+                Value::Null
+            };
+            let event_count = page.events.len();
+            let export = json!({
+                "verified": true,
+                "event_count": event_count,
+                "events": page.events,
+                "page": page,
+                "compact_refs": refs,
+                "side_effect_executed": false
+            });
+            if json {
+                println!("{}", serde_json::to_string_pretty(&export)?);
+            } else {
+                println!("exported {event_count} trace events");
+            }
+        }
+    }
+    Ok(())
+}
 
-                let mut store = InMemoryTraceStore::default();
-                for event in events.clone() {
-                    store.append(event);
-                }
-                let page = store.query(TraceQuery {
-                    offset,
-                    limit,
-                    provider,
-                    event_type,
-                    obs_prefix,
-                    max_bytes,
-                });
-                let compact_refs = if compact_refs {
-                    json!(
-                        page.events
-                            .iter()
-                            .map(|event| event.obs_id.clone())
-                            .collect::<Vec<_>>()
-                    )
-                } else {
-                    serde_json::Value::Null
-                };
-                let page_event_count = page.events.len();
-                let page_events = page.events.clone();
-                let export = json!({
-                    "verified": true,
-                    "event_count": page_event_count,
-                    "events": page_events,
-                    "page": page,
-                    "compact_refs": compact_refs,
-                    "side_effect_executed": false
-                });
-                if json {
-                    println!("{}", serde_json::to_string_pretty(&export)?);
-                } else {
-                    println!("exported {} trace events", page_event_count);
-                }
+fn run_report_command(command: ReportCommand) -> anyhow::Result<()> {
+    match command {
+        ReportCommand::Lint {
+            report,
+            trace,
+            json,
+        } => {
+            let report = read_report(&report)?;
+            let trace = read_trace(&trace)?;
+            let result = lint_report_against_trace(&report, &trace);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else if result.ok {
+                println!("report lint passed");
+            } else {
+                println!("report lint failed");
             }
-        },
-        Command::Session { command } => match command {
-            SessionCommand::Create {
-                manifest,
-                session,
-                json,
-            } => {
-                let manifest_body = fs::read_to_string(&manifest)?;
-                let assessment = AssessmentManifest::from_toml_str(&manifest_body)?;
-                let assessment = assessment_with_manifest_relative_roots(&manifest, assessment)?;
-                let session_manifest = SessionManifest::from_assessment(session, &assessment);
-                write_session(&session_manifest)?;
-                if json {
-                    println!("{}", serde_json::to_string_pretty(&session_manifest)?);
-                } else {
-                    println!("created session {}", session_manifest.session_id);
-                }
+            if !result.ok {
+                anyhow::bail!("report lint failed");
             }
-            SessionCommand::Inspect { session, json } => {
-                let session_manifest = read_session(&session)?;
-                if json {
-                    println!("{}", serde_json::to_string_pretty(&session_manifest)?);
-                } else {
-                    println!("session {}", session_manifest.session_id);
+        }
+        ReportCommand::Render {
+            report,
+            trace,
+            scenario_suite,
+            format,
+            output,
+            json,
+        } => {
+            let root = find_workspace_root(env::current_dir()?)?;
+            let format = parse_render_format(&format)?;
+            let rendered = if let Some(suite) = scenario_suite {
+                render_scenario_suite_report(&root, &suite, format)?
+            } else {
+                let report = report.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!("--report is required without --scenario-suite")
+                })?;
+                let trace = trace.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!("--trace is required without --scenario-suite")
+                })?;
+                let report = read_report(report)?;
+                let trace = read_trace(trace)?;
+                render_report(&report, &trace, format)
+                    .map_err(|err| anyhow::anyhow!(err.message))?
+            };
+
+            if let Some(output) = output {
+                let output_path = resolve_workspace_output_path(&root, &output, "report output")?;
+                if let Some(parent) = output_path.parent() {
+                    fs::create_dir_all(parent)?;
                 }
-            }
-        },
-        Command::Artifact { command } => match command {
-            ArtifactCommand::Submission { full, output, json } => {
-                let root = find_workspace_root(env::current_dir()?)?;
-                let output = resolve_local_artifact_output_path(&root, &output)?;
-                let result = write_submission_bundle(&root, &output, full)?;
-                if json {
-                    println!("{}", serde_json::to_string_pretty(&result)?);
-                } else {
-                    println!(
-                        "wrote submission bundle manifest {}",
-                        result["manifest_path"]
-                            .as_str()
-                            .unwrap_or("artifact-manifest.json")
-                    );
-                }
-            }
-            ArtifactCommand::Verify {
-                artifacts,
-                manifest,
-                json,
-            } => {
-                let manifest_body = fs::read_to_string(manifest)?;
-                let manifest: ArtifactManifest = serde_json::from_str(&manifest_body)?;
-                let verification = verify_artifact_manifest(&artifacts, &manifest);
-                if json {
-                    println!("{}", serde_json::to_string_pretty(&verification)?);
-                } else {
-                    println!("artifact verification: {:?}", verification.status);
-                }
-                if !verification.findings.is_empty() {
-                    anyhow::bail!("artifact verification failed");
-                }
-            }
-        },
-        Command::Approval { command } => match command {
-            ApprovalCommand::Pending { json } => {
-                let approvals = read_all_approvals()?;
-                let pending: Vec<_> = approvals
-                    .into_iter()
-                    .filter(|approval| approval.state == ApprovalState::Pending)
-                    .collect();
+                fs::write(&output_path, rendered.contents.as_bytes())?;
                 if json {
                     println!(
                         "{}",
-                        serde_json::to_string_pretty(&json!({ "approvals": pending }))?
+                        serde_json::to_string_pretty(&json!({
+                            "path": output_path.to_string_lossy(),
+                            "extension": rendered.extension,
+                            "side_effect_executed": true
+                        }))?
                     );
                 } else {
-                    for approval in pending {
-                        println!(
-                            "{} {} {} {}",
-                            approval.approval_id,
-                            approval.binding.provider,
-                            approval.binding.action,
-                            approval.binding.argument_hash
-                        );
-                    }
+                    println!("wrote report {}", output_path.display());
                 }
+            } else if json {
+                println!("{}", serde_json::to_string_pretty(&rendered)?);
+            } else {
+                println!("{}", rendered.contents);
             }
-            ApprovalCommand::Approve {
-                approval_id,
-                reviewer,
-                reason,
-                json,
-            } => {
-                let mut approval = read_approval(&approval_id)?;
-                approval.approve(reviewer, reason)?;
-                write_approval(&approval)?;
-                if json {
-                    println!("{}", serde_json::to_string_pretty(&approval)?);
-                } else {
-                    println!("approved {}", approval.approval_id);
-                }
+        }
+    }
+    Ok(())
+}
+
+fn run_eval_command(command: EvalCommand) -> anyhow::Result<()> {
+    match command {
+        EvalCommand::Scenarios { suite, json } => {
+            let root = find_workspace_root(env::current_dir()?)?;
+            let result = evaluate_scenario_corpora(&root, &suite)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else if result["passed"].as_bool() == Some(true) {
+                println!("eval scenarios passed");
+            } else {
+                println!("eval scenarios failed");
             }
-            ApprovalCommand::Deny {
-                approval_id,
-                reviewer,
-                reason,
-                json,
-            } => {
-                let mut approval = read_approval(&approval_id)?;
-                approval.deny(reviewer, reason)?;
-                write_approval(&approval)?;
-                if json {
-                    println!("{}", serde_json::to_string_pretty(&approval)?);
-                } else {
-                    println!("denied {}", approval.approval_id);
-                }
+            if result["passed"].as_bool() != Some(true) {
+                anyhow::bail!("eval scenarios failed");
             }
-        },
-        Command::Authority { command } => match command {
-            AuthorityCommand::Create {
-                approval,
-                session,
-                provider,
-                action,
-                arguments,
-                argument_hash,
-                authz,
-                actor,
-                json,
-            } => {
-                safe_record_id(&approval)?;
-                let computed_hash = match argument_hash {
-                    Some(hash) => hash,
-                    None => argument_hash_from_json(&arguments)?,
-                };
-                let approval = ApprovalRecord::new(
-                    approval,
-                    ApprovalBinding {
-                        session_id: session,
-                        provider,
-                        action,
-                        argument_hash: computed_hash,
-                        authz_id: authz,
-                        actor_id: actor,
-                    },
+        }
+    }
+    Ok(())
+}
+
+fn run_demo_command(command: DemoCommand) -> anyhow::Result<()> {
+    match command {
+        DemoCommand::Run {
+            scenario,
+            output,
+            json,
+        } => {
+            let root = find_workspace_root(env::current_dir()?)?;
+            let result = run_demo_scenario(&root, &scenario, &output)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!(
+                    "wrote demo scenario {} to {}",
+                    scenario,
+                    result["output_dir"].as_str().unwrap_or("<unknown>")
                 );
-                write_approval(&approval)?;
-                if json {
-                    println!("{}", serde_json::to_string_pretty(&approval)?);
-                } else {
-                    println!("created authority approval {}", approval.approval_id);
-                }
             }
-            AuthorityCommand::Inspect { approval_id, json } => {
-                let approval = read_approval(&approval_id)?;
-                if json {
-                    println!("{}", serde_json::to_string_pretty(&approval)?);
-                } else {
+        }
+    }
+    Ok(())
+}
+
+fn run_ui_command(command: UiCommand) -> anyhow::Result<()> {
+    match command {
+        UiCommand::Build {
+            input,
+            output,
+            json,
+        } => {
+            let root = find_workspace_root(env::current_dir()?)?;
+            let input_path = resolve_workspace_output_path(&root, &input, "ui input")?;
+            let output_path = resolve_workspace_output_path(&root, &output, "ui output")?;
+            let html = render_static_demo_console(&input_path)?;
+            if let Some(parent) = output_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(&output_path, html.as_bytes())?;
+            let result = json!({
+                "html_path": output_path.to_string_lossy(),
+                "launch_url": output_path.to_string_lossy(),
+                "local_api_url": Value::Null,
+                "side_effect_executed": true
+            });
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("wrote reviewer console {}", output_path.display());
+            }
+        }
+        UiCommand::Serve {
+            bind,
+            port,
+            file,
+            json,
+        } => {
+            let root = find_workspace_root(env::current_dir()?)?;
+            let file = resolve_workspace_output_path(&root, &file, "ui file")?;
+            let result = json!({
+                "mode": "static_demo_console",
+                "listen_addr": format!("{bind}:{port}"),
+                "file": file.to_string_lossy(),
+                "local_api_url": Value::Null,
+                "side_effect_executed": false
+            });
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("serve static reviewer console {}", file.display());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn run_approval_command(command: ApprovalCommand) -> anyhow::Result<()> {
+    match command {
+        ApprovalCommand::Pending { json } => {
+            let approvals: Vec<_> = read_all_approvals()?
+                .into_iter()
+                .filter(|approval| approval.state == ApprovalState::Pending)
+                .collect();
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json!({ "approvals": approvals }))?
+                );
+            } else {
+                for approval in approvals {
                     println!(
                         "{} {} {} {}",
                         approval.approval_id,
@@ -1128,258 +756,93 @@ fn run() -> anyhow::Result<()> {
                     );
                 }
             }
-        },
-        Command::Release { command } => match command {
-            ReleaseCommand::Smoke { json } => {
-                let root = find_workspace_root(env::current_dir()?)?;
-                let result = release_smoke_report(&root)?;
-                if json {
-                    println!("{}", serde_json::to_string_pretty(&result)?);
-                } else if result["passed"].as_bool() == Some(true) {
-                    println!("release smoke passed");
-                } else {
-                    println!("release smoke failed");
-                }
-                if result["passed"].as_bool() != Some(true) {
-                    anyhow::bail!("release smoke failed");
-                }
-            }
-        },
-        Command::Ui {
-            bind,
-            port,
-            artifacts,
+        }
+        ApprovalCommand::Approve {
+            approval_id,
+            reviewer,
+            reason,
             json,
         } => {
-            let root = find_workspace_root(env::current_dir()?)?;
-            let artifacts = resolve_local_artifact_output_path(&root, &artifacts)?;
-            let result = write_ui_launch_bundle(
-                &bind,
-                port,
-                &artifacts,
-                UiLaunchSnapshot {
-                    approvals: read_all_approvals()?,
-                    sessions: read_all_sessions()?,
-                },
-            )
-            .map_err(anyhow::Error::msg)?;
+            let mut approval = read_approval(&approval_id)?;
+            approval.approve(reviewer, reason)?;
+            write_approval(&approval)?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&result)?);
+                println!("{}", serde_json::to_string_pretty(&approval)?);
             } else {
-                println!(
-                    "wrote reviewer console launch bundle {}",
-                    result["html_path"]
-                        .as_str()
-                        .unwrap_or("reviewer-console.html")
-                );
+                println!("approved {}", approval.approval_id);
             }
         }
-        Command::Api { command } => match command {
-            ApiCommand::Serve {
-                bind,
-                port,
-                launch_token,
-                once,
-                dry_run,
-                json,
-            } => {
-                let (launch_token, launch_token_generated) = resolve_launch_token(launch_token);
-                let result = local_api_serve_descriptor(
-                    &bind,
-                    port,
-                    &launch_token,
-                    launch_token_generated,
-                    once,
-                );
-                if dry_run {
-                    if json {
-                        println!("{}", serde_json::to_string_pretty(&result)?);
-                    } else {
-                        println!(
-                            "runwarden Local API would listen on {}",
-                            result["listen_addr"].as_str().unwrap_or("127.0.0.1:8088")
-                        );
-                    }
-                } else {
-                    let listener = TcpListener::bind(format!("{bind}:{port}"))?;
-                    let addr = listener.local_addr()?;
-                    let config = LocalApiServerConfig {
-                        launch_token,
-                        allowed_host: addr.to_string(),
-                        allowed_origin: format!("http://{addr}"),
-                    };
-                    if json {
-                        println!(
-                            "{}",
-                            serde_json::to_string_pretty(&json!({
-                                "mode": "local_api_server",
-                                "listen_addr": addr.to_string(),
-                                "once": once,
-                                "launch_token_generated": launch_token_generated,
-                                "launch_token": if launch_token_generated { serde_json::Value::String(config.launch_token.clone()) } else { serde_json::Value::Null },
-                                "side_effect_executed": true
-                            }))?
-                        );
-                    }
-                    if once {
-                        serve_one_request(listener, config)?;
-                    } else {
-                        let mut router = LocalApiRouter::from_config(config);
-                        loop {
-                            serve_next_request(&listener, &mut router)?;
-                        }
-                    }
-                }
+        ApprovalCommand::Deny {
+            approval_id,
+            reviewer,
+            reason,
+            json,
+        } => {
+            let mut approval = read_approval(&approval_id)?;
+            approval.deny(reviewer, reason)?;
+            write_approval(&approval)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&approval)?);
+            } else {
+                println!("denied {}", approval.approval_id);
             }
-        },
+        }
     }
     Ok(())
 }
 
-#[derive(Debug, Deserialize)]
-struct ExternalShellRequest {
-    executable: String,
-    #[serde(default)]
-    args: Vec<String>,
-    cwd: Option<PathBuf>,
-    #[serde(default)]
-    use_shell: bool,
-    timeout_ms: Option<u64>,
-    stdout_limit_bytes: Option<usize>,
-    stderr_limit_bytes: Option<usize>,
-}
-
-fn call_external_provider(
-    provider: &str,
-    input: Option<PathBuf>,
-    root: Option<PathBuf>,
-) -> anyhow::Result<serde_json::Value> {
-    let registry = full_provider_registry();
-    let Some(provider_record) = registry.get(provider) else {
-        anyhow::bail!("unsupported external provider call: {provider}");
-    };
-    if provider_record.class != ProviderClass::External {
-        anyhow::bail!("unsupported external provider call: {provider}");
-    }
-
-    match &provider_record.kind {
-        ProviderKind::Shell if provider == "external.shell.command" => {
-            let input_path = input.ok_or_else(|| {
-                anyhow::anyhow!(
-                    "--input JSON is required for external.shell.command mediated calls"
-                )
-            })?;
-            let request_body = fs::read_to_string(&input_path)?;
-            let shell_request: ExternalShellRequest = serde_json::from_str(&request_body)?;
-            let command_allowlist = ["git", "cargo", "pnpm"];
-            if !command_allowlist.contains(&shell_request.executable.as_str()) {
-                return Ok(json!({
-                    "provider": provider,
-                    "decision": "denied",
-                    "execution_status": "not_executed",
-                    "error_kind": "provider_not_allowed",
-                    "reason": "external shell executable is not allowlisted",
-                    "side_effect_executed": false
-                }));
-            }
-
-            let cwd = shell_request.cwd.unwrap_or_else(|| PathBuf::from("."));
-            let runtime_root = root.unwrap_or_else(|| cwd.clone());
-            let policy = ProviderRuntimePolicy::locked_to_root(runtime_root);
-            let mut runtime_request = ProviderRuntimeRequest::new(shell_request.executable.clone())
-                .cwd(cwd)
-                .use_shell(shell_request.use_shell);
-            for arg in shell_request.args {
-                runtime_request = runtime_request.arg(arg);
-            }
-            if let Some(timeout_ms) = shell_request.timeout_ms {
-                runtime_request = runtime_request.timeout_ms(timeout_ms);
-            }
-            if let Some(stdout_limit_bytes) = shell_request.stdout_limit_bytes {
-                runtime_request = runtime_request.stdout_limit_bytes(stdout_limit_bytes);
-            }
-            if let Some(stderr_limit_bytes) = shell_request.stderr_limit_bytes {
-                runtime_request = runtime_request.stderr_limit_bytes(stderr_limit_bytes);
-            }
-
-            match ProviderRuntime::prepare(&policy, &runtime_request) {
-                Ok(prepared_process) => Ok(json!({
-                    "provider": provider,
-                    "decision": "requires_review",
-                    "execution_status": "not_executed",
-                    "reason": "external shell command was prepared by runtime mediation and awaits human approval",
-                    "prepared_process": prepared_process,
-                    "side_effect_executed": false
-                })),
-                Err(denial) => Ok(json!({
-                    "provider": provider,
-                    "decision": "denied",
-                    "execution_status": "not_executed",
-                    "error_kind": runtime_denial_error_kind(&denial.kind),
-                    "reason": denial.reason,
-                    "side_effect_executed": denial.side_effect_executed
-                })),
+fn run_authority_command(command: AuthorityCommand) -> anyhow::Result<()> {
+    match command {
+        AuthorityCommand::Create {
+            approval,
+            session,
+            provider,
+            action,
+            arguments,
+            argument_hash,
+            authz,
+            actor,
+            json,
+        } => {
+            safe_record_id(&approval)?;
+            let computed_hash = match argument_hash {
+                Some(hash) => hash,
+                None => argument_hash_from_json(&arguments)?,
+            };
+            let approval = ApprovalRecord::new(
+                approval,
+                ApprovalBinding {
+                    session_id: session,
+                    provider,
+                    action,
+                    argument_hash: computed_hash,
+                    authz_id: authz,
+                    actor_id: actor,
+                },
+            );
+            write_approval(&approval)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&approval)?);
+            } else {
+                println!("created authority approval {}", approval.approval_id);
             }
         }
-        ProviderKind::Mcp => {
-            let input_path = input.ok_or_else(|| {
-                anyhow::anyhow!("--input JSON is required for external MCP adapter calls")
-            })?;
-            let request_body = fs::read_to_string(&input_path)?;
-            let request: ExternalMcpAdapterRequest = serde_json::from_str(&request_body)?;
-            let manifest = if let Some(manifest_path) = &request.manifest_path {
-                let manifest_path = resolve_external_mcp_manifest_path(&input_path, manifest_path);
-                let manifest_body = fs::read_to_string(manifest_path)?;
-                load_provider_manifest(&manifest_body)?
+        AuthorityCommand::Inspect { approval_id, json } => {
+            let approval = read_approval(&approval_id)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&approval)?);
             } else {
-                default_external_provider_manifest(provider).ok_or_else(|| {
-                    anyhow::anyhow!("missing default external provider manifest: {provider}")
-                })?
-            };
-            if manifest.provider_id != provider {
-                anyhow::bail!(
-                    "external MCP manifest provider_id {} does not match requested provider {provider}",
-                    manifest.provider_id
+                println!(
+                    "{} {} {} {}",
+                    approval.approval_id,
+                    approval.binding.provider,
+                    approval.binding.action,
+                    approval.binding.argument_hash
                 );
             }
-            Ok(execute_external_mcp_adapter(
-                &manifest,
-                &request,
-                root.as_deref(),
-            ))
         }
-        _ => Ok(json!({
-            "provider": provider,
-            "decision": "requires_review",
-            "execution_status": "not_executed",
-            "external_adapter_required": true,
-            "reason": "external provider is registered and must be invoked through its mediated downstream adapter",
-            "side_effect_executed": false
-        })),
     }
-}
-
-fn provider_is_external(provider: &str) -> bool {
-    full_provider_registry()
-        .get(provider)
-        .is_some_and(|record| record.class == ProviderClass::External)
-}
-
-fn provider_is_external_mcp(provider: &str) -> bool {
-    default_external_provider_manifest(provider)
-        .is_some_and(|manifest| manifest.kind == ProviderKind::Mcp)
-}
-
-fn runtime_denial_error_kind(kind: &ProviderRuntimeDenialKind) -> &'static str {
-    match kind {
-        ProviderRuntimeDenialKind::ShellDenied => "provider_not_allowed",
-        ProviderRuntimeDenialKind::CwdEscape => "root_escape",
-        ProviderRuntimeDenialKind::EnvInheritanceDenied
-        | ProviderRuntimeDenialKind::EnvNotAllowed => "scope_violation",
-        ProviderRuntimeDenialKind::NetworkDenied => "egress_denied",
-        ProviderRuntimeDenialKind::TimeoutTooLarge
-        | ProviderRuntimeDenialKind::OutputLimitTooLarge => "budget_exceeded",
-    }
+    Ok(())
 }
 
 struct CliProviderCallInput<'a> {
@@ -1400,7 +863,7 @@ fn provider_call_from_cli(input: CliProviderCallInput<'_>) -> ProviderCall {
     if let Some(path) = input.input {
         arguments.insert(
             "input_path".to_string(),
-            serde_json::Value::String(path.to_string_lossy().into_owned()),
+            Value::String(path.to_string_lossy().into_owned()),
         );
     }
     if let Some(path) = input.root {
@@ -1415,32 +878,29 @@ fn provider_call_from_cli(input: CliProviderCallInput<'_>) -> ProviderCall {
         } else {
             "root_path"
         };
-        arguments.insert(key.to_string(), serde_json::Value::String(root_value));
+        arguments.insert(key.to_string(), Value::String(root_value));
     }
     if let Some(path) = input.trace {
         arguments.insert(
             "trace_path".to_string(),
-            serde_json::Value::String(path.to_string_lossy().into_owned()),
+            Value::String(path.to_string_lossy().into_owned()),
         );
     }
     if let Some(path) = input.report {
         arguments.insert(
             "report_path".to_string(),
-            serde_json::Value::String(path.to_string_lossy().into_owned()),
+            Value::String(path.to_string_lossy().into_owned()),
         );
     }
     if let Some(format) = input.format {
-        arguments.insert(
-            "format".to_string(),
-            serde_json::Value::String(format.to_string()),
-        );
+        arguments.insert("format".to_string(), Value::String(format.to_string()));
     }
 
     ProviderCall {
         session_id: input.session_id.to_string(),
         provider: input.provider.to_string(),
         action: provider_action(input.provider).to_string(),
-        arguments: serde_json::Value::Object(arguments),
+        arguments: Value::Object(arguments),
         actor_id: input.actor_id,
         authz_id: input.authz_id,
         approval_id: None,
@@ -1476,7 +936,7 @@ fn resolve_session_provider_argument_paths(
     };
     let selected_root = arguments
         .get("root")
-        .and_then(serde_json::Value::as_str)
+        .and_then(Value::as_str)
         .and_then(|root_name| {
             session_manifest
                 .roots
@@ -1507,13 +967,13 @@ fn resolve_session_provider_argument_paths(
 }
 
 fn resolve_session_provider_path_field(
-    arguments: &mut serde_json::Map<String, serde_json::Value>,
+    arguments: &mut serde_json::Map<String, Value>,
     field: &str,
     scoped_root: Option<&PathBuf>,
 ) -> anyhow::Result<Option<PathBuf>> {
     let Some(path_text) = arguments
         .get(field)
-        .and_then(serde_json::Value::as_str)
+        .and_then(Value::as_str)
         .map(ToOwned::to_owned)
     else {
         return Ok(None);
@@ -1531,7 +991,7 @@ fn resolve_session_provider_path_field(
     };
     arguments.insert(
         field.to_string(),
-        serde_json::Value::String(resolved.to_string_lossy().into_owned()),
+        Value::String(resolved.to_string_lossy().into_owned()),
     );
     Ok(Some(resolved))
 }
@@ -1541,11 +1001,11 @@ fn bind_cli_file_digests(call: &mut ProviderCall) -> anyhow::Result<()> {
         return Ok(());
     };
     for &field in provider_path_digest_fields() {
-        let Some(path) = arguments.get(field).and_then(serde_json::Value::as_str) else {
+        let Some(path) = arguments.get(field).and_then(Value::as_str) else {
             continue;
         };
         let digest = digest_file(Path::new(path))?;
-        arguments.insert(format!("{field}_sha256"), serde_json::Value::String(digest));
+        arguments.insert(format!("{field}_sha256"), Value::String(digest));
     }
     Ok(())
 }
@@ -1555,14 +1015,11 @@ fn verify_cli_file_digests(call: &ProviderCall) -> anyhow::Result<()> {
         return Ok(());
     };
     for &field in provider_path_digest_fields() {
-        let Some(path) = arguments.get(field).and_then(serde_json::Value::as_str) else {
+        let Some(path) = arguments.get(field).and_then(Value::as_str) else {
             continue;
         };
         let digest_key = format!("{field}_sha256");
-        let Some(expected) = arguments
-            .get(&digest_key)
-            .and_then(serde_json::Value::as_str)
-        else {
+        let Some(expected) = arguments.get(&digest_key).and_then(Value::as_str) else {
             continue;
         };
         let actual = digest_file(Path::new(path))?;
@@ -1574,43 +1031,25 @@ fn verify_cli_file_digests(call: &ProviderCall) -> anyhow::Result<()> {
 }
 
 fn provider_path_digest_fields() -> &'static [&'static str] {
-    &["input_path", "trace_path", "report_path", "manifest_path"]
-}
-
-fn resolve_external_mcp_manifest_argument(
-    arguments: &mut serde_json::Map<String, serde_json::Value>,
-    input_path: &Path,
-) -> anyhow::Result<()> {
-    if arguments.contains_key("manifest_path") {
-        return Ok(());
-    }
-    let request_body = fs::read_to_string(input_path)?;
-    let request: ExternalMcpAdapterRequest = serde_json::from_str(&request_body)?;
-    let Some(manifest_path) = request.manifest_path.as_ref() else {
-        return Ok(());
-    };
-    let resolved = resolve_external_mcp_manifest_path(input_path, manifest_path);
-    arguments.insert(
-        "manifest_path".to_string(),
-        serde_json::Value::String(resolved.to_string_lossy().into_owned()),
-    );
-    Ok(())
-}
-
-fn resolve_external_mcp_manifest_path(input_path: &Path, manifest_path: &Path) -> PathBuf {
-    if manifest_path.is_absolute() {
-        manifest_path.to_path_buf()
-    } else {
-        input_path
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join(manifest_path)
-    }
+    &["input_path", "trace_path", "report_path"]
 }
 
 fn digest_file(path: &Path) -> anyhow::Result<String> {
     let bytes = fs::read(path)?;
     Ok(hex_sha256(&bytes))
+}
+
+fn cli_provider_policy(
+    session_manifest: Option<&SessionManifest>,
+    provider: &str,
+    input: Option<&PathBuf>,
+    root: Option<&PathBuf>,
+    trace: Option<&PathBuf>,
+    report: Option<&PathBuf>,
+) -> KernelPolicy {
+    session_manifest
+        .map(SessionManifest::to_kernel_policy)
+        .unwrap_or_else(|| default_cli_provider_policy(provider, input, root, trace, report))
 }
 
 fn default_cli_provider_policy(
@@ -1636,19 +1075,6 @@ fn default_cli_provider_policy(
     policy
 }
 
-fn cli_provider_policy(
-    session_manifest: Option<&SessionManifest>,
-    provider: &str,
-    input: Option<&PathBuf>,
-    root: Option<&PathBuf>,
-    trace: Option<&PathBuf>,
-    report: Option<&PathBuf>,
-) -> KernelPolicy {
-    session_manifest
-        .map(SessionManifest::to_kernel_policy)
-        .unwrap_or_else(|| default_cli_provider_policy(provider, input, root, trace, report))
-}
-
 fn default_cli_scoped_root(path: Option<&PathBuf>) -> Option<PathBuf> {
     let path = path?;
     if path.is_dir() {
@@ -1660,23 +1086,6 @@ fn default_cli_scoped_root(path: Option<&PathBuf>) -> Option<PathBuf> {
 
 fn provider_action(provider: &str) -> &str {
     provider.rsplit('.').next().unwrap_or("call")
-}
-
-fn resolve_cli_execution_root(
-    session_manifest: Option<&SessionManifest>,
-    root: Option<PathBuf>,
-) -> Option<PathBuf> {
-    let root = root?;
-    let root_text = root.to_string_lossy();
-    session_manifest
-        .and_then(|session| {
-            session
-                .roots
-                .iter()
-                .find(|candidate| candidate.name == root_text)
-                .map(|candidate| candidate.path.clone())
-        })
-        .or(Some(root))
 }
 
 fn attach_matching_approval(call: &mut ProviderCall) -> anyhow::Result<()> {
@@ -1723,14 +1132,19 @@ fn cli_approval_binding(call: &ProviderCall) -> anyhow::Result<ApprovalBinding> 
     })
 }
 
+fn provider_is_external(provider: &str) -> bool {
+    full_provider_registry()
+        .get(provider)
+        .is_some_and(|record| record.class == ProviderClass::External)
+}
+
 fn call_first_party_provider(
     provider: &str,
     input: Option<PathBuf>,
-    root: Option<PathBuf>,
     trace: Option<PathBuf>,
     report: Option<PathBuf>,
     format: Option<String>,
-) -> anyhow::Result<serde_json::Value> {
+) -> anyhow::Result<Value> {
     match provider {
         "runwarden.input.inspect" => {
             let input_path =
@@ -1747,42 +1161,6 @@ fn call_first_party_provider(
                 "execution_status": "completed",
                 "side_effect_executed": false,
                 "output": inspection
-            }))
-        }
-        "runwarden.evidence.inspect" => {
-            let root_path =
-                root.ok_or_else(|| anyhow::anyhow!("--root is required for evidence.inspect"))?;
-            let inspection = inspect_evidence_root(&root_path, EvidenceInspectPolicy::default())?;
-            Ok(json!({
-                "provider": provider,
-                "decision": "allowed",
-                "execution_status": "completed",
-                "side_effect_executed": false,
-                "output": inspection
-            }))
-        }
-        "runwarden.audit.summary" => {
-            let trace_path =
-                trace.ok_or_else(|| anyhow::anyhow!("--trace is required for audit.summary"))?;
-            let events = read_trace(&trace_path)?;
-            Ok(json!({
-                "provider": provider,
-                "decision": "allowed",
-                "execution_status": "completed",
-                "side_effect_executed": false,
-                "output": audit_summary(&events)
-            }))
-        }
-        "runwarden.accountability.summary" => {
-            let trace_path = trace
-                .ok_or_else(|| anyhow::anyhow!("--trace is required for accountability.summary"))?;
-            let events = read_trace(&trace_path)?;
-            Ok(json!({
-                "provider": provider,
-                "decision": "allowed",
-                "execution_status": "completed",
-                "side_effect_executed": false,
-                "output": accountability_summary(&events)
             }))
         }
         "runwarden.trace.verify" => {
@@ -1808,9 +1186,7 @@ fn call_first_party_provider(
                     "decision": "denied",
                     "execution_status": "failed",
                     "side_effect_executed": false,
-                    "output": {
-                        "verification": verification
-                    }
+                    "output": { "verification": verification }
                 }));
             }
             Ok(json!({
@@ -1822,18 +1198,6 @@ fn call_first_party_provider(
                     "verification": verification,
                     "events": events
                 }
-            }))
-        }
-        "runwarden.report.scaffold" => {
-            let trace_path =
-                trace.ok_or_else(|| anyhow::anyhow!("--trace is required for report.scaffold"))?;
-            let events = read_trace(&trace_path)?;
-            Ok(json!({
-                "provider": provider,
-                "decision": "allowed",
-                "execution_status": "completed",
-                "side_effect_executed": false,
-                "output": scaffold_report_from_trace(&events)
             }))
         }
         "runwarden.report.lint" => {
@@ -1870,216 +1234,415 @@ fn call_first_party_provider(
                 "output": rendered
             }))
         }
-        "runwarden.cert.all" => {
-            let workspace_root = find_workspace_root(env::current_dir()?)?;
-            Ok(json!({
-                "provider": provider,
-                "decision": "allowed",
-                "execution_status": "completed",
-                "side_effect_executed": false,
-                "output": certify_workspace(&workspace_root)
-            }))
-        }
-        "runwarden.eval.all" => {
-            let report_path =
-                report.ok_or_else(|| anyhow::anyhow!("--report is required for eval.all"))?;
-            let trace_path =
-                trace.ok_or_else(|| anyhow::anyhow!("--trace is required for eval.all"))?;
-            let report = read_report(&report_path)?;
-            let events = read_trace(&trace_path)?;
-            let expected_obs: Vec<_> = events.iter().map(|event| event.obs_id.clone()).collect();
-            Ok(json!({
-                "provider": provider,
-                "decision": "allowed",
-                "execution_status": "completed",
-                "side_effect_executed": false,
-                "output": evaluate_report_assurance(&report, &events, expected_obs, EvalThresholds::strict())
-            }))
-        }
-        "runwarden.eval.agent-native" => {
-            let workspace_root = find_workspace_root(env::current_dir()?)?;
-            let cases = load_agent_native_cases(&workspace_root, Vec::new())?;
-            Ok(json!({
-                "provider": provider,
-                "decision": "allowed",
-                "execution_status": "completed",
-                "side_effect_executed": false,
-                "output": evaluate_agent_native_configs(&cases)
-            }))
-        }
-        "runwarden.bench.run" => {
-            let workspace_root = find_workspace_root(env::current_dir()?)?;
-            Ok(json!({
-                "provider": provider,
-                "decision": "allowed",
-                "execution_status": "completed",
-                "side_effect_executed": false,
-                "output": benchmark_workspace(&workspace_root)?
-            }))
-        }
         other => anyhow::bail!("unsupported first-party provider call: {other}"),
     }
 }
 
-fn load_agent_native_cases(
-    root: &Path,
-    configs: Vec<PathBuf>,
-) -> anyhow::Result<Vec<AgentNativeConfigCase>> {
-    let paths = if configs.is_empty() {
-        vec![
-            (
-                root.join("examples/agent-configs/claude.runwarden-only.json"),
-                AgentNativeExpectation::RunwardenOnlyAllowed,
-            ),
-            (
-                root.join("examples/agent-configs/unsafe.raw-filesystem.json"),
-                AgentNativeExpectation::RawToolsDenied,
-            ),
-            (
-                root.join("examples/agent-configs/unsafe.raw-shell.json"),
-                AgentNativeExpectation::RawToolsDenied,
-            ),
-        ]
-    } else {
-        configs
-            .into_iter()
-            .map(|path| {
-                let expectation = expectation_for_config_path(&path);
-                (path, expectation)
-            })
-            .collect()
-    };
-
-    paths
-        .into_iter()
-        .map(|(path, expectation)| {
-            let body = fs::read_to_string(&path)?;
-            let config = serde_json::from_str(&body)?;
-            Ok(AgentNativeConfigCase {
-                id: path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or("agent-config")
-                    .to_string(),
-                config,
-                expectation,
-            })
-        })
-        .collect()
+fn call_external_provider(provider: &str) -> Value {
+    json!({
+        "provider": provider,
+        "decision": "allowed",
+        "execution_status": "completed",
+        "simulated": true,
+        "side_effect_executed": false,
+        "output": {
+            "message": "contest demo provider execution is simulated after Rust policy allow"
+        }
+    })
 }
 
-fn evaluate_scenario_corpora(root: &Path) -> anyhow::Result<serde_json::Value> {
-    let scenarios_dir = root.join("scenarios");
-    let mut entries = fs::read_dir(&scenarios_dir)?.collect::<Result<Vec<_>, _>>()?;
-    entries.sort_by_key(|entry| entry.file_name());
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct DemoProviderCall {
+    provider: String,
+    action: String,
+    decision: String,
+    execution_status: String,
+    #[serde(default)]
+    side_effect_executed: bool,
+    #[serde(default)]
+    reason: Option<String>,
+    #[serde(default)]
+    error_kind: Option<String>,
+    #[serde(default)]
+    obs_ref: Option<String>,
+    #[serde(default)]
+    arguments: Value,
+}
 
+fn run_demo_scenario(root: &Path, scenario: &str, output: &Path) -> anyhow::Result<Value> {
+    ensure_contest_scenario(scenario)?;
+    let scenario_path = root.join("scenarios").join(scenario);
+    ensure_required_scenario_files(&scenario_path)?;
+    let output_path = resolve_workspace_output_path(root, output, "demo output")?;
+    fs::create_dir_all(&output_path)?;
+
+    let provider_calls =
+        read_demo_provider_calls(&scenario_path.join("expected/provider-calls.json"))?;
+    let denials = read_json_value(&scenario_path.join("expected/denials.json"))?;
+    let report = read_report(&scenario_path.join("expected/report.json"))?;
+    let baseline = read_json_value(&scenario_path.join("expected/eval-baseline.json"))?;
+    let trace_events = trace_events_for_scenario(scenario, &scenario_path, &provider_calls)?;
+    let lint = lint_report_against_trace(&report, &trace_events);
+    if !lint.ok {
+        anyhow::bail!("scenario report does not lint against generated trace");
+    }
+
+    let metrics = evaluate_report_assurance(
+        &report,
+        &trace_events,
+        trace_events.iter().map(|event| event.obs_id.clone()),
+        EvalThresholds::strict(),
+    );
+    let webui = json!({
+        "scenario": scenario,
+        "trace": trace_events,
+        "provider_calls": provider_calls,
+        "denials": denials,
+        "report": report,
+        "metrics": metrics.metrics,
+        "lint": lint,
+        "expected": baseline,
+        "side_effect_executed": false
+    });
+
+    write_json_file(&output_path.join("trace.json"), &webui["trace"])?;
+    write_json_file(
+        &output_path.join("provider-calls.json"),
+        &webui["provider_calls"],
+    )?;
+    write_json_file(&output_path.join("denials.json"), &webui["denials"])?;
+    write_json_file(&output_path.join("report.json"), &webui["report"])?;
+    write_json_file(&output_path.join("metrics.json"), &webui["metrics"])?;
+    write_json_file(&output_path.join("webui.json"), &webui)?;
+
+    Ok(json!({
+        "scenario": scenario,
+        "output_dir": output_path.to_string_lossy(),
+        "trace_path": output_path.join("trace.json").to_string_lossy(),
+        "report_path": output_path.join("report.json").to_string_lossy(),
+        "provider_call_count": provider_calls.len(),
+        "denial_count": denials.as_array().map_or(0, Vec::len),
+        "side_effect_executed": true
+    }))
+}
+
+fn evaluate_scenario_corpora(root: &Path, suite: &Path) -> anyhow::Result<Value> {
+    let suite_path = if suite.is_absolute() {
+        suite.to_path_buf()
+    } else {
+        root.join(suite)
+    };
     let mut cases = Vec::new();
     let mut passed = true;
-    for entry in entries {
-        if !entry.file_type()?.is_dir() {
-            continue;
-        }
-        let scenario_path = entry.path();
-        let scenario = entry.file_name().to_string_lossy().into_owned();
-        let mut missing = Vec::new();
-        for relative_path in scenario_corpus_required_files() {
-            if !scenario_path.join(relative_path).exists() {
-                missing.push((*relative_path).to_string());
-            }
-        }
-
-        let case = if missing.is_empty() {
-            let obs_refs = read_obs_refs(&scenario_path.join("expected/obs-refs.json"))?;
-            let report = read_report(&scenario_path.join("expected/report.json"))?;
-            let denials = read_json_array(&scenario_path.join("expected/denials.json"))?;
-            let mut store = InMemoryTraceStore::default();
-            for obs_ref in &obs_refs {
-                store.append_signed(
-                    obs_ref.clone(),
-                    "scenario_golden".to_string(),
-                    Some("runwarden.eval.scenarios".to_string()),
-                    json!({
-                        "scenario": scenario,
-                        "decision": if denials.is_empty() { "completed" } else { "denied" }
-                    }),
-                );
-            }
-            let trace_events = store.query(TraceQuery {
-                limit: obs_refs.len().max(1),
-                ..TraceQuery::default()
-            });
-            let eval = evaluate_report_assurance(
-                &report,
-                &trace_events.events,
-                obs_refs.clone(),
-                EvalThresholds::strict(),
-            );
-            let baseline = read_json_value(&scenario_path.join("expected/eval-baseline.json"))?;
-            let expected_pass = baseline
-                .get("expected_pass")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(true);
-            let baseline_passed = eval.passed == expected_pass
-                && eval.metrics.trace_completeness
-                    >= baseline
-                        .get("min_trace_completeness")
-                        .and_then(serde_json::Value::as_f64)
-                        .unwrap_or(1.0)
-                && eval.metrics.report_citation_accuracy
-                    >= baseline
-                        .get("min_report_citation_accuracy")
-                        .and_then(serde_json::Value::as_f64)
-                        .unwrap_or(1.0);
-
-            let provider_calls =
-                read_json_array(&scenario_path.join("expected/provider-calls.json"))?;
-            let artifact_failures = scenario_expected_artifact_failures(&denials, &provider_calls);
-            let case_passed =
-                baseline_passed && !obs_refs.is_empty() && artifact_failures.is_empty();
-            if !case_passed {
-                passed = false;
-            }
-            let mut failures = eval.failures.clone();
-            failures.extend(artifact_failures);
-            json!({
-                "id": scenario,
-                "passed": case_passed,
-                "obs_refs": obs_refs,
-                "denial_count": denials.len(),
-                "provider_call_count": provider_calls.len(),
-                "metrics": eval.metrics,
-                "failures": failures
-            })
-        } else {
+    for scenario in CONTEST_SCENARIOS {
+        let scenario_path = suite_path.join(scenario);
+        let case = evaluate_scenario_case(scenario, &scenario_path)?;
+        if case["passed"].as_bool() != Some(true) {
             passed = false;
-            json!({
-                "id": scenario,
-                "passed": false,
-                "missing": missing
-            })
-        };
+        }
         cases.push(case);
     }
 
-    if cases.is_empty() {
-        passed = false;
-    }
-
     Ok(json!({
-        "suite": "scenario-golden-corpus",
+        "suite": "contest-red-team-scenarios",
         "passed": passed,
         "case_count": cases.len(),
+        "required_scenarios": CONTEST_SCENARIOS,
         "cases": cases,
         "side_effect_executed": false
     }))
 }
 
-fn scenario_corpus_required_files() -> &'static [&'static str] {
+fn evaluate_scenario_case(scenario: &str, scenario_path: &Path) -> anyhow::Result<Value> {
+    let mut failures = Vec::new();
+    if let Err(err) = ensure_required_scenario_files(scenario_path) {
+        failures.push(err.to_string());
+        return Ok(json!({
+            "id": scenario,
+            "passed": false,
+            "failures": failures,
+            "side_effect_executed": false
+        }));
+    }
+
+    let provider_calls =
+        read_demo_provider_calls(&scenario_path.join("expected/provider-calls.json"))?;
+    let denials = read_json_array(&scenario_path.join("expected/denials.json"))?;
+    let obs_refs = read_obs_refs(&scenario_path.join("expected/obs-refs.json"))?;
+    let report = read_report(&scenario_path.join("expected/report.json"))?;
+    let baseline = read_json_value(&scenario_path.join("expected/eval-baseline.json"))?;
+    let trace_events = trace_events_for_scenario(scenario, scenario_path, &provider_calls)?;
+    let eval = evaluate_report_assurance(
+        &report,
+        &trace_events,
+        obs_refs.clone(),
+        EvalThresholds::strict(),
+    );
+    failures.extend(eval.failures.clone());
+    failures.extend(validate_scenario_expectations(
+        &provider_calls,
+        &denials,
+        &obs_refs,
+        &trace_events,
+        &baseline,
+    ));
+    failures.sort();
+    failures.dedup();
+    let passed = failures.is_empty();
+
+    Ok(json!({
+        "id": scenario,
+        "passed": passed,
+        "obs_refs": obs_refs,
+        "denial_count": denials.len(),
+        "requires_review_count": provider_calls.iter().filter(|call| call.decision == "requires_review").count(),
+        "provider_call_count": provider_calls.len(),
+        "metrics": eval.metrics,
+        "failures": failures,
+        "side_effect_executed": false
+    }))
+}
+
+fn validate_scenario_expectations(
+    provider_calls: &[DemoProviderCall],
+    denials: &[Value],
+    obs_refs: &[String],
+    trace_events: &[TraceEvent],
+    baseline: &Value,
+) -> Vec<String> {
+    let mut failures = Vec::new();
+    if provider_calls.is_empty() {
+        failures.push("expected_provider_calls_empty".to_string());
+    }
+    if denials.is_empty() {
+        failures.push("expected_denials_empty".to_string());
+    }
+    if obs_refs.is_empty() {
+        failures.push("expected_obs_refs_empty".to_string());
+    }
+    if trace_events.len() != obs_refs.len() {
+        failures.push("trace_event_count_does_not_match_obs_refs".to_string());
+    }
+    let expected_denials = baseline
+        .get("expected_denials")
+        .and_then(Value::as_u64)
+        .unwrap_or(denials.len() as u64);
+    if expected_denials != denials.len() as u64 {
+        failures.push("denial_count_does_not_match_baseline".to_string());
+    }
+    let expected_reviews = baseline
+        .get("expected_requires_review")
+        .and_then(Value::as_u64)
+        .unwrap_or_else(|| {
+            provider_calls
+                .iter()
+                .filter(|call| call.decision == "requires_review")
+                .count() as u64
+        });
+    let actual_reviews = provider_calls
+        .iter()
+        .filter(|call| call.decision == "requires_review")
+        .count() as u64;
+    if expected_reviews != actual_reviews {
+        failures.push("requires_review_count_does_not_match_baseline".to_string());
+    }
+    for call in provider_calls {
+        if !matches!(
+            call.decision.as_str(),
+            "allowed" | "denied" | "requires_review"
+        ) {
+            failures.push(format!("invalid_provider_decision:{}", call.provider));
+        }
+        if matches!(call.decision.as_str(), "denied" | "requires_review")
+            && call.side_effect_executed
+        {
+            failures.push(format!(
+                "blocked_call_executed_side_effect:{}",
+                call.provider
+            ));
+        }
+    }
+    failures
+}
+
+fn trace_events_for_scenario(
+    scenario: &str,
+    scenario_path: &Path,
+    provider_calls: &[DemoProviderCall],
+) -> anyhow::Result<Vec<TraceEvent>> {
+    let obs_refs = read_obs_refs(&scenario_path.join("expected/obs-refs.json"))?;
+    let mut store = InMemoryTraceStore::default();
+    for (idx, call) in provider_calls.iter().enumerate() {
+        let obs_id = call
+            .obs_ref
+            .clone()
+            .or_else(|| obs_refs.get(idx).cloned())
+            .ok_or_else(|| anyhow::anyhow!("missing obs ref for provider call {}", idx + 1))?;
+        let event_type = match call.decision.as_str() {
+            "allowed" => "provider_completed",
+            "requires_review" => "provider_approval_pending",
+            "denied" => "provider_denied",
+            _ => "provider_failed",
+        };
+        store.append_signed(
+            obs_id,
+            event_type.to_string(),
+            Some(call.provider.clone()),
+            json!({
+                "scenario": scenario,
+                "provider": call.provider,
+                "action": call.action,
+                "decision": call.decision,
+                "execution_status": call.execution_status,
+                "reason": call.reason,
+                "error_kind": call.error_kind,
+                "side_effect_executed": call.side_effect_executed
+            }),
+        );
+    }
+    Ok(store
+        .query(TraceQuery {
+            limit: provider_calls.len().max(1),
+            ..TraceQuery::default()
+        })
+        .events)
+}
+
+fn render_scenario_suite_report(
+    root: &Path,
+    suite: &Path,
+    format: RenderFormat,
+) -> anyhow::Result<runwarden_assurance::report::RenderedReport> {
+    let suite_path = if suite.is_absolute() {
+        suite.to_path_buf()
+    } else {
+        root.join(suite)
+    };
+    let eval = evaluate_scenario_corpora(root, suite)?;
+    let mut markdown = String::from("# Runwarden Contest Report\n\n");
+    markdown.push_str("## Scenario Metrics\n\n");
+    markdown.push_str("| Scenario | Denials | Reviews | Provider Calls | Passed |\n");
+    markdown.push_str("| --- | ---: | ---: | ---: | --- |\n");
+    for case in eval["cases"].as_array().into_iter().flatten() {
+        markdown.push_str(&format!(
+            "| {} | {} | {} | {} | {} |\n",
+            case["id"].as_str().unwrap_or("unknown"),
+            case["denial_count"].as_u64().unwrap_or(0),
+            case["requires_review_count"].as_u64().unwrap_or(0),
+            case["provider_call_count"].as_u64().unwrap_or(0),
+            case["passed"].as_bool().unwrap_or(false)
+        ));
+    }
+    markdown.push('\n');
+
+    for scenario in CONTEST_SCENARIOS {
+        let scenario_path = suite_path.join(scenario);
+        let report = read_report(&scenario_path.join("expected/report.json"))?;
+        markdown.push_str(&format!("## {}\n\n", scenario));
+        for claim in report.claims {
+            markdown.push_str(&format!(
+                "- {}: {} ({})\n",
+                claim.id,
+                claim.text,
+                claim.obs_refs.join(", ")
+            ));
+        }
+        markdown.push('\n');
+    }
+
+    match format {
+        RenderFormat::Markdown => Ok(runwarden_assurance::report::RenderedReport {
+            extension: "md".to_string(),
+            contents: markdown,
+            side_effect_executed: false,
+        }),
+        RenderFormat::Html => Ok(runwarden_assurance::report::RenderedReport {
+            extension: "html".to_string(),
+            contents: format!(
+                "<article><h1>Runwarden Contest Report</h1><pre>{}</pre></article>",
+                html_escape(&markdown)
+            ),
+            side_effect_executed: false,
+        }),
+        RenderFormat::Json => Ok(runwarden_assurance::report::RenderedReport {
+            extension: "json".to_string(),
+            contents: serde_json::to_string_pretty(&eval)?,
+            side_effect_executed: false,
+        }),
+        RenderFormat::Sarif => anyhow::bail!("scenario-suite render does not support SARIF"),
+    }
+}
+
+fn render_static_demo_console(input: &Path) -> anyhow::Result<String> {
+    let mut scenario_files = Vec::new();
+    if input.is_file() {
+        scenario_files.push(input.to_path_buf());
+    } else if input.exists() {
+        for entry in fs::read_dir(input)? {
+            let entry = entry?;
+            let candidate = entry.path().join("webui.json");
+            if candidate.exists() {
+                scenario_files.push(candidate);
+            }
+        }
+    }
+    scenario_files.sort();
+
+    let mut html = String::from(
+        "<!doctype html><meta charset=\"utf-8\"><title>Runwarden Reviewer Console</title><main><h1>Runwarden Reviewer Console</h1>",
+    );
+    if scenario_files.is_empty() {
+        html.push_str("<p>No demo JSON loaded.</p>");
+    }
+    for file in scenario_files {
+        let value = read_json_value(&file)?;
+        let scenario = value["scenario"].as_str().unwrap_or("unknown");
+        let provider_count = value["provider_calls"].as_array().map_or(0, Vec::len);
+        let denial_count = value["denials"].as_array().map_or(0, Vec::len);
+        html.push_str(&format!(
+            "<section><h2>{}</h2><p>Provider calls: {}</p><p>Denials: {}</p><p>Trace: verified input required before report use</p></section>",
+            html_escape(scenario),
+            provider_count,
+            denial_count
+        ));
+    }
+    html.push_str("</main>");
+    Ok(html)
+}
+
+fn ensure_contest_scenario(scenario: &str) -> anyhow::Result<()> {
+    if CONTEST_SCENARIOS.contains(&scenario) {
+        Ok(())
+    } else {
+        anyhow::bail!("unknown contest scenario: {scenario}");
+    }
+}
+
+fn ensure_required_scenario_files(path: &Path) -> anyhow::Result<()> {
+    let mut missing = Vec::new();
+    for relative in scenario_required_files() {
+        if !path.join(relative).exists() {
+            missing.push(*relative);
+        }
+    }
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "{} missing required scenario files: {}",
+            path.display(),
+            missing.join(", ")
+        );
+    }
+}
+
+fn scenario_required_files() -> &'static [&'static str] {
     &[
         "README.md",
         "manifests/assessment.toml",
         "attacks/prompt-injection.md",
         "benign/request.md",
+        "agent/script.json",
         "expected/denials.json",
         "expected/provider-calls.json",
         "expected/obs-refs.json",
@@ -2088,13 +1651,22 @@ fn scenario_corpus_required_files() -> &'static [&'static str] {
     ]
 }
 
-fn read_obs_refs(path: &Path) -> anyhow::Result<Vec<String>> {
+fn read_demo_provider_calls(path: &Path) -> anyhow::Result<Vec<DemoProviderCall>> {
     let value = read_json_value(path)?;
-    let values = value
+    let calls = value
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("{} must contain a JSON array", path.display()))?;
-    values
+    calls
         .iter()
+        .cloned()
+        .map(serde_json::from_value)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(anyhow::Error::from)
+}
+
+fn read_obs_refs(path: &Path) -> anyhow::Result<Vec<String>> {
+    read_json_array(path)?
+        .into_iter()
         .map(|value| {
             value
                 .as_str()
@@ -2104,12 +1676,7 @@ fn read_obs_refs(path: &Path) -> anyhow::Result<Vec<String>> {
         .collect()
 }
 
-fn read_json_value(path: &Path) -> anyhow::Result<serde_json::Value> {
-    let body = fs::read_to_string(path)?;
-    Ok(serde_json::from_str(&body)?)
-}
-
-fn read_json_array(path: &Path) -> anyhow::Result<Vec<serde_json::Value>> {
+fn read_json_array(path: &Path) -> anyhow::Result<Vec<Value>> {
     let value = read_json_value(path)?;
     value
         .as_array()
@@ -2117,366 +1684,22 @@ fn read_json_array(path: &Path) -> anyhow::Result<Vec<serde_json::Value>> {
         .ok_or_else(|| anyhow::anyhow!("{} must contain a JSON array", path.display()))
 }
 
-fn scenario_expected_artifact_failures(
-    denials: &[serde_json::Value],
-    provider_calls: &[serde_json::Value],
-) -> Vec<String> {
-    let mut failures = Vec::new();
-    if denials.is_empty() {
-        failures.push("expected_denials_empty".to_string());
-    }
-    if provider_calls.is_empty() {
-        failures.push("expected_provider_calls_empty".to_string());
-    }
-
-    let mut denied_providers = BTreeSet::new();
-    for denial in denials {
-        let provider = denial.get("provider").and_then(serde_json::Value::as_str);
-        let decision = denial.get("decision").and_then(serde_json::Value::as_str);
-        if provider.unwrap_or_default().is_empty() {
-            failures.push("expected_denial_missing_provider".to_string());
-        }
-        if decision != Some("denied") {
-            failures.push(format!(
-                "expected_denial_decision_not_denied:{}",
-                provider.unwrap_or("<unknown>")
-            ));
-        }
-        if denial
-            .get("reason")
-            .and_then(serde_json::Value::as_str)
-            .is_none_or(|value| value.trim().is_empty())
-            && denial
-                .get("error_kind")
-                .and_then(serde_json::Value::as_str)
-                .is_none_or(|value| value.trim().is_empty())
-        {
-            failures.push(format!(
-                "expected_denial_missing_reason_or_error:{}",
-                provider.unwrap_or("<unknown>")
-            ));
-        }
-        if let Some(provider) = provider {
-            denied_providers.insert(provider.to_string());
-        }
-    }
-
-    let mut non_allowed_call_providers = BTreeSet::new();
-    for call in provider_calls {
-        let provider = call.get("provider").and_then(serde_json::Value::as_str);
-        let action = call.get("action").and_then(serde_json::Value::as_str);
-        let decision = call.get("decision").and_then(serde_json::Value::as_str);
-        let execution_status = call
-            .get("execution_status")
-            .and_then(serde_json::Value::as_str);
-        if provider.unwrap_or_default().is_empty() {
-            failures.push("expected_provider_call_missing_provider".to_string());
-        }
-        if action.unwrap_or_default().is_empty() {
-            failures.push(format!(
-                "expected_provider_call_missing_action:{}",
-                provider.unwrap_or("<unknown>")
-            ));
-        }
-        if !matches!(decision, Some("allowed" | "denied" | "requires_review")) {
-            failures.push(format!(
-                "expected_provider_call_invalid_decision:{}",
-                provider.unwrap_or("<unknown>")
-            ));
-        }
-        if !matches!(
-            execution_status,
-            Some("completed" | "failed" | "not_executed" | "incomplete")
-        ) {
-            failures.push(format!(
-                "expected_provider_call_invalid_execution_status:{}",
-                provider.unwrap_or("<unknown>")
-            ));
-        }
-        if decision == Some("requires_review") && execution_status != Some("not_executed") {
-            failures.push(format!(
-                "expected_review_provider_call_executed:{}",
-                provider.unwrap_or("<unknown>")
-            ));
-        }
-        if matches!(decision, Some("denied" | "requires_review")) {
-            if execution_status != Some("not_executed") {
-                let is_completed_denial =
-                    decision == Some("denied") && execution_status == Some("completed");
-                if !is_completed_denial {
-                    failures.push(format!(
-                        "expected_non_allowed_provider_call_status_invalid:{}",
-                        provider.unwrap_or("<unknown>")
-                    ));
-                }
-            }
-            if let Some(provider) = provider {
-                non_allowed_call_providers.insert(provider.to_string());
-            }
-        }
-    }
-
-    for provider in denied_providers {
-        if !non_allowed_call_providers.contains(&provider) {
-            failures.push(format!("expected_denial_missing_provider_call:{provider}"));
-        }
-    }
-
-    failures.sort();
-    failures.dedup();
-    failures
+fn read_json_value(path: &Path) -> anyhow::Result<Value> {
+    let body = fs::read_to_string(path)?;
+    Ok(serde_json::from_str(&body)?)
 }
 
-fn expectation_for_config_path(path: &Path) -> AgentNativeExpectation {
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    if name.contains("unsafe") || name.contains("raw-") || name.contains("raw_") {
-        AgentNativeExpectation::RawToolsDenied
-    } else {
-        AgentNativeExpectation::RunwardenOnlyAllowed
-    }
-}
-
-fn write_submission_bundle(
-    root: &Path,
-    output: &Path,
-    full: bool,
-) -> anyhow::Result<serde_json::Value> {
-    fs::create_dir_all(output)?;
-
-    let cert_report = certify_workspace(root);
-    let bench_report = benchmark_workspace(root)?;
-    let agent_native = evaluate_agent_native_configs(&load_agent_native_cases(root, Vec::new())?);
-
-    let mut manifest = ArtifactManifest {
-        schema_version: "0.1".to_string(),
-        artifacts: Vec::new(),
-    };
-
-    push_sealed_artifact(
-        output,
-        &mut manifest,
-        "submission-report",
-        "reports/submission.md",
-        "# Runwarden Enterprise Submission\n\nLocal release evidence cites obs_release_gate and obs_agent_native.\n",
-    )?;
-    push_sealed_artifact(
-        output,
-        &mut manifest,
-        "cert-release-artifact",
-        "release/cert-release-artifact.json",
-        &serde_json::to_string_pretty(&cert_report)?,
-    )?;
-    push_sealed_artifact(
-        output,
-        &mut manifest,
-        "bench-report",
-        "release/bench-report.json",
-        &serde_json::to_string_pretty(&bench_report)?,
-    )?;
-    push_sealed_artifact(
-        output,
-        &mut manifest,
-        "agent-native-eval",
-        "release/agent-native-eval.json",
-        &serde_json::to_string_pretty(&agent_native)?,
-    )?;
-
-    if full {
-        push_sealed_artifact(
-            output,
-            &mut manifest,
-            "sbom",
-            "release/sbom.spdx.json",
-            &serde_json::to_string_pretty(&workspace_sbom())?,
-        )?;
-        push_sealed_artifact(
-            output,
-            &mut manifest,
-            "provenance",
-            "release/provenance.json",
-            &serde_json::to_string_pretty(&workspace_provenance())?,
-        )?;
-    }
-
-    let manifest_path = output.join("artifact-manifest.json");
-    fs::write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
-    let verification = verify_artifact_manifest(output, &manifest);
-    if !verification.findings.is_empty() {
-        anyhow::bail!("generated submission bundle did not verify");
-    }
-
-    Ok(json!({
-        "manifest_path": manifest_path.to_string_lossy(),
-        "artifact_root": output.to_string_lossy(),
-        "artifact_count": manifest.artifacts.len(),
-        "artifacts": manifest.artifacts,
-        "verification": verification,
-        "side_effect_executed": true
-    }))
-}
-
-fn push_sealed_artifact(
-    output: &Path,
-    manifest: &mut ArtifactManifest,
-    artifact_id: &str,
-    relative_path: &str,
-    contents: &str,
-) -> anyhow::Result<()> {
-    let sealed = seal_artifact(output, artifact_id, relative_path, contents).map_err(|err| {
-        anyhow::anyhow!(
-            "failed to seal artifact {} at {}: {}",
-            artifact_id,
-            err.path,
-            err.message
-        )
-    })?;
-    manifest.artifacts.extend(sealed.artifacts);
+fn write_json_file(path: &Path, value: &Value) -> anyhow::Result<()> {
+    fs::write(path, format!("{}\n", serde_json::to_string_pretty(value)?))?;
     Ok(())
 }
 
-fn workspace_sbom() -> serde_json::Value {
-    json!({
-        "SPDXID": "SPDXRef-DOCUMENT",
-        "spdxVersion": "SPDX-2.3",
-        "name": "runwarden-enterprise",
-        "dataLicense": "CC0-1.0",
-        "documentNamespace": "https://runwarden.local/sbom/runwarden-enterprise",
-        "packages": [
-            {"SPDXID": "SPDXRef-Package-runwarden-kernel", "name": "runwarden-kernel"},
-            {"SPDXID": "SPDXRef-Package-runwarden-providers", "name": "runwarden-providers"},
-            {"SPDXID": "SPDXRef-Package-runwarden-assurance", "name": "runwarden-assurance"},
-            {"SPDXID": "SPDXRef-Package-runwarden-cli", "name": "runwarden-cli"},
-            {"SPDXID": "SPDXRef-Package-runwarden-mcp", "name": "runwarden-mcp"},
-            {"SPDXID": "SPDXRef-Package-runwarden-api", "name": "runwarden-api"},
-            {"SPDXID": "SPDXRef-Package-agent-sdk", "name": "@runwarden/agent-sdk"},
-            {"SPDXID": "SPDXRef-Package-webui", "name": "@runwarden/webui"}
-        ]
-    })
-}
-
-fn workspace_provenance() -> serde_json::Value {
-    let workspace_digest = hex_sha256(b"workspace-local-release-evidence");
-    json!({
-        "predicateType": "https://slsa.dev/provenance/v1",
-        "subject": [
-            {"name": "runwarden"},
-            {"name": "runwarden-mcp"},
-            {"name": "runwarden-kernel"},
-            {"name": "runwarden-artifacts"}
-        ],
-        "buildType": "runwarden.local.release-evidence.v1",
-        "builder": {
-            "id": "runwarden release gate"
-        },
-        "materials": [
-            {"uri": "git+file://runwarden", "digest": {"sha256": workspace_digest}}
-        ]
-    })
-}
-
-fn release_smoke_report(root: &Path) -> anyhow::Result<serde_json::Value> {
-    let cert = certify_workspace(root);
-    let bench = benchmark_workspace(root)?;
-    let agent_native = evaluate_agent_native_configs(&load_agent_native_cases(root, Vec::new())?);
-    let scenario_eval = evaluate_scenario_corpora(root)?;
-    let scenario_eval_passed = scenario_eval["passed"].as_bool() == Some(true);
-    let passed = cert.passed && bench.passed && agent_native.passed && scenario_eval_passed;
-
-    Ok(json!({
-        "passed": passed,
-        "checks": [
-            {
-                "id": "cert",
-                "passed": cert.passed,
-                "details": cert.checks
-            },
-            {
-                "id": "bench",
-                "passed": bench.passed,
-                "metrics": bench.metrics
-            },
-            {
-                "id": "agent_native",
-                "passed": agent_native.passed,
-                "metrics": agent_native.metrics,
-                "cases": agent_native.cases
-            },
-            {
-                "id": "scenario_golden_corpus",
-                "passed": scenario_eval_passed,
-                "suite": scenario_eval
-            }
-        ],
-        "side_effect_executed": false
-    }))
-}
-
-fn resolve_launch_token(configured: Option<String>) -> (String, bool) {
-    if let Some(token) = configured.filter(|token| !token.trim().is_empty()) {
-        return (token, false);
-    }
-    if let Ok(token) = env::var("RUNWARDEN_LAUNCH_TOKEN")
-        && !token.trim().is_empty()
-    {
-        return (token, false);
-    }
-    (format!("rw_launch_{}", uuid::Uuid::now_v7()), true)
-}
-
-fn local_api_serve_descriptor(
-    bind: &str,
-    port: u16,
-    launch_token: &str,
-    launch_token_generated: bool,
-    once: bool,
-) -> serde_json::Value {
-    json!({
-        "mode": "local_api_server",
-        "listen_addr": format!("{bind}:{port}"),
-        "allowed_origin": format!("http://{bind}:{port}"),
-        "launch_token_configured": !launch_token.is_empty(),
-        "launch_token_generated": launch_token_generated,
-        "once": once,
-        "routes": [
-            "/health",
-            "/dashboard",
-            "/agent-boundary",
-            "/providers",
-            "/providers/{provider}/status",
-            "/approvals",
-            "/approvals/{approval_id}/approve",
-            "/approvals/{approval_id}/deny",
-            "/provider-calls",
-            "/sessions",
-            "/trace/export",
-            "/audit/summary",
-            "/accountability/summary",
-            "/reports/lint",
-            "/reports/render",
-            "/reports/preview",
-            "/artifacts/verify",
-            "/artifacts/token",
-            "/artifacts/submission",
-            "/eval/agent-native",
-            "/release/smoke",
-            "/ui/launch",
-            "/agent/config/check"
-        ],
-        "security_model": "launch token + host/origin checks + kernel-owned decisions",
-        "side_effect_executed": false
-    })
-}
-
-fn read_report(path: &PathBuf) -> anyhow::Result<ReportDraft> {
+fn read_report(path: &Path) -> anyhow::Result<ReportDraft> {
     let content = fs::read_to_string(path)?;
     Ok(serde_json::from_str(&content)?)
 }
 
-fn read_trace(path: &PathBuf) -> anyhow::Result<Vec<TraceEvent>> {
+fn read_trace(path: &Path) -> anyhow::Result<Vec<TraceEvent>> {
     let content = fs::read_to_string(path)?;
     Ok(serde_json::from_str(&content)?)
 }
@@ -2527,27 +1750,6 @@ fn read_session(session_id: &str) -> anyhow::Result<SessionManifest> {
         .join(format!("{}.json", safe_session_id(session_id)?));
     let body = fs::read_to_string(&path)?;
     Ok(serde_json::from_str(&body)?)
-}
-
-fn read_all_sessions() -> anyhow::Result<Vec<SessionManifest>> {
-    let dir = PathBuf::from(".runwarden").join("sessions");
-    if !dir.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut sessions = Vec::new();
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        if entry.path().extension().and_then(|ext| ext.to_str()) != Some("json") {
-            continue;
-        }
-        let body = fs::read_to_string(entry.path())?;
-        sessions.push(serde_json::from_str(&body)?);
-    }
-    sessions.sort_by(|left: &SessionManifest, right: &SessionManifest| {
-        left.session_id.cmp(&right.session_id)
-    });
-    Ok(sessions)
 }
 
 fn safe_session_id(session_id: &str) -> anyhow::Result<&str> {
@@ -2606,12 +1808,26 @@ fn write_approval(approval: &ApprovalRecord) -> anyhow::Result<()> {
 }
 
 fn argument_hash_from_json(arguments: &str) -> anyhow::Result<String> {
-    let value: serde_json::Value = serde_json::from_str(arguments)?;
-    let bytes = serde_json::to_vec(&value)?;
-    Ok(hex_sha256(&bytes))
+    let value: Value = serde_json::from_str(arguments)?;
+    Ok(hex_sha256(&serde_json::to_vec(&value)?))
 }
 
-fn resolve_local_artifact_output_path(root: &Path, requested: &Path) -> anyhow::Result<PathBuf> {
+fn safe_record_id(record_id: &str) -> anyhow::Result<&str> {
+    if record_id.is_empty()
+        || !record_id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
+    {
+        anyhow::bail!("invalid record id: {record_id}");
+    }
+    Ok(record_id)
+}
+
+fn resolve_workspace_output_path(
+    root: &Path,
+    requested: &Path,
+    label: &str,
+) -> anyhow::Result<PathBuf> {
     if requested.as_os_str().is_empty()
         || requested.is_absolute()
         || requested.components().any(|component| {
@@ -2623,29 +1839,29 @@ fn resolve_local_artifact_output_path(root: &Path, requested: &Path) -> anyhow::
             )
         })
     {
-        anyhow::bail!("artifact output path must be a relative path inside the workspace");
+        anyhow::bail!("{label} path must be a relative path inside the workspace");
     }
 
-    reject_symlink_components(root, requested)?;
+    reject_symlink_components(root, requested, label)?;
     let output_path = root.join(requested);
     if !path_is_within_root(&output_path, root) {
-        anyhow::bail!("artifact output path must be a relative path inside the workspace");
+        anyhow::bail!("{label} path must be a relative path inside the workspace");
     }
     Ok(output_path)
 }
 
-fn reject_symlink_components(root: &Path, requested: &Path) -> anyhow::Result<()> {
+fn reject_symlink_components(root: &Path, requested: &Path, label: &str) -> anyhow::Result<()> {
     let mut current = root.to_path_buf();
     for component in requested.components() {
         let std::path::Component::Normal(part) = component else {
-            anyhow::bail!("artifact output path must be a relative path inside the workspace");
+            anyhow::bail!("{label} path must be a relative path inside the workspace");
         };
         current.push(part);
         if fs::symlink_metadata(&current)
             .map(|metadata| metadata.file_type().is_symlink())
             .unwrap_or(false)
         {
-            anyhow::bail!("artifact output path must not contain symlink components");
+            anyhow::bail!("{label} path must not contain symlink components");
         }
     }
     Ok(())
@@ -2675,37 +1891,7 @@ fn canonical_existing_parent(path: &Path) -> Option<PathBuf> {
     }
 }
 
-fn safe_record_id(record_id: &str) -> anyhow::Result<&str> {
-    if record_id.is_empty()
-        || !record_id
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
-    {
-        anyhow::bail!("invalid record id: {record_id}");
-    }
-    Ok(record_id)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn provider_external_dispatch_uses_registry_class() {
-        assert!(provider_is_external("external.api.request"));
-        assert!(provider_is_external("external.mcp.browser.open_page"));
-        assert!(!provider_is_external("runwarden.input.inspect"));
-    }
-
-    #[test]
-    fn provider_mcp_adapter_dispatch_uses_manifest_kind() {
-        assert!(provider_is_external_mcp("external.mcp.browser.open_page"));
-        assert!(!provider_is_external_mcp("external.api.request"));
-        assert!(!provider_is_external_mcp("external.shell.command"));
-    }
-}
-
-fn verify_trace_events(events: Vec<TraceEvent>) -> serde_json::Value {
+fn verify_trace_events(events: Vec<TraceEvent>) -> Value {
     let event_count = events.len();
     let mut store = InMemoryTraceStore::default();
     for event in events {
@@ -2730,144 +1916,53 @@ fn verify_trace_events(events: Vec<TraceEvent>) -> serde_json::Value {
 
 fn run_strict_check() -> anyhow::Result<()> {
     let root = find_workspace_root(env::current_dir()?)?;
-    let required_paths = [
+    for path in [
         "Cargo.toml",
         "package.json",
-        "DESIGN.md",
-        "schemas/provider-call.schema.json",
-        "schemas/provider-outcome.schema.json",
-        "schemas/provider-contract.schema.json",
-        "schemas/provider-manifest.schema.json",
-        "schemas/operation-result.schema.json",
-        "schemas/approval-record.schema.json",
-        "schemas/trace-event.schema.json",
-        "schemas/report.schema.json",
-        "schemas/assessment-manifest.schema.json",
-        "schemas/session-manifest.schema.json",
-        "schemas/artifact-manifest.schema.json",
-        "examples/providers/external.mcp.browser.open_page.json",
-        "examples/providers/kernel.toml",
-        "tests/fixtures/default-trace.json",
-        "tests/fixtures/default-report.json",
-        "scripts/dev_gate.sh",
-        "scripts/check_ts_contracts.sh",
+        "pnpm-workspace.yaml",
+        "README.md",
+        "docs/README.md",
+        "docs/reference/cli.md",
+        "docs/reference/mcp.md",
+        "docs/reference/provider-model.md",
+        "docs/reference/provider-integration.md",
+        "docs/reference/evidence-and-accountability.md",
+        "docs/reference/webui-review-console.md",
+        "packages/webui/src/index.ts",
+        "scripts/pr_fast_gate.sh",
         "scripts/release_gate_local.sh",
-        "scripts/artifact_bundle_gate.sh",
-        ".github/workflows/ci.yml",
-        "crates/runwarden-kernel/src/main.rs",
-        "packages/agent-sdk/src/generated/contracts.ts",
-    ];
-
-    for path in required_paths {
-        let full_path = root.join(path);
-        if !full_path.exists() {
-            anyhow::bail!("strict check failed: missing {}", full_path.display());
+    ] {
+        if !root.join(path).exists() {
+            anyhow::bail!("strict check failed: missing {}", root.join(path).display());
         }
+    }
+
+    for scenario in CONTEST_SCENARIOS {
+        ensure_required_scenario_files(&root.join("scenarios").join(scenario))?;
     }
 
     let release_gate = fs::read_to_string(root.join("scripts/release_gate_local.sh"))?;
     for command in [
-        "runwarden cert all --json",
-        "runwarden eval all --json",
         "runwarden eval scenarios --json",
-        "runwarden eval agent-native --json",
-        "runwarden bench run --json",
+        "runwarden demo run --scenario prompt-injection-file-exfil",
+        "runwarden report render --scenario-suite scenarios",
     ] {
         if !release_gate.contains(command) {
             anyhow::bail!("strict check failed: release gate does not run {command}");
         }
     }
-    if !release_gate.contains("scripts/artifact_bundle_gate.sh") {
-        anyhow::bail!("strict check failed: release gate does not run artifact bundle gate");
-    }
-    let artifact_gate = fs::read_to_string(root.join("scripts/artifact_bundle_gate.sh"))?;
-    for command in [
-        "artifact submission --full --output",
-        "artifact verify",
-        "--artifacts",
-        "--manifest",
-    ] {
-        if !artifact_gate.contains(command) {
-            anyhow::bail!("strict check failed: artifact bundle gate does not run {command}");
-        }
-    }
 
-    let registry = first_party_registry();
-    for provider_id in FIRST_PARTY_PROVIDER_IDS {
-        if !registry.contains(provider_id) {
-            anyhow::bail!("strict check failed: missing first-party provider {provider_id}");
-        }
-    }
-    let registry = full_provider_registry();
-    for provider_id in EXTERNAL_PROVIDER_IDS {
-        if !registry.contains(provider_id) {
-            anyhow::bail!("strict check failed: missing external provider {provider_id}");
-        }
-    }
-    if default_external_providers().is_empty() {
-        anyhow::bail!("strict check failed: external provider catalog is empty");
-    }
-
-    for path in reference_doc_required_paths() {
-        if !root.join(path).exists() {
-            anyhow::bail!("strict check failed: missing reference doc {path}");
-        }
-    }
-
-    let scenario_eval = evaluate_scenario_corpora(&root)?;
+    let scenario_eval = evaluate_scenario_corpora(&root, Path::new("scenarios"))?;
     if scenario_eval["passed"].as_bool() != Some(true) {
-        anyhow::bail!("strict check failed: scenario golden corpus eval did not pass");
-    }
-
-    let dev_gate = fs::read_to_string(root.join("scripts/dev_gate.sh"))?;
-    let pr_gate = fs::read_to_string(root.join("scripts/pr_fast_gate.sh"))?;
-    if !dev_gate.contains("scripts/check_ts_contracts.sh")
-        || !pr_gate.contains("scripts/check_ts_contracts.sh")
-    {
-        anyhow::bail!("strict check failed: generated TypeScript contract check is not gated");
-    }
-
-    let release_workflow = fs::read_to_string(root.join(".github/workflows/release.yml"))?;
-    if !release_workflow.contains("target/release/runwarden*")
-        || !root.join("crates/runwarden-kernel/src/main.rs").exists()
-    {
-        anyhow::bail!("strict check failed: release binary matrix does not include named binaries");
+        anyhow::bail!("strict check failed: scenario eval did not pass");
     }
 
     println!("runwarden strict check passed");
-    println!("- schema artifacts present");
-    println!("- first-party provider catalog present");
-    println!("- scenario golden corpora present");
-    println!("- split reference docs present");
-    println!("- generated TypeScript contracts present");
-    println!("- release binary matrix present");
-    println!("- design contract present");
-    println!("- release gate scripts present");
-    println!("- release assurance commands present");
+    println!("- contest scenario corpus present");
+    println!("- lean MCP/CLI reference docs present");
+    println!("- static WebUI package present");
+    println!("- contest gate scripts present");
     Ok(())
-}
-
-fn reference_doc_required_paths() -> &'static [&'static str] {
-    &[
-        "docs/reference/rust-kernel-ts-interaction.md",
-        "docs/reference/provider-model.md",
-        "docs/reference/authority-and-session.md",
-        "docs/reference/evidence-and-accountability.md",
-        "docs/reference/threat-model.md",
-        "docs/reference/agent-integration.md",
-        "docs/reference/provider-integration.md",
-        "docs/reference/webui-review-console.md",
-        "docs/reference/release-installation.md",
-        "docs/reference/first-scenario.md",
-        "docs/reference/kernel-manifest.md",
-        "docs/reference/provider-manifest.md",
-        "docs/reference/assessment-manifest.md",
-        "docs/reference/provider-contract.md",
-        "docs/reference/artifact-manifest.md",
-        "docs/reference/json-contracts.md",
-        "docs/reference/ci.md",
-        "docs/reference/roadmap.md",
-    ]
 }
 
 fn find_workspace_root(mut current: PathBuf) -> anyhow::Result<PathBuf> {
@@ -2881,141 +1976,9 @@ fn find_workspace_root(mut current: PathBuf) -> anyhow::Result<PathBuf> {
     }
 }
 
-fn generate_runwarden_only_config(client: &str) -> anyhow::Result<serde_json::Value> {
-    match client {
-        "claude" | "generic" => Ok(json!({
-            "mcpServers": {
-                "runwarden": {
-                    "command": "runwarden-mcp",
-                    "args": []
-                }
-            }
-        })),
-        other => anyhow::bail!("unsupported agent client: {other}"),
-    }
-}
-
-#[derive(Debug, serde::Serialize)]
-struct AgentConfigCheckResult {
-    client: String,
-    safe: bool,
-    findings: Vec<String>,
-}
-
-fn check_runwarden_only_config(client: &str, config: &serde_json::Value) -> AgentConfigCheckResult {
-    let report = certify_agent_config(config);
-    AgentConfigCheckResult {
-        client: client.to_string(),
-        safe: report.passed,
-        findings: report.findings,
-    }
-}
-
-fn emit_cert_report(label: &str, report: CertReport, json: bool) -> anyhow::Result<()> {
-    if json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
-    } else if report.passed {
-        println!("{label} passed");
-    } else {
-        println!("{label} failed");
-    }
-    if !report.passed {
-        anyhow::bail!("{label} failed");
-    }
-    Ok(())
-}
-
-fn certify_provider_manifest_file(path: &Path) -> anyhow::Result<CertReport> {
-    let body = fs::read_to_string(path)?;
-    let manifest = load_provider_manifest(&body)?;
-    let report = certify_external_provider_manifest(&manifest);
-    let checks = if report.findings.is_empty() {
-        vec![cert_check(
-            "provider-manifest",
-            true,
-            format!(
-                "{} schema pin and external provider contract verified",
-                report.contract.provider.id
-            ),
-        )]
-    } else {
-        report
-            .findings
-            .iter()
-            .map(|finding| cert_check("provider-manifest", false, finding.clone()))
-            .collect()
-    };
-
-    Ok(CertReport {
-        passed: report.passed,
-        checks,
-        side_effect_executed: false,
-    })
-}
-
-fn certify_mcp_surface(root: &Path) -> CertReport {
-    let body = fs::read_to_string(root.join("crates/runwarden-mcp/src/lib.rs")).unwrap_or_default();
-    let passed = body.contains("runwarden.agent.bootstrap")
-        && body.contains("runwarden.provider.call")
-        && body.contains("runwarden.trace.export")
-        && !body.contains("\"shell\"");
-    CertReport {
-        passed,
-        checks: vec![cert_check(
-            "mcp",
-            passed,
-            "MCP exposes only runwarden.* tools and includes trace/report/provider entrypoints",
-        )],
-        side_effect_executed: false,
-    }
-}
-
-fn certify_release_artifact_surface(root: &Path) -> CertReport {
-    let workflow =
-        fs::read_to_string(root.join(".github/workflows/release.yml")).unwrap_or_default();
-    let passed = workflow.contains("scripts/release_gate_local.sh")
-        && workflow.contains("actions/upload-artifact")
-        && workflow.contains("softprops/action-gh-release")
-        && root.join("scripts/generate_artifacts.sh").exists()
-        && root.join("scripts/artifact_leak_scan.sh").exists()
-        && root.join("crates/runwarden-kernel/src/main.rs").exists()
-        && workflow.contains("target/release/runwarden*");
-    CertReport {
-        passed,
-        checks: vec![cert_check(
-            "release-artifact",
-            passed,
-            "release artifacts are generated, uploaded, scanned, and attached to releases",
-        )],
-        side_effect_executed: false,
-    }
-}
-
-fn certify_required_paths(root: &Path, id: &str, paths: &[&str]) -> CertReport {
-    let missing: Vec<_> = paths
-        .iter()
-        .filter(|path| !root.join(path).exists())
-        .copied()
-        .collect();
-    CertReport {
-        passed: missing.is_empty(),
-        checks: vec![cert_check(
-            id,
-            missing.is_empty(),
-            if missing.is_empty() {
-                format!("{id} required files are present")
-            } else {
-                format!("{id} missing {}", missing.join(", "))
-            },
-        )],
-        side_effect_executed: false,
-    }
-}
-
-fn cert_check(id: impl Into<String>, passed: bool, message: impl Into<String>) -> CertCheck {
-    CertCheck {
-        id: id.into(),
-        passed,
-        message: message.into(),
-    }
+fn html_escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }

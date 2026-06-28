@@ -8,23 +8,37 @@ fn tools_list_exposes_only_runwarden_tools() {
             .expect("tools/list response");
 
     let tools = response["result"]["tools"].as_array().expect("tools array");
-    assert!(!tools.is_empty());
-    assert!(tools.iter().all(|tool| {
-        tool["name"]
-            .as_str()
-            .is_some_and(|name| name.starts_with("runwarden."))
-    }));
-    assert!(!tools.iter().any(|tool| tool["name"] == "shell"));
-    for expected in [
+    let mut tool_names: Vec<_> = tools
+        .iter()
+        .map(|tool| tool["name"].as_str().expect("tool name"))
+        .collect();
+    tool_names.sort_unstable();
+
+    let mut expected = vec![
+        "runwarden.agent.bootstrap",
+        "runwarden.provider.call",
         "runwarden.provider.list",
         "runwarden.provider.status",
-        "runwarden.session.create_from_manifest",
         "runwarden.report.lint",
         "runwarden.report.render",
+        "runwarden.trace.export",
+        "runwarden.trace.verify",
+    ];
+    expected.sort_unstable();
+    expected.dedup();
+
+    assert_eq!(tool_names, expected);
+    for raw_or_removed in [
+        "shell",
+        "filesystem.read_file",
+        "browser.open_page",
+        "http.request",
+        "external.mcp.browser.open_page",
+        "runwarden.session.create_from_manifest",
     ] {
         assert!(
-            tools.iter().any(|tool| tool["name"] == expected),
-            "missing {expected}"
+            !tools.iter().any(|tool| tool["name"] == raw_or_removed),
+            "unexpected MCP tool {raw_or_removed}"
         );
     }
     assert!(
@@ -165,94 +179,19 @@ fn provider_call_respects_kernel_session_allowlist_before_execution() {
 }
 
 #[test]
-fn provider_call_runs_audit_summary_with_inline_trace_events() {
-    let response = call_tool(
-        11,
-        "runwarden.provider.call",
-        json!({
-            "provider":"runwarden.audit.summary",
-            "trace_events": [
-                {
-                    "obs_id":"obs_1",
-                    "event_type":"provider_denied",
-                    "provider":"external.shell.command",
-                    "payload":{"decision":"denied"},
-                    "previous_hash":null,
-                    "event_hash":"hash_1"
-                }
-            ]
-        }),
-    );
-
-    let payload = tool_payload(&response);
-
-    assert_eq!(payload["provider"], "runwarden.audit.summary");
-    assert_eq!(payload["output"]["denied_count"], 1);
-    assert_eq!(payload["side_effect_executed"], false);
-}
-
-#[test]
-fn provider_call_runs_accountability_summary_with_inline_trace_events() {
-    let response = call_tool(
-        12,
-        "runwarden.provider.call",
-        json!({
-            "provider":"runwarden.accountability.summary",
-            "trace_events": [
-                {
-                    "obs_id":"obs_1",
-                    "event_type":"provider_denied",
-                    "provider":"external.shell.command",
-                    "payload":{
-                        "actor_id":"agent-1",
-                        "authz_id":"authz-1",
-                        "reviewer":"reviewer-alice",
-                        "report_claim_id":"finding-1"
-                    },
-                    "previous_hash":null,
-                    "event_hash":"hash_1"
-                }
-            ]
-        }),
-    );
-
-    let payload = tool_payload(&response);
-
-    assert_eq!(payload["provider"], "runwarden.accountability.summary");
-    assert_eq!(payload["output"]["chains"][0]["reviewer"], "reviewer-alice");
-    assert_eq!(
-        payload["output"]["chains"][0]["report_claim_id"],
-        "finding-1"
-    );
-}
-
-#[test]
-fn provider_call_runs_agent_native_eval_with_inline_agent_configs() {
+fn provider_call_rejects_removed_inline_assurance_providers() {
     let response = call_tool(
         13,
         "runwarden.provider.call",
-        json!({
-            "provider":"runwarden.eval.agent-native",
-            "agent_configs": [
-                {
-                    "id": "safe",
-                    "expectation": "runwarden_only_allowed",
-                    "config": {"mcpServers":{"runwarden":{"command":"runwarden-mcp"}}}
-                },
-                {
-                    "id": "unsafe",
-                    "expectation": "raw_tools_denied",
-                    "config": {"mcpServers":{"runwarden":{"command":"runwarden-mcp"},"shell":{"command":"bash"}}}
-                }
-            ]
-        }),
+        json!({ "provider":"runwarden.eval.agent-native" }),
     );
 
-    let payload = tool_payload(&response);
+    assert!(response.get("error").is_none());
+    assert_eq!(response["result"]["isError"], true);
 
-    assert_eq!(payload["provider"], "runwarden.eval.agent-native");
-    assert_eq!(payload["output"]["passed"], true);
-    assert_eq!(payload["output"]["metrics"]["raw_tool_block_rate"], 1.0);
+    let payload = tool_payload(&response);
+    assert_eq!(payload["decision"], "denied");
+    assert_eq!(payload["envelope"]["error_kind"], "provider_unknown");
     assert_eq!(payload["side_effect_executed"], false);
 }
 
@@ -312,37 +251,15 @@ fn known_tool_execution_denial_returns_mcp_tool_error_not_jsonrpc_error() {
 }
 
 #[test]
-fn session_create_from_manifest_builds_session_manifest() {
-    let manifest_toml = r#"
-version = "1"
-name = "enterprise ops"
-mode = "audit"
-provider_allowlist = ["runwarden.input.inspect"]
-
-[active_assessment]
-enabled = true
-
-[authorization]
-id = "authz-1"
-
-[actor]
-id = "agent-1"
-"#;
-
+fn removed_session_creation_tool_is_rejected_without_side_effects() {
     let response = call_tool(
         9,
         "runwarden.session.create_from_manifest",
-        json!({
-            "session_id": "enterprise_ops",
-            "manifest_toml": manifest_toml
-        }),
+        json!({ "session_id": "enterprise_ops", "manifest_toml": "" }),
     );
 
-    let payload = tool_payload(&response);
-
-    assert_eq!(payload["session"]["session_id"], "enterprise_ops");
-    assert_eq!(payload["session"]["authz_id"], "authz-1");
-    assert_eq!(payload["side_effect_executed"], false);
+    assert_eq!(response["error"]["code"], -32602);
+    assert_eq!(response["error"]["data"]["side_effect_executed"], false);
 }
 
 #[test]

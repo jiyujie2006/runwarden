@@ -39,12 +39,13 @@ When an adapter request supplies `manifest_path`, relative paths resolve
 relative to that adapter request file and the resolved path is included in
 scoped-root, approval, and digest binding before execution.
 
-## Certification
+## Contest Checks
+
+The contest CLI no longer exposes `runwarden cert provider-manifest`. Manifest
+contracts are exercised through provider catalog tests, kernel policy tests, and
+scenario/demo execution:
 
 ```bash
-runwarden cert provider-manifest --manifest examples/providers/external.mcp.browser.open_page.json --json
+cargo test --workspace
+target/debug/runwarden eval scenarios --json
 ```
-
-Certification fails on schema rug-pulls, unsupported transports, missing
-identities, missing permissions, missing egress policy, missing exact command
-allowlists, or missing trusted working roots.

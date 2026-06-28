@@ -1,46 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { renderReviewerConsoleHtml } from "./index";
+import { renderDemoReviewerConsoleHtml } from "./index";
 
-describe("reviewer console browser contract", () => {
-  it("renders responsive and accessible static HTML without script execution", () => {
-    const html = renderReviewerConsoleHtml(
+describe("static demo console browser contract", () => {
+  it("renders responsive accessible HTML for file based review", () => {
+    const html = renderDemoReviewerConsoleHtml([
       {
-        sessionId: "session-1",
-        riskStatus: "requires_review",
-        traceIntegrity: "verified",
-        pendingApprovalCount: 1,
-        fastGateStatus: "passed",
-        fullGateStatus: "missing"
-      },
-      [
-        {
-          approvalId: "approval-1",
-          provider: "external.mcp.browser.open_page",
-          action: "open_page",
-          risk: "network_active",
-          target: "https://example.com",
-          sideEffects: ["network"],
-          argumentHash: "arg_hash_1",
-          authzId: "authz-1",
-          actorId: "agent-1",
-          obsRefs: ["obs_1"]
-        }
-      ]
-    );
+        scenario: "environment-local-web-risk",
+        provider_calls: [],
+        denials: [],
+        metrics: { trace_completeness: 1, report_citation_accuracy: 1 },
+        report: { claims: [] },
+        trace: [],
+        lint: { ok: true }
+      }
+    ]);
 
     expect(html).toContain('name="viewport"');
-    expect(html).toContain('aria-label="Runwarden sections"');
-    expect(html).toContain('aria-label="Approval details"');
-    expect(html).toContain('role="status" aria-label="Assessment status"');
-    expect(html).toContain("nav-brand");
-    expect(html).toContain("command-bar");
-    expect(html).toContain("state-badge");
-    expect(html).toContain("risk-chip");
-    expect(html).toContain("details-drawer");
-    expect(html).toContain('aria-controls="approval-details"');
-    expect(html).toContain('data-detail-fields');
-    expect(html).toContain("@media (max-width: 768px)");
-    expect(html).toContain("min-height: 44px");
+    expect(html).toContain('aria-label="Runwarden demo scenarios"');
+    expect(html).toContain('aria-label="Reviewer workspace"');
+    expect(html).toContain('role="status" aria-label="Demo suite status"');
+    expect(html).toContain("scenario-card");
+    expect(html).toContain("trace-verified");
     expect(html).toContain(":focus-visible");
     expect(html).not.toContain("<script");
   });

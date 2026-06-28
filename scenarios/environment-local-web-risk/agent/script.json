@@ -1,0 +1,5 @@
+[
+  {"provider": "runwarden.input.inspect", "action": "inspect"},
+  {"provider": "external.mcp.browser.open_page", "action": "open_page"},
+  {"provider": "external.api.request", "action": "request"}
+]

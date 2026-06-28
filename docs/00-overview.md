@@ -1,78 +1,61 @@
 # Overview
 
-Runwarden is an agent-native security runtime for MCP and Skill-driven agents.
-It routes agent tool use through a Rust enforcement kernel so every meaningful
-decision can be approved, audited, cited, and reproduced.
+Runwarden is a contest-focused red-team range for agent tool-use security. It
+routes agent actions through a Rust enforcement kernel, records the resulting
+`obs_*` evidence, and renders trace-backed reports and a static reviewer
+console.
 
 ## Problem
 
-Enterprise agents can read files, open web pages, call APIs, run tools, load
-skills, and produce reports. Prompt-only guardrails do not reliably answer these
-questions:
+Agents can be induced to read files, call APIs, send messages, open pages, or
+trust poisoned memory. Prompt-only guardrails do not prove:
 
-- Which tools was the agent allowed to see?
-- Which provider calls were denied before side effects?
-- Which reviewer approved a high-risk action?
-- Which `obs_*` events support a report claim?
-- Which artifacts were sealed, redacted, and verified?
+- which tools the agent could see
+- which provider calls were denied before side effects
+- which calls required approval
+- which `obs_*` events support each report claim
+- whether localhost, private network, or metadata-service egress was blocked
 
-Runwarden makes those questions first-class runtime contracts.
+Runwarden makes those answers reproducible from checked-in scenarios.
 
 ## Workspace Components
 
-- `runwarden-kernel`: Rust source of truth for manifests, sessions, provider
-  outcomes, policy gates, approvals, trace events, and artifact primitives.
-- `runwarden-providers`: first-party provider catalog plus mediated external
-  provider adapter contracts.
-- `runwarden-assurance`: report lint/render/scaffold, eval, cert, bench, audit,
-  accountability, artifact sealing, and artifact verification.
-- `runwarden-cli`: human control plane for local review, release evidence, and
-  repository checks.
-- `runwarden-mcp`: agent-facing MCP boundary that exposes only `runwarden.*`
-  tools.
-- `runwarden-api`: token-protected Local API used by the Reviewer Console and
-  SDK.
-- `packages/agent-sdk`: TypeScript client and generated Rust contract
-  declarations.
-- `packages/webui`: dependency-free static Reviewer Console renderer.
-- `packages/config-tools`: TypeScript helper for invoking Rust-owned
-  agent-config certification.
+- `runwarden-kernel`: Rust source of truth for sessions, provider policy,
+  approvals, trace events, path safety, and contract types.
+- `runwarden-providers`: first-party providers plus mediated demo/external
+  provider catalog.
+- `runwarden-assurance`: scenario evaluation plus report lint/render helpers.
+- `runwarden-cli`: contest control plane for sessions, providers, traces,
+  reports, scenarios, deterministic demos, and static UI output.
+- `runwarden-mcp`: the only MCP boundary exposed to agents.
+- `packages/webui`: presentation-only static reviewer console renderer.
+
+The old Local API, SDK, config helper, MCP helper, cert, bench, release-smoke,
+and artifact-bundle surfaces are not part of the contest mainline.
 
 ## Proof Loop
 
-Runwarden's proof loop is:
-
 1. Create a manifest-backed session.
-2. List kernel-managed providers for that session.
-3. Evaluate every provider call through the kernel.
-4. Record allowed, denied, failed, and review decisions as `obs_*` trace events.
+2. Let the deterministic demo agent propose provider calls.
+3. Evaluate every call through Rust kernel/provider policy.
+4. Record allowed, denied, and review-blocked outcomes as `obs_*` trace events.
 5. Verify the trace hash chain before export or report use.
 6. Lint report claims against verified observation references.
-7. Seal artifacts with hashes and redaction sidecars.
-8. Run eval, cert, bench, and release gates.
+7. Render a suite report and static reviewer console from demo JSON.
 
 ## Local Gates
 
-Fast development and PR checks use:
-
 ```bash
-bash scripts/dev_gate.sh
 bash scripts/pr_fast_gate.sh
-```
-
-The release-style local gate uses:
-
-```bash
 bash scripts/release_gate_local.sh
 ```
 
-It adds `runwarden check --strict`, cert, eval, scenario golden-corpus eval,
-agent-native eval, bench, release smoke, artifact submission, artifact
-verification, and leak scan.
+The release-style local gate runs fast Rust/TypeScript checks, strict repository
+validation, scenario evaluation, deterministic demo generation, contest report
+rendering, and static reviewer-console build.
 
 ## Reading Path
 
-- New reviewers should start with [Repository Review](repository-review.md).
 - Operators should read [CLI Reference](reference/cli.md) and
   [Reviewer Console Guide](guides/reviewer-console.md).
 - Agent integrators should read [MCP Reference](reference/mcp.md) and

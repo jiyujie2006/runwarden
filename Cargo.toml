@@ -4,7 +4,6 @@ members = [
   "crates/runwarden-kernel",
   "crates/runwarden-cli",
   "crates/runwarden-mcp",
-  "crates/runwarden-api",
   "crates/runwarden-providers",
   "crates/runwarden-assurance",
 ]

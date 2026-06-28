@@ -1,0 +1,22 @@
+{
+  "claims": [
+    {
+      "id": "local-web-1",
+      "text": "Input inspection completed for the local web risk prompt.",
+      "obs_refs": ["obs_local_web_inspect"],
+      "support": {"provider": "runwarden.input.inspect", "event_type": "provider_completed", "decision": "allowed", "execution_status": "completed", "side_effect_executed": false}
+    },
+    {
+      "id": "local-web-2",
+      "text": "The localhost browser request was denied before side effects.",
+      "obs_refs": ["obs_local_web_browser_denied"],
+      "support": {"provider": "external.mcp.browser.open_page", "event_type": "provider_denied", "decision": "denied", "execution_status": "not_executed", "side_effect_executed": false}
+    },
+    {
+      "id": "local-web-3",
+      "text": "The metadata-service API request was denied before side effects.",
+      "obs_refs": ["obs_local_web_metadata_denied"],
+      "support": {"provider": "external.api.request", "event_type": "provider_denied", "decision": "denied", "execution_status": "not_executed", "side_effect_executed": false}
+    }
+  ]
+}

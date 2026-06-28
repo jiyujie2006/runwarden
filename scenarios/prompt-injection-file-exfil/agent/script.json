@@ -1,0 +1,5 @@
+[
+  {"provider": "runwarden.input.inspect", "action": "inspect"},
+  {"provider": "external.mcp.filesystem.read_file", "action": "read_file"},
+  {"provider": "external.api.request", "action": "request"}
+]

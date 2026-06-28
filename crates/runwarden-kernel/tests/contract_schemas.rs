@@ -119,60 +119,14 @@ fn checked_in_schema_artifacts_match_rust_contracts() {
 }
 
 #[test]
-fn typescript_sdk_contract_enums_match_rust_schema_values() {
+fn active_typescript_surface_is_static_webui_only() {
     let root = workspace_root();
-    let sdk = fs::read_to_string(root.join("packages/agent-sdk/src/generated/contracts.ts"))
-        .expect("read generated SDK contracts");
-    let provider_outcome = read_schema(&root, "provider-outcome.schema.json");
-    let approval_record = read_schema(&root, "approval-record.schema.json");
-    let operation_result = read_schema(&root, "operation-result.schema.json");
-
-    assert_ts_contains_enum_values(
-        &sdk,
-        &provider_outcome["definitions"]["PolicyDecision"]["enum"],
-    );
-    assert_ts_contains_enum_values(
-        &sdk,
-        &provider_outcome["definitions"]["ExecutionStatus"]["enum"],
-    );
-    assert_ts_contains_enum_values(
-        &sdk,
-        &provider_outcome["definitions"]["ExecutionMode"]["enum"],
-    );
-    assert_ts_contains_enum_values(&sdk, &provider_outcome["definitions"]["ErrorKind"]["enum"]);
-    assert_ts_contains_enum_values(
-        &sdk,
-        &approval_record["definitions"]["ApprovalState"]["enum"],
-    );
-    assert_ts_contains_enum_values(
-        &sdk,
-        &operation_result["definitions"]["OperationStatus"]["enum"],
-    );
-}
-
-#[test]
-fn generated_typescript_contracts_are_checked_by_gate_script() {
-    let root = workspace_root();
-
-    assert!(
-        root.join("packages/agent-sdk/scripts/generate-contracts.mjs")
-            .exists(),
-        "TypeScript declaration generator is missing"
-    );
-    assert!(
-        root.join("scripts/check_ts_contracts.sh").exists(),
-        "generated TypeScript contract diff gate is missing"
-    );
-    assert!(
-        root.join("packages/agent-sdk/src/generated/contracts.ts")
-            .exists(),
-        "generated TypeScript contract output is missing"
-    );
-
-    let dev_gate = fs::read_to_string(root.join("scripts/dev_gate.sh")).expect("read dev gate");
-    let pr_gate = fs::read_to_string(root.join("scripts/pr_fast_gate.sh")).expect("read pr gate");
-    assert!(dev_gate.contains("scripts/check_ts_contracts.sh"));
-    assert!(pr_gate.contains("scripts/check_ts_contracts.sh"));
+    let workspace =
+        fs::read_to_string(root.join("pnpm-workspace.yaml")).expect("read pnpm workspace");
+    assert!(workspace.contains("packages/webui"));
+    assert!(!workspace.contains("packages/agent-sdk"));
+    assert!(!workspace.contains("packages/config-tools"));
+    assert!(!workspace.contains("packages/mcp-helpers"));
 }
 
 fn assert_schema_title(schema: schemars::schema::RootSchema, expected: &str) {
@@ -188,19 +142,8 @@ fn assert_schema_file_matches(root: &Path, file_name: &str, generated: Value) {
     let checked_in = read_schema(root, file_name);
     assert_eq!(
         checked_in, generated,
-        "schema artifact {file_name} is stale; run scripts/generate_artifacts.sh"
+        "schema artifact {file_name} is stale; refresh it from the Rust contract type"
     );
-}
-
-fn assert_ts_contains_enum_values(sdk: &str, enum_values: &Value) {
-    let values = enum_values.as_array().expect("enum value array");
-    for value in values {
-        let value = value.as_str().expect("enum string");
-        assert!(
-            sdk.contains(&format!("\"{value}\"")),
-            "TypeScript SDK is missing enum value {value}"
-        );
-    }
 }
 
 fn read_schema(root: &Path, file_name: &str) -> Value {

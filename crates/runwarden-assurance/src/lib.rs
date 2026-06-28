@@ -1259,37 +1259,29 @@ pub mod cert {
             ),
             required_paths(
                 root,
-                "release_scripts",
+                "contest_gate_scripts",
                 &[
                     "scripts/dev_gate.sh",
-                    "scripts/check_ts_contracts.sh",
+                    "scripts/pr_fast_gate.sh",
                     "scripts/release_gate_local.sh",
-                    "scripts/generate_artifacts.sh",
-                    "scripts/artifact_leak_scan.sh",
+                    "scripts/nightly_full_gate.sh",
                 ],
             ),
             required_paths(
                 root,
-                "scenario_evidence",
+                "contest_scenario_evidence",
                 &[
-                    "scenarios/enterprise-agent-security/manifests/assessment.toml",
-                    "scenarios/enterprise-agent-security/expected/denials.json",
-                    "scenarios/local-web-risk/expected/eval-baseline.json",
-                    "scenarios/workflow-processing-agent/expected/eval-baseline.json",
-                    "scenarios/ops-collaboration-agent/expected/eval-baseline.json",
-                    "scenarios/knowledge-retrieval-qa/expected/eval-baseline.json",
-                    "scenarios/government-office-assistant/expected/eval-baseline.json",
-                    "scenarios/offline-evidence/expected/eval-baseline.json",
-                    "tests/fixtures/default-trace.json",
-                    "tests/fixtures/default-report.json",
-                    "examples/providers/external.mcp.browser.open_page.json",
-                    "examples/providers/kernel.toml",
+                    "scenarios/prompt-injection-file-exfil/manifests/assessment.toml",
+                    "scenarios/prompt-injection-file-exfil/agent/script.json",
+                    "scenarios/tool-hijack-email-api/expected/denials.json",
+                    "scenarios/memory-knowledge-poisoning/expected/eval-baseline.json",
+                    "scenarios/environment-local-web-risk/expected/obs-refs.json",
                 ],
             ),
         ];
 
         checks.push(agent_config_check(root));
-        checks.push(release_artifact_check(root));
+        checks.push(contest_evidence_check(root));
         checks.push(ci_tiered_gates_check(root));
 
         CertReport {
@@ -1387,21 +1379,19 @@ pub mod cert {
         }
     }
 
-    fn release_artifact_check(root: &Path) -> CertCheck {
+    fn contest_evidence_check(root: &Path) -> CertCheck {
         let body =
             fs::read_to_string(root.join(".github/workflows/release.yml")).unwrap_or_default();
         let passed = active_yaml_contains(&body, "matrix:")
             && active_yaml_contains(&body, "cargo build --workspace --release")
             && active_yaml_contains(&body, "tags:")
             && active_yaml_contains(&body, "scripts/release_gate_local.sh")
-            && active_yaml_contains(&body, "scripts/generate_artifacts.sh")
-            && active_yaml_contains(&body, "scripts/artifact_leak_scan.sh")
             && active_yaml_contains(&body, "actions/upload-artifact")
             && active_yaml_contains(&body, "softprops/action-gh-release");
         check(
-            "release_artifact_contract",
+            "contest_evidence_contract",
             passed,
-            "release workflow declares matrix release smoke and release build",
+            "release workflow declares matrix contest gate and release build",
         )
     }
 

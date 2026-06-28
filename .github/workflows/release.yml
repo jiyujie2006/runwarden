@@ -1,4 +1,4 @@
-name: Release Evidence
+name: Contest Evidence
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ on:
       - "v*"
 
 jobs:
-  release-smoke:
+  contest-evidence:
     strategy:
       fail-fast: false
       matrix:
@@ -31,21 +31,19 @@ jobs:
           cache: pnpm
       - run: cargo install cargo-deny --version 0.19.6 --locked
       - run: pnpm install --frozen-lockfile
-      - run: RUNWARDEN_SKIP_ARTIFACT_BUNDLE=1 bash scripts/release_gate_local.sh
-      - run: bash scripts/generate_artifacts.sh
-      - run: bash scripts/artifact_leak_scan.sh
+      - run: bash scripts/release_gate_local.sh
       - run: cargo build --workspace --release
       # actions/upload-artifact@v4
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: runwarden-${{ matrix.os }}-release-evidence
+          name: runwarden-${{ matrix.os }}-contest-evidence
           path: |
             target/release/runwarden*
             target/release/runwarden-mcp*
             artifacts/**
 
   publish-release:
-    needs: release-smoke
+    needs: contest-evidence
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:

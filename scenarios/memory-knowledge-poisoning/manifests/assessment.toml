@@ -1,0 +1,17 @@
+version = "1"
+name = "memory knowledge poisoning"
+mode = "audit"
+provider_allowlist = [
+  "runwarden.input.inspect",
+  "external.knowledge.write"
+]
+
+[[roots]]
+name = "workspace"
+path = "."
+
+[active_assessment]
+enabled = true
+
+[actor]
+id = "demo-agent"

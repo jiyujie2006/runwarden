@@ -41,9 +41,11 @@ fn first_party_catalog_populates_kernel_registry() {
     let registry: ProviderRegistry = first_party_registry();
 
     assert!(registry.contains("runwarden.input.inspect"));
-    assert!(registry.contains("runwarden.evidence.inspect"));
     assert!(registry.contains("runwarden.trace.verify"));
     assert!(registry.contains("runwarden.report.lint"));
+    assert!(registry.contains("runwarden.report.render"));
+    assert!(!registry.contains("runwarden.cert.all"));
+    assert!(!registry.contains("runwarden.bench.run"));
 }
 
 #[test]
@@ -64,12 +66,13 @@ fn external_catalog_declares_kernel_managed_external_provider_families() {
             && provider.risk == ProviderRisk::NetworkActive
     }));
     assert!(providers.iter().any(|provider| {
-        provider.id == "external.shell.command"
+        provider.id == "external.email.send"
             && provider.class == ProviderClass::External
-            && provider
-                .side_effects
-                .contains(&SideEffectKind::ProcessSpawn)
+            && provider.side_effects.contains(&SideEffectKind::Network)
     }));
+    assert!(!ids.contains(&"external.shell.command"));
+    assert!(!ids.contains(&"external.scanner.run"));
+    assert!(!ids.contains(&"external.enterprise.ticket_lookup"));
 }
 
 #[test]

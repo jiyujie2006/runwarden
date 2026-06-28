@@ -25,12 +25,6 @@ Schema drift is caught by:
 cargo test -p runwarden-kernel --test contract_schemas
 ```
 
-TypeScript contract drift is caught by:
-
-```bash
-scripts/check_ts_contracts.sh
-```
-
-Do not hand-edit generated TypeScript contract declarations. Regenerate them
-from Rust schemas through the pipeline documented in
-[Rust Kernel and TypeScript Interaction](rust-kernel-ts-interaction.md).
+The contest TypeScript surface is `packages/webui`. It defines
+presentation-only demo JSON types and does not generate authoritative security
+contracts.

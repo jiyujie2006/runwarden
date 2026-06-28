@@ -1,36 +1,14 @@
 # Authority and Session
 
-Sessions and authority records define the runtime policy envelope for provider
-calls.
+Sessions and approval records define the runtime policy envelope for provider calls.
 
 ## Sessions
 
-Sessions are created from assessment manifests and persisted by the CLI. A
-session carries:
+`runwarden session create` derives a session from an assessment manifest. A session carries provider allowlist, scoped roots, budgets, actor id, authz state, and active-assessment state used by `KernelEnforcer`.
 
-- session id
-- manifest hash
-- provider allowlist
-- scoped roots
-- targets
-- budgets
-- actor id
-- authz id and authz state
-- active-assessment state
+## Approval Records
 
-Create and inspect a session:
-
-```bash
-runwarden session create --manifest scenarios/enterprise-agent-security/manifests/assessment.toml --session enterprise_ops --json
-runwarden session inspect --session enterprise_ops --json
-```
-
-Session-derived authz grants are bound to the session actor. A call from another
-actor with the same authz id is denied before side effects.
-
-## Authority Records
-
-Authority records bind a reviewer decision to one exact provider call:
+Approval records bind a reviewer decision to one exact provider call:
 
 - session id
 - provider id
@@ -39,22 +17,4 @@ Authority records bind a reviewer decision to one exact provider call:
 - authz id
 - actor id
 
-Use:
-
-```bash
-runwarden authority create --approval approval-1 --session enterprise_ops --provider external.mcp.browser.open_page --action open_page --arguments '{"url":"https://example.com"}' --authz authz-1 --actor agent-1 --json
-runwarden authority inspect approval-1 --json
-runwarden approval approve approval-1 --reviewer reviewer_alice --reason "reviewed scope and risk" --json
-```
-
-Approval records are consumed once by matching high-risk calls.
-
-## Reviewer Console
-
-The Reviewer Console launch bundle renders pending approval records with the
-same binding fields. Reviewers can inspect provider, action, actor, authz, and
-argument hash before entering a reason and choosing approve or deny.
-
-Browser submission still requires the Runwarden launch token and calls the Local
-API approval decision endpoints; the kernel-owned approval record remains the
-source of truth.
+High-risk provider calls consume matching approved records once. File-backed calls bind SHA-256 digests after kernel path policy allows the path and verify those digests again before approval consumption or execution.

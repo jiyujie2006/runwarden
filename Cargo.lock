@@ -415,19 +415,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
-name = "runwarden-api"
-version = "0.1.0"
-dependencies = [
- "runwarden-assurance",
- "runwarden-kernel",
- "runwarden-providers",
- "serde",
- "serde_json",
- "tempfile",
- "uuid",
-]
-
-[[package]]
 name = "runwarden-assurance"
 version = "0.1.0"
 dependencies = [
@@ -443,7 +430,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "runwarden-api",
  "runwarden-assurance",
  "runwarden-kernel",
  "runwarden-providers",

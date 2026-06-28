@@ -1,0 +1,5 @@
+[
+  "obs_memory_poison_inspect",
+  "obs_memory_poison_knowledge_review",
+  "obs_memory_poison_write_denied"
+]

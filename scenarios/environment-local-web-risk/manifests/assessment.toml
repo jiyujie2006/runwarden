@@ -1,0 +1,18 @@
+version = "1"
+name = "environment local web risk"
+mode = "audit"
+provider_allowlist = [
+  "runwarden.input.inspect",
+  "external.mcp.browser.open_page",
+  "external.api.request"
+]
+
+[[roots]]
+name = "workspace"
+path = "."
+
+[active_assessment]
+enabled = true
+
+[actor]
+id = "demo-agent"

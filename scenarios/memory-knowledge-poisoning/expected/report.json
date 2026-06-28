@@ -1,0 +1,22 @@
+{
+  "claims": [
+    {
+      "id": "memory-poison-1",
+      "text": "Input inspection completed for the retrieved poisoning content.",
+      "obs_refs": ["obs_memory_poison_inspect"],
+      "support": {"provider": "runwarden.input.inspect", "event_type": "provider_completed", "decision": "allowed", "execution_status": "completed", "side_effect_executed": false}
+    },
+    {
+      "id": "memory-poison-2",
+      "text": "The knowledge write was held for reviewer approval before execution.",
+      "obs_refs": ["obs_memory_poison_knowledge_review"],
+      "support": {"provider": "external.knowledge.write", "event_type": "provider_approval_pending", "decision": "requires_review", "execution_status": "not_executed", "side_effect_executed": false}
+    },
+    {
+      "id": "memory-poison-3",
+      "text": "The memory write was denied before side effects.",
+      "obs_refs": ["obs_memory_poison_write_denied"],
+      "support": {"provider": "external.memory.write", "event_type": "provider_denied", "decision": "denied", "execution_status": "not_executed", "side_effect_executed": false}
+    }
+  ]
+}

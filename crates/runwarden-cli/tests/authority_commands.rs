@@ -1,5 +1,9 @@
 use std::{fs, process::Command};
 
+use runwarden_kernel::{
+    authority::{ApprovalBinding, ApprovalRecord, ApprovalState},
+    evidence::hex_sha256,
+};
 use tempfile::tempdir;
 
 fn toml_basic_string(value: &str) -> String {
@@ -30,15 +34,15 @@ fn authority_create_and_inspect_manage_bound_approval_records() {
             "authority",
             "create",
             "--approval",
-            "approval-stdio-1",
+            "approval-api-1",
             "--session",
-            "enterprise_ops",
+            "contest_ops",
             "--provider",
-            "external.mcp.browser.open_page",
+            "external.api.request",
             "--action",
-            "open_page",
+            "request",
             "--arguments",
-            r#"{"url":"https://example.com"}"#,
+            r#"{"url":"https://api.example.com/upload"}"#,
             "--authz",
             "authz-1",
             "--actor",
@@ -54,29 +58,25 @@ fn authority_create_and_inspect_manage_bound_approval_records() {
         String::from_utf8_lossy(&create.stderr)
     );
     let create_stdout = String::from_utf8(create.stdout).expect("utf8 stdout");
-    assert!(create_stdout.contains(r#""approval_id": "approval-stdio-1""#));
+    assert!(create_stdout.contains(r#""approval_id": "approval-api-1""#));
     assert!(create_stdout.contains(r#""state": "pending""#));
-    assert!(create_stdout.contains("external.mcp.browser.open_page"));
+    assert!(create_stdout.contains("external.api.request"));
     assert!(
         dir.path()
-            .join(".runwarden/approvals/approval-stdio-1.json")
+            .join(".runwarden/approvals/approval-api-1.json")
             .exists()
     );
 
     let inspect = Command::new(env!("CARGO_BIN_EXE_runwarden"))
         .current_dir(dir.path())
-        .args(["authority", "inspect", "approval-stdio-1", "--json"])
+        .args(["authority", "inspect", "approval-api-1", "--json"])
         .output()
         .expect("authority inspect");
 
-    assert!(
-        inspect.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&inspect.stderr)
-    );
+    assert!(inspect.status.success());
     let inspect_stdout = String::from_utf8(inspect.stdout).expect("utf8 stdout");
-    assert!(inspect_stdout.contains(r#""provider": "external.mcp.browser.open_page""#));
-    assert!(inspect_stdout.contains(r#""action": "open_page""#));
+    assert!(inspect_stdout.contains(r#""provider": "external.api.request""#));
+    assert!(inspect_stdout.contains(r#""action": "request""#));
     assert!(inspect_stdout.contains(r#""authz_id": "authz-1""#));
     assert!(inspect_stdout.contains(r#""actor_id": "agent-1""#));
 }
@@ -93,7 +93,7 @@ fn authority_create_rejects_path_traversal_approval_ids() {
             "--approval",
             "../approval-1",
             "--session",
-            "enterprise_ops",
+            "contest_ops",
             "--provider",
             "runwarden.report.render",
             "--action",
@@ -110,19 +110,20 @@ fn authority_create_rejects_path_traversal_approval_ids() {
     assert!(!dir.path().join(".runwarden/approvals").exists());
 }
 
-#[cfg(unix)]
 #[test]
-fn provider_call_executes_external_mcp_stdio_adapter_from_manifest() {
+fn provider_call_consumes_matching_external_provider_approval_after_policy_allow() {
     let dir = tempdir().expect("tempdir");
+    let workspace = dir.path().join("workspace");
+    fs::create_dir(&workspace).expect("workspace");
     let session_manifest_path = dir.path().join("assessment.toml");
     fs::write(
         &session_manifest_path,
         format!(
             r#"
 version = "1"
-name = "external mcp session"
+name = "contest external session"
 mode = "audit"
-provider_allowlist = ["external.mcp.browser.open_page"]
+provider_allowlist = ["external.api.request"]
 
 [[roots]]
 name = "workspace"
@@ -131,84 +132,37 @@ path = {}
 [active_assessment]
 enabled = true
 "#,
-            toml_basic_string(&dir.path().to_string_lossy())
+            toml_basic_string(&workspace.to_string_lossy())
         ),
     )
     .expect("write session manifest");
-    let manifest_path = dir.path().join("external-mcp.json");
-    fs::write(
-        &manifest_path,
-        format!(
-            r#"{{
-              "schema_version": "1",
-              "provider_id": "external.mcp.browser.open_page",
-              "provider_class": "external",
-              "kind": "mcp",
-              "risk": "high",
-              "side_effects": ["process_spawn"],
-              "transport": "stdio",
-              "downstream_identity": "browser-mcp",
-              "tool_identity": "open_page",
-              "declared_permissions": ["process_spawn"],
-              "allowed_origins": [],
-              "command_allowlist": ["cat"],
-              "working_root": "{}",
-              "schema_pin": {{
-                "algorithm": "sha256",
-                "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-                "schema": {{"type": "object"}}
-              }},
-              "observed_schema": {{"type": "object"}}
-            }}"#,
-            dir.path().display()
-        ),
-    )
-    .expect("write manifest");
-    let input_path = dir.path().join("adapter-request.json");
+    let input_path = workspace.join("api-request.json");
     fs::write(
         &input_path,
-        serde_json::json!({
-            "manifest_path": manifest_path,
-            "transport": "stdio",
-            "command": "cat",
-            "cwd": dir.path(),
-            "request": {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "open_page",
-                "params": {"url": "https://example.com"}
-            }
-        })
-        .to_string(),
+        serde_json::json!({"url": "https://api.example.com/upload"}).to_string(),
     )
     .expect("write request");
     let create_session = Command::new(env!("CARGO_BIN_EXE_runwarden"))
         .current_dir(dir.path())
         .args(["session", "create", "--manifest"])
         .arg(&session_manifest_path)
-        .args(["--session", "enterprise_ops", "--json"])
+        .args(["--session", "contest_ops", "--json"])
         .output()
         .expect("session create");
-    assert!(
-        create_session.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&create_session.stderr)
-    );
+    assert!(create_session.status.success());
+
     let request_bytes = fs::read(&input_path).expect("request bytes");
-    let manifest_bytes = fs::read(&manifest_path).expect("manifest bytes");
     let arguments = serde_json::json!({
         "input_path": input_path.to_string_lossy(),
-        "input_path_sha256": hex_sha256(&request_bytes),
-        "manifest_path": manifest_path.to_string_lossy(),
-        "manifest_path_sha256": hex_sha256(&manifest_bytes),
-        "root": "workspace"
+        "root": "workspace",
+        "input_path_sha256": hex_sha256(&request_bytes)
     });
     let mut approval = ApprovalRecord::new(
         "approval-1",
         ApprovalBinding {
-            session_id: "enterprise_ops".to_string(),
-            provider: "external.mcp.browser.open_page".to_string(),
-            action: "open_page".to_string(),
+            session_id: "contest_ops".to_string(),
+            provider: "external.api.request".to_string(),
+            action: "request".to_string(),
             argument_hash: hex_sha256(
                 &serde_json::to_vec(&arguments).expect("arguments serialize"),
             ),
@@ -217,7 +171,7 @@ enabled = true
         },
     );
     approval
-        .approve("reviewer-alice", "reviewed stdio adapter execution")
+        .approve("reviewer-alice", "reviewed external API demo call")
         .expect("approval can be approved");
     let mut stale_approval = ApprovalRecord::new("approval-0", approval.binding.clone());
     stale_approval.state = ApprovalState::Consumed;
@@ -240,9 +194,9 @@ enabled = true
             "provider",
             "call",
             "--session",
-            "enterprise_ops",
+            "contest_ops",
             "--provider",
-            "external.mcp.browser.open_page",
+            "external.api.request",
             "--input",
         ])
         .arg(&input_path)
@@ -250,7 +204,7 @@ enabled = true
         .arg("workspace")
         .arg("--json")
         .output()
-        .expect("external mcp provider call");
+        .expect("external provider call");
 
     assert!(
         output.status.success(),
@@ -258,111 +212,19 @@ enabled = true
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
-    assert!(stdout.contains(r#""provider": "external.mcp.browser.open_page""#));
-    assert!(stdout.contains(r#""transport": "stdio""#));
-    assert!(stdout.contains(r#""execution_status": "completed""#));
-    assert!(stdout.contains(r#""side_effect_executed": true"#));
-    assert!(stdout.contains("Content-Length:"));
+    assert!(stdout.contains(r#""provider": "external.api.request""#));
+    assert!(stdout.contains(r#""simulated": true"#));
+    assert!(stdout.contains(r#""side_effect_executed": false"#));
     let saved_approval =
         fs::read_to_string(approval_dir.join("approval-1.json")).expect("saved approval");
     assert!(saved_approval.contains(r#""state": "consumed""#));
 }
 
 #[test]
-fn provider_call_denies_external_mcp_manifest_path_outside_session_root() {
-    let dir = tempdir().expect("tempdir");
-    let workspace = dir.path().join("workspace");
-    fs::create_dir(&workspace).expect("workspace");
-    let session_manifest_path = dir.path().join("assessment.toml");
-    fs::write(
-        &session_manifest_path,
-        format!(
-            r#"
-version = "1"
-name = "external mcp session"
-mode = "audit"
-provider_allowlist = ["external.mcp.browser.open_page"]
-
-[[roots]]
-name = "workspace"
-path = {}
-
-[active_assessment]
-enabled = true
-"#,
-            toml_basic_string(&workspace.to_string_lossy())
-        ),
-    )
-    .expect("write session manifest");
-    let outside_manifest = dir.path().join("external-mcp-manifest-dir");
-    fs::create_dir(&outside_manifest).expect("outside manifest dir");
-    let input_path = workspace.join("adapter-request.json");
-    fs::write(
-        &input_path,
-        serde_json::json!({
-            "manifest_path": outside_manifest,
-            "transport": "stdio",
-            "command": "cat",
-            "cwd": workspace,
-            "request": {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "open_page",
-                "params": {"url": "https://example.com"}
-            }
-        })
-        .to_string(),
-    )
-    .expect("write request");
-    let create_session = Command::new(env!("CARGO_BIN_EXE_runwarden"))
-        .current_dir(dir.path())
-        .args(["session", "create", "--manifest"])
-        .arg(&session_manifest_path)
-        .args(["--session", "enterprise_ops", "--json"])
-        .output()
-        .expect("session create");
-    assert!(
-        create_session.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&create_session.stderr)
-    );
-
-    let output = Command::new(env!("CARGO_BIN_EXE_runwarden"))
-        .current_dir(dir.path())
-        .args([
-            "provider",
-            "call",
-            "--session",
-            "enterprise_ops",
-            "--provider",
-            "external.mcp.browser.open_page",
-            "--input",
-        ])
-        .arg(&input_path)
-        .arg("--root")
-        .arg("workspace")
-        .arg("--json")
-        .output()
-        .expect("external mcp provider call");
-
-    assert!(
-        output.status.success(),
-        "stderr should not expose a pre-gate manifest read: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
-    assert!(stdout.contains(r#""decision": "denied""#));
-    assert!(stdout.contains(r#""error_kind": "root_escape""#));
-    assert!(stdout.contains(r#""gate_id": "root""#));
-    assert!(!stdout.contains("No such file"));
-    assert!(!stdout.contains(r#""side_effect_executed": true"#));
-}
-
-#[test]
 fn provider_call_verifies_bound_files_before_persisting_consumed_approval() {
     let source = include_str!("../src/main.rs");
     let verify_index = source
-        .find("verify_cli_file_digests(call)?;")
+        .find("verify_cli_file_digests(&call)?;")
         .expect("provider call digest verification");
     let persist_index = source
         .find("persist_consumed_cli_approval(")

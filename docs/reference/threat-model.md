@@ -14,7 +14,7 @@ report drafts can be adversarial or compromised.
 - Approval replay or approval binding mismatch.
 - Uncited report fabrication.
 - Trace tampering.
-- Artifact leakage.
+- Demo/report/UI output path escape.
 
 ## Mitigations
 
@@ -24,12 +24,12 @@ Runwarden mitigates these through:
 - scoped roots
 - private and local egress checks
 - schema pins
-- manifest and provider certification
+- manifest and provider contract checks
 - actor-bound authz
 - bound single-use approval records
 - trace hash-chain verification
 - report citation linting
-- artifact redaction sidecars and leak scan
+- relative output path enforcement for demo, report, and UI files
 
 External MCP HTTP/SSE adapters deny private or local IP literals and
 resolutions before connecting so downstream tool endpoints cannot be used for

@@ -1,0 +1,12 @@
+[
+  {
+    "provider": "external.api.request",
+    "action": "request",
+    "decision": "denied",
+    "execution_status": "not_executed",
+    "side_effect_executed": false,
+    "obs_ref": "obs_prompt_file_exfil_denied",
+    "error_kind": "provider_not_allowed",
+    "reason": "exfiltration API provider is outside the scenario allowlist"
+  }
+]

@@ -1,0 +1,17 @@
+version = "1"
+name = "tool hijack email api"
+mode = "audit"
+provider_allowlist = [
+  "runwarden.input.inspect",
+  "external.email.send"
+]
+
+[[roots]]
+name = "workspace"
+path = "."
+
+[active_assessment]
+enabled = true
+
+[actor]
+id = "demo-agent"

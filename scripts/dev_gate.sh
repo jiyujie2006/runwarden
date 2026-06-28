@@ -8,6 +8,5 @@ if ! command -v cargo-deny >/dev/null 2>&1; then
 fi
 cargo deny check
 cargo test --workspace
-scripts/check_ts_contracts.sh
 pnpm test
 pnpm build

@@ -15,7 +15,6 @@ path = "src/main.rs"
 anyhow.workspace = true
 clap.workspace = true
 runwarden-assurance = { path = "../runwarden-assurance" }
-runwarden-api = { path = "../runwarden-api" }
 runwarden-kernel = { path = "../runwarden-kernel" }
 runwarden-providers = { path = "../runwarden-providers" }
 serde.workspace = true

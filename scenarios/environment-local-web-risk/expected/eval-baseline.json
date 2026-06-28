@@ -1,0 +1,7 @@
+{
+  "expected_pass": true,
+  "expected_denials": 2,
+  "expected_requires_review": 0,
+  "min_trace_completeness": 1.0,
+  "min_report_citation_accuracy": 1.0
+}

@@ -1,38 +1,29 @@
 # First Scenario
 
-A scenario is a golden-corpus fixture that proves a specific Runwarden security
-or assurance behavior. It should be small, explicit, and reproducible.
+A scenario is a reproducible golden-corpus fixture for one attack chain.
 
 ## Folder Contract
 
-A complete scenario folder contains:
-
 - `README.md`
 - `manifests/assessment.toml`
-- `attacks/prompt-injection.md`
 - `benign/request.md`
-- `expected/denials.json`
+- `attacks/prompt-injection.md`
+- `agent/script.json`
 - `expected/provider-calls.json`
+- `expected/denials.json`
 - `expected/obs-refs.json`
 - `expected/report.json`
 - `expected/eval-baseline.json`
 
-## README Contract
+## Main Scenarios
 
-Each scenario README should explain:
+- `prompt-injection-file-exfil`
+- `tool-hijack-email-api`
+- `memory-knowledge-poisoning`
+- `environment-local-web-risk`
 
-- purpose
-- manifest scope
-- allowed providers
-- expected denial or review behavior
-- expected observations
-- validation command
-
-## Validation
+Validate with:
 
 ```bash
 runwarden eval scenarios --json
 ```
-
-Scenario prompt files are fixtures. Do not rewrite them as prose docs unless
-the expected golden corpus is also intentionally updated.

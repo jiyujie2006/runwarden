@@ -1,10 +1,10 @@
 # Reviewer Console Guide
 
 The Reviewer Console is a static security workbench for humans. It displays
-Rust-owned state and submits reviewer decisions through the token-protected
-Local API. It is not a policy engine.
+Rust-produced demo JSON and does not call a Local API or submit approval
+decisions. It is not a policy engine.
 
-## Local Launch
+## Local Build
 
 Build the workspace first:
 
@@ -12,50 +12,39 @@ Build the workspace first:
 cargo build --workspace
 ```
 
-Generate a static launch bundle:
+Generate demo JSON:
 
 ```bash
-target/debug/runwarden ui \
-  --bind 127.0.0.1 \
-  --port 8088 \
-  --artifacts artifacts \
+target/debug/runwarden demo run \
+  --scenario prompt-injection-file-exfil \
+  --output artifacts/demo/prompt-injection-file-exfil \
   --json
 ```
 
-The JSON response includes:
-
-- `launch_url`: `file://` URL for `reviewer-console.html`.
-- `script_path`: local companion script used by browser forms.
-- `local_api_url`: Local API origin that approval forms call.
-
-Start the Local API when browser approval submission is needed:
+Build the static console:
 
 ```bash
-target/debug/runwarden api serve \
-  --bind 127.0.0.1 \
-  --port 8088 \
+target/debug/runwarden ui build \
+  --input artifacts/demo \
+  --output artifacts/reviewer-console.html \
   --json
 ```
+
+The JSON response includes the static HTML path and scenario counts.
 
 ## Review Workflow
 
-1. Create or load a manifest-backed session.
-2. Inspect the status strip for risk, trace integrity, pending approvals, and
-   gate status.
-3. Check Agent Boundary and Provider Registry before reviewing actions.
-4. Open a pending approval row.
-5. Inspect provider, action, risk, target, side effects, actor, authz,
-   argument hash, and related `obs_*` references in the details drawer.
-6. Enter the Local API launch token in Settings.
-7. Approve or deny with reviewer identity and reason.
+1. Open the generated static HTML.
+2. Inspect scenario status, risk, trace integrity, pending review counts, and
+   denial counts.
+3. Check provider outcomes and `obs_*` references for each attack chain.
+4. Open the generated report path for the trace-backed narrative.
 
 ## Security Rules
 
-- Approval mutations go through Local API launch-token, Host, and Origin checks.
 - The browser UI must not mutate authority directly.
-- High-risk approvals require visible context before the reviewer can approve
-  or deny.
-- `--artifacts` must be a relative workspace path. Absolute paths, parent
+- High-risk review states come from Rust-produced demo JSON.
+- `--output` must be a relative workspace path. Absolute paths, parent
   traversal, and symlink escapes are rejected before writing.
 - The WebUI displays Rust-owned state; it must not reimplement provider,
   approval, egress, or report policy in TypeScript.

@@ -1,8 +1,8 @@
 # Agent Security Kernel
 
 The Rust kernel is the source of truth for Runwarden security decisions. CLI,
-MCP, Local API, WebUI, and TypeScript packages may present state or call Rust
-contracts, but they must not duplicate allow/deny policy.
+MCP, and TypeScript presentation code may display state or call contracts, but
+they must not duplicate allow/deny policy.
 
 ## Enforcement Path
 
@@ -19,8 +19,8 @@ contracts, but they must not duplicate allow/deny policy.
 9. Return a `ProviderOutcome` with separate policy decision and execution
    status.
 
-Every denial must report `side_effect_executed: false` unless a lower-level
-failure happened after execution began.
+Every denial, rejection, or review block must report
+`side_effect_executed: false`.
 
 ## Authority and Approval
 
@@ -34,8 +34,8 @@ High-risk approval records are single-use. A matching approval binds:
 - actor id
 
 Session-derived authz grants are actor-bound, so another actor cannot reuse the
-same authz id. Reviewer actions can be submitted through CLI or the Local API,
-but the kernel-owned `ApprovalRecord` remains the source of truth.
+same authz id. Reviewer decisions are represented as Rust-owned
+`ApprovalRecord` values.
 
 ## Trace and Reports
 
@@ -49,7 +49,8 @@ side-effect assertions.
 
 ## External Providers
 
-External providers are kernel-managed provider manifests. A manifest binds:
+External and demo providers are kernel-managed provider manifests. A manifest
+binds:
 
 - downstream identity and tool identity
 - provider kind and class

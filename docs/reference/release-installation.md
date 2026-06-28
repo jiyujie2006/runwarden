@@ -1,7 +1,11 @@
-# Release Installation
+# Contest Gate Installation
 
-Release evidence is produced by `scripts/release_gate_local.sh`,
-`scripts/generate_artifacts.sh`, and `.github/workflows/release.yml`.
+The contest edition does not publish a Local API, SDK, or release artifact
+bundle. The retained local verification entry point is:
+
+```bash
+bash scripts/release_gate_local.sh
+```
 
 ## Named Binaries
 
@@ -9,28 +13,12 @@ Release evidence is produced by `scripts/release_gate_local.sh`,
 - `runwarden-mcp`
 - `runwarden-kernel`
 
-Release workflows build named binaries from the Rust workspace and upload
-release evidence artifacts.
+## Generated Review Outputs
 
-## Release Artifacts
+The local contest gate may write:
 
-Release artifacts include:
+- deterministic demo artifacts under `artifacts/demo/`
+- a Markdown report under `artifacts/reports/contest-report.md`
+- static reviewer console HTML at `artifacts/reviewer-console.html`
 
-- generated schemas
-- submission artifacts
-- SBOM
-- provenance
-- cert results
-- bench results
-- agent-native eval results
-- scenario golden-corpus eval results
-- sealed artifact manifest and redaction sidecars
-
-## Local Evidence Command
-
-```bash
-bash scripts/release_gate_local.sh
-```
-
-Use [Release Process](../development/release-process.md) for the full local and
-GitHub workflow.
+These outputs are review evidence, not installable product artifacts.

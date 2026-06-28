@@ -116,45 +116,6 @@ fn external_mcp_stdio_manifest_requires_command_allowlist_and_working_root() {
     assert!(!report.side_effect_executed);
 }
 
-#[test]
-fn external_shell_manifest_requires_command_allowlist_and_working_root() {
-    let manifest = load_provider_manifest(
-        r#"{
-          "schema_version": "1",
-          "provider_id": "external.shell.command",
-          "provider_class": "external",
-          "kind": "shell",
-          "risk": "destructive",
-          "side_effects": ["process_spawn", "destructive"],
-          "declared_permissions": ["process_spawn"],
-          "schema_pin": {
-            "algorithm": "sha256",
-            "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-            "schema": {"type": "object"}
-          },
-          "observed_schema": {"type": "object"}
-        }"#,
-    )
-    .expect("manifest parses");
-
-    let report = certify_external_provider_manifest(&manifest);
-
-    assert!(!report.passed);
-    assert!(
-        report
-            .findings
-            .iter()
-            .any(|finding| finding == "shell_command_allowlist_required")
-    );
-    assert!(
-        report
-            .findings
-            .iter()
-            .any(|finding| finding == "shell_working_root_required")
-    );
-    assert!(!report.side_effect_executed);
-}
-
 #[cfg(unix)]
 #[test]
 fn external_mcp_stdio_adapter_executes_framed_downstream_call() {

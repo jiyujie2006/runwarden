@@ -13,7 +13,7 @@ fn trace_events() -> Vec<TraceEvent> {
     let second = TraceEvent::sealed(
         "obs_2".to_string(),
         "provider_denied".to_string(),
-        Some("external.shell.command".to_string()),
+        Some("external.api.request".to_string()),
         json!({"decision":"denied"}),
         Some(first.event_hash.clone()),
     );

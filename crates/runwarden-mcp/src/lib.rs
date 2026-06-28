@@ -1,15 +1,9 @@
 use anyhow::{Context, bail};
-use runwarden_assurance::accountability::accountability_summary;
-use runwarden_assurance::audit::audit_summary;
-use runwarden_assurance::eval::{
-    AgentNativeConfigCase, AgentNativeExpectation, evaluate_agent_native_configs,
-};
 use runwarden_assurance::report::{
     RenderFormat, ReportDraft, lint_report_against_trace, render_report,
 };
 use runwarden_kernel::evidence::{InMemoryTraceStore, TraceEvent, TraceQuery};
 use runwarden_kernel::kernel::{KernelEnforcer, KernelPolicy, ProviderRegistry};
-use runwarden_kernel::manifest::{AssessmentManifest, SessionManifest};
 use runwarden_kernel::{ErrorKind, KernelProvider, PolicyDecision, ProviderCall, ProviderOutcome};
 use runwarden_providers::catalog::default_first_party_providers;
 use runwarden_providers::input::{InputInspectPolicy, InputSource, inspect_input};
@@ -31,10 +25,6 @@ const RUNWARDEN_TOOLS: &[(&str, &str)] = &[
     (
         "runwarden.provider.status",
         "Return provider availability, risk, side effects, and approval requirements.",
-    ),
-    (
-        "runwarden.session.create_from_manifest",
-        "Create a session manifest from an assessment manifest without side effects.",
     ),
     (
         "runwarden.trace.verify",
@@ -193,7 +183,6 @@ fn handle_tools_call(id: Value, params: Option<&Value>) -> Value {
         "runwarden.provider.call" => handle_provider_call(id, params),
         "runwarden.provider.list" => handle_provider_list(id, params),
         "runwarden.provider.status" => handle_provider_status(id, params),
-        "runwarden.session.create_from_manifest" => handle_session_create_from_manifest(id, params),
         "runwarden.trace.verify" => handle_trace_verify(id, tool_arguments(params)),
         "runwarden.trace.export" => handle_trace_export(id, tool_arguments(params)),
         "runwarden.report.lint" => handle_report_lint(id, params),
@@ -252,46 +241,6 @@ fn handle_provider_call(id: Value, params: Option<&Value>) -> Value {
                     "execution_status": "completed",
                     "side_effect_executed": false,
                     "output": inspection
-                }),
-            )
-        }
-        "runwarden.audit.summary" => {
-            let trace_events = inline_trace_events(arguments);
-            tool_result(
-                id,
-                json!({
-                    "provider": provider,
-                    "decision": "allowed",
-                    "execution_status": "completed",
-                    "side_effect_executed": false,
-                    "output": audit_summary(&trace_events)
-                }),
-            )
-        }
-        "runwarden.accountability.summary" => {
-            let trace_events = inline_trace_events(arguments);
-            tool_result(
-                id,
-                json!({
-                    "provider": provider,
-                    "decision": "allowed",
-                    "execution_status": "completed",
-                    "side_effect_executed": false,
-                    "output": accountability_summary(&trace_events)
-                }),
-            )
-        }
-        "runwarden.eval.agent-native" => {
-            let cases = inline_agent_native_cases(arguments);
-            let result = evaluate_agent_native_configs(&cases);
-            tool_result(
-                id,
-                json!({
-                    "provider": provider,
-                    "decision": if result.passed { "allowed" } else { "denied" },
-                    "execution_status": "completed",
-                    "side_effect_executed": false,
-                    "output": result
                 }),
             )
         }
@@ -514,28 +463,6 @@ fn trace_query_from_args(arguments: &Value) -> TraceQuery {
     }
 }
 
-fn inline_agent_native_cases(arguments: &Value) -> Vec<AgentNativeConfigCase> {
-    arguments
-        .get("agent_configs")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|case| {
-            let id = case.get("id").and_then(Value::as_str)?.to_string();
-            let config = case.get("config")?.clone();
-            let expectation = match case.get("expectation").and_then(Value::as_str) {
-                Some("raw_tools_denied") => AgentNativeExpectation::RawToolsDenied,
-                _ => AgentNativeExpectation::RunwardenOnlyAllowed,
-            };
-            Some(AgentNativeConfigCase {
-                id,
-                config,
-                expectation,
-            })
-        })
-        .collect()
-}
-
 fn handle_provider_list(id: Value, params: Option<&Value>) -> Value {
     let arguments = params
         .and_then(|params| params.get("arguments"))
@@ -596,47 +523,6 @@ fn handle_provider_status(id: Value, params: Option<&Value>) -> Value {
             "risk": provider.risk,
             "side_effects": provider.side_effects,
             "approval_required": approval_required(&provider),
-            "side_effect_executed": false
-        }),
-    )
-}
-
-fn handle_session_create_from_manifest(id: Value, params: Option<&Value>) -> Value {
-    let arguments = params
-        .and_then(|params| params.get("arguments"))
-        .unwrap_or(&Value::Null);
-    let session_id = arguments
-        .get("session_id")
-        .and_then(Value::as_str)
-        .unwrap_or("default");
-    let Some(manifest_toml) = arguments.get("manifest_toml").and_then(Value::as_str) else {
-        return jsonrpc_error(
-            id,
-            -32602,
-            "session creation requires arguments.manifest_toml",
-            json!({"side_effect_executed": false}),
-        );
-    };
-
-    let assessment = match AssessmentManifest::from_toml_str(manifest_toml) {
-        Ok(assessment) => assessment,
-        Err(err) => {
-            return tool_error_result(
-                id,
-                json!({
-                    "error_kind": ErrorKind::ManifestInvalid,
-                    "message": err.to_string(),
-                    "side_effect_executed": false
-                }),
-            );
-        }
-    };
-    let session = SessionManifest::from_assessment(session_id, &assessment);
-
-    tool_result(
-        id,
-        json!({
-            "session": session,
             "side_effect_executed": false
         }),
     )
