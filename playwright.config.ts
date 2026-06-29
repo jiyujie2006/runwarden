@@ -17,7 +17,7 @@ function chromiumExecutable(): string | undefined {
       ? process.env.PLAYWRIGHT_BROWSERS_PATH
       : path.join(os.homedir(), ".cache", "ms-playwright");
   if (!fs.existsSync(cacheRoot)) {
-    return undefined;
+    return systemChromiumExecutable();
   }
 
   return fs
@@ -32,7 +32,17 @@ function chromiumExecutable(): string | undefined {
     })
     .filter((candidate) => fs.existsSync(candidate))
     .sort()
-    .at(-1);
+    .at(-1) ?? systemChromiumExecutable();
+}
+
+function systemChromiumExecutable(): string | undefined {
+  return [
+    "/usr/bin/google-chrome",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+    "/opt/google/chrome/chrome",
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+  ].find((candidate) => fs.existsSync(candidate));
 }
 
 const executablePath = chromiumExecutable();

@@ -1,100 +1,151 @@
 import { expect, test } from "@playwright/test";
-import { renderReviewerConsoleHtml } from "../../packages/webui/src/index";
+import {
+  renderDemoReviewerConsoleHtml,
+  type DemoScenarioInput
+} from "../../packages/webui/src/index";
 
-const html = renderReviewerConsoleHtml(
+const demoInputs: DemoScenarioInput[] = [
   {
-    sessionId: "session-1",
-    riskStatus: "requires_review",
-    traceIntegrity: "verified",
-    pendingApprovalCount: 1,
-    fastGateStatus: "passed",
-    fullGateStatus: "missing",
-    moduleStates: {
-      agentBoundary: {
-        state: "success",
-        count: 1,
-        message: "Runwarden-only agent config verified"
+    scenario: "prompt-injection-file-exfil",
+    provider_calls: [
+      {
+        provider: "runwarden.input.inspect",
+        action: "inspect",
+        decision: "allowed",
+        execution_status: "completed",
+        side_effect_executed: false,
+        obs_ref: "obs_prompt_file_inspect"
       },
-      providers: {
-        state: "partial",
-        count: 12,
-        message: "12 providers visible through kernel contracts"
+      {
+        provider: "external.mcp.filesystem.read_file",
+        action: "read_file",
+        decision: "requires_review",
+        execution_status: "not_executed",
+        side_effect_executed: false,
+        obs_ref: "obs_prompt_file_read_review"
       },
-      trace: {
-        state: "success",
-        count: 42,
-        message: "42 verified obs events"
-      },
-      accountability: {
-        state: "success",
-        message: "requester -> agent -> reviewer"
-      },
-      reports: {
-        state: "partial",
-        count: 2,
-        message: "2 reports ready for citation review"
-      },
-      artifacts: {
-        state: "success",
-        count: 6,
-        message: "6 sealed artifacts"
-      },
-      assurance: {
-        state: "partial",
-        message: "Fast gate passed, full gate missing"
+      {
+        provider: "external.api.request",
+        action: "request",
+        decision: "denied",
+        execution_status: "not_executed",
+        side_effect_executed: false,
+        obs_ref: "obs_prompt_file_exfil_denied"
       }
-    }
+    ],
+    denials: [
+      {
+        provider: "external.api.request",
+        action: "request",
+        decision: "denied",
+        execution_status: "not_executed",
+        side_effect_executed: false,
+        obs_ref: "obs_prompt_file_exfil_denied"
+      }
+    ],
+    metrics: {
+      trace_completeness: 1,
+      report_citation_accuracy: 1
+    },
+    report: {
+      claims: [
+        {
+          id: "file-exfil-denied",
+          text: "The external API exfiltration request was denied before side effects.",
+          obs_refs: ["obs_prompt_file_exfil_denied"]
+        }
+      ]
+    },
+    trace: [{ obs_id: "obs_prompt_file_exfil_denied" }],
+    lint: { ok: true }
   },
-  [
-    {
-      approvalId: "approval-1",
-      provider: "runwarden.report.render",
-      action: "render",
-      risk: "report_claim",
-      target: "artifacts/reports/submission-report.html",
-      sideEffects: ["artifact_write"],
-      argumentHash: "arg_hash_1",
-      authzId: "authz-1",
-      actorId: "agent-1",
-      obsRefs: ["obs_1", "obs_2"]
-    }
-  ]
-);
+  {
+    scenario: "environment-local-web-risk",
+    provider_calls: [
+      {
+        provider: "runwarden.input.inspect",
+        action: "inspect",
+        decision: "allowed",
+        execution_status: "completed",
+        side_effect_executed: false,
+        obs_ref: "obs_local_web_inspect"
+      },
+      {
+        provider: "external.mcp.browser.open_page",
+        action: "open_page",
+        decision: "denied",
+        execution_status: "not_executed",
+        side_effect_executed: false,
+        obs_ref: "obs_local_web_browser_denied"
+      }
+    ],
+    denials: [
+      {
+        provider: "external.mcp.browser.open_page",
+        action: "open_page",
+        decision: "denied",
+        execution_status: "not_executed",
+        side_effect_executed: false,
+        obs_ref: "obs_local_web_browser_denied"
+      }
+    ],
+    metrics: {
+      trace_completeness: 1,
+      report_citation_accuracy: 1
+    },
+    report: {
+      claims: [
+        {
+          id: "local-web-denied",
+          text: "Local/private network access was blocked before side effects.",
+          obs_refs: ["obs_local_web_browser_denied"]
+        }
+      ]
+    },
+    trace: [{ obs_id: "obs_local_web_browser_denied" }],
+    lint: { ok: true }
+  }
+];
+
+const html = renderDemoReviewerConsoleHtml(demoInputs);
 
 test.beforeEach(async ({ page }) => {
   await page.setContent(html, { waitUntil: "domcontentloaded" });
 });
 
-test("desktop reviewer console keeps review regions visible and separated", async ({ page }, testInfo) => {
+test("desktop reviewer console shows static scenario evidence without active control plane", async ({
+  page
+}, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "desktop layout check");
 
-  await expect(page.locator(".nav-brand")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Reviewer Console" })).toBeVisible();
-  await expect(page.locator(".top-status-strip .status-pill")).toHaveCount(6);
-  await expect(page.locator(".approval-module")).toContainText("1 pending");
-  await expect(page.locator(".approval-row .risk-chip")).toHaveText("report_claim");
-  await expect(page.locator(".approval-list")).toHaveAttribute("role", "list");
-  await expect(page.locator(".approval-row")).toHaveAttribute("role", "listitem");
-  await expect(page.locator(".approval-row")).toHaveAttribute("aria-current", "true");
-  await expect(page.locator(".approval-row")).toHaveClass(/is-selected/);
-  await expect(page.locator(".details-drawer")).toContainText("artifact_write");
+  await expect(page.locator(".rail")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Contest Reviewer Console" })).toBeVisible();
+  await expect(page.locator(".summary .status-pill")).toHaveCount(5);
+  await expect(page.locator(".scenario-card")).toHaveCount(2);
+  await expect(page.getByLabel("prompt-injection-file-exfil")).toContainText("Requires review");
+  await expect(page.getByLabel("prompt-injection-file-exfil")).toContainText(
+    "obs_prompt_file_exfil_denied"
+  );
+  await expect(page.getByLabel("environment-local-web-risk")).toContainText("Denials");
+  await expect(page.locator(".trace-verified")).toHaveCount(2);
   await expect(page.locator("script")).toHaveCount(0);
+  await expect(page.locator("button")).toHaveCount(0);
+  await expect(page.locator("form")).toHaveCount(0);
 
-  const background = await page.locator("body").evaluate((body) => getComputedStyle(body).backgroundImage);
-  expect(background).toContain("repeating-linear-gradient");
+  const background = await page
+    .locator("body")
+    .evaluate((body) => getComputedStyle(body).backgroundImage);
+  expect(background).toContain("linear-gradient");
   expect(background).not.toContain("radial-gradient");
 
-  const navBox = await page.locator(".left-nav").boundingBox();
-  const mainBox = await page.locator(".workbench-main").boundingBox();
-  const drawerBox = await page.locator(".details-drawer").boundingBox();
-  expect(navBox).not.toBeNull();
-  expect(mainBox).not.toBeNull();
-  expect(drawerBox).not.toBeNull();
-  expect(navBox!.x + navBox!.width).toBeLessThanOrEqual(mainBox!.x + 1);
-  expect(mainBox!.x + mainBox!.width).toBeLessThanOrEqual(drawerBox!.x + 1);
+  const railBox = await page.locator(".rail").boundingBox();
+  const workspaceBox = await page.locator(".workspace").boundingBox();
+  expect(railBox).not.toBeNull();
+  expect(workspaceBox).not.toBeNull();
+  expect(railBox!.x + railBox!.width).toBeLessThanOrEqual(workspaceBox!.x + 1);
 
-  for (const button of await page.locator("button").all()) {
-    const box = await button.boundingBox();
+  for (const pill of await page.locator(".status-pill").all()) {
+    const box = await pill.boundingBox();
     expect(box?.height).toBeGreaterThanOrEqual(44);
   }
 
@@ -103,26 +154,27 @@ test("desktop reviewer console keeps review regions visible and separated", asyn
   );
 });
 
-test("mobile reviewer console uses sticky top navigation without horizontal overflow", async ({ page }, testInfo) => {
+test("mobile reviewer console stacks navigation and scenario cards without horizontal overflow", async ({
+  page
+}, testInfo) => {
   test.skip(testInfo.project.name !== "mobile", "mobile layout check");
 
-  await expect(page.locator(".left-nav")).toHaveCSS("position", "sticky");
-  await expect(page.locator(".nav-brand")).toBeHidden();
-  await expect(page.locator(".command-bar")).toBeVisible();
-  await expect(page.locator(".approval-row")).toBeVisible();
+  await expect(page.locator(".rail")).toHaveCSS("position", "sticky");
+  await expect(page.locator(".summary")).toBeVisible();
+  await expect(page.locator(".scenario-card")).toHaveCount(2);
 
-  const navBox = await page.locator(".left-nav").boundingBox();
-  const commandBox = await page.locator(".command-bar").boundingBox();
-  expect(navBox).not.toBeNull();
-  expect(commandBox).not.toBeNull();
-  expect(navBox!.y + navBox!.height).toBeLessThanOrEqual(commandBox!.y + 1);
+  const railBox = await page.locator(".rail").boundingBox();
+  const workspaceBox = await page.locator(".workspace").boundingBox();
+  expect(railBox).not.toBeNull();
+  expect(workspaceBox).not.toBeNull();
+  expect(railBox!.y + railBox!.height).toBeLessThanOrEqual(workspaceBox!.y + 1);
 
   await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
-  await expect(page.locator(".left-nav")).toBeInViewport();
-  const scrolledNavBox = await page.locator(".left-nav").boundingBox();
-  expect(scrolledNavBox).not.toBeNull();
-  expect(scrolledNavBox!.y).toBeGreaterThanOrEqual(-1);
-  expect(scrolledNavBox!.y).toBeLessThanOrEqual(1);
+  await expect(page.locator(".rail")).toBeInViewport();
+  const scrolledRailBox = await page.locator(".rail").boundingBox();
+  expect(scrolledRailBox).not.toBeNull();
+  expect(scrolledRailBox!.y).toBeGreaterThanOrEqual(-1);
+  expect(scrolledRailBox!.y).toBeLessThanOrEqual(1);
 
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
     await page.evaluate(() => window.innerWidth + 1)
