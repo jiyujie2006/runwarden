@@ -179,11 +179,11 @@ fn provider_call_respects_kernel_session_allowlist_before_execution() {
 }
 
 #[test]
-fn provider_call_rejects_removed_inline_assurance_providers() {
+fn provider_call_rejects_unknown_provider_without_execution() {
     let response = call_tool(
         13,
         "runwarden.provider.call",
-        json!({ "provider":"runwarden.eval.agent-native" }),
+        json!({ "provider":"runwarden.provider.unsupported" }),
     );
 
     assert!(response.get("error").is_none());

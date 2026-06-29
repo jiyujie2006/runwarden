@@ -47,7 +47,7 @@ bash scripts/pr_fast_gate.sh
 bash scripts/release_gate_local.sh
 ```
 
-The release-style local gate runs fast Rust/TypeScript checks, strict repository
+The local contest gate runs fast Rust/TypeScript checks, strict repository
 validation, scenario evaluation, deterministic demo generation, contest report
 rendering, and static reviewer-console build.
 

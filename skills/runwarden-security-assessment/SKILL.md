@@ -18,13 +18,13 @@ directly. Use only `runwarden-mcp` and Runwarden provider calls.
 1. Load or create a manifest-backed session.
 2. Call `runwarden.provider.list` to discover allowed providers.
 3. Use `runwarden.provider.call` for every provider action.
-4. Run `runwarden.provider.call` with `runwarden.eval.agent-native` before
-   trusting agent config exposure.
-5. Verify trace input with `runwarden.trace.verify`.
-6. Export evidence through `runwarden.trace.export`.
-7. Lint reports with `runwarden.report.lint`.
-8. Render reports with `runwarden.report.render` only after every claim cites
+4. Verify trace input with `runwarden.trace.verify`.
+5. Export evidence through `runwarden.trace.export`.
+6. Lint reports with `runwarden.report.lint`.
+7. Render reports with `runwarden.report.render` only after every claim cites
    verified `obs_*` evidence.
+8. For contest demos, run `runwarden eval scenarios --json` and
+   `runwarden demo run --scenario <id> --output artifacts/demo/<id>`.
 
 ## Hard Rules
 

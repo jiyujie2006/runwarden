@@ -6,49 +6,46 @@ All notable changes to Runwarden are documented in this file.
 
 ### Changed
 
-- Reworked repository documentation around a concise top-level README, grouped
-  docs index, persistent repository review, expanded reference pages, and
-  scenario/example README guidance.
+- Refocused Runwarden around the contest red-team range workflow: deterministic
+  scenarios, Rust-owned provider mediation, trace-backed reports, and a static
+  reviewer console.
+- Narrowed the active CLI, MCP, provider, docs, and TypeScript surfaces to the
+  contest demo path.
+- Reworked local and CI gates to validate the four scenario corpus, demo
+  artifacts, report rendering, and static WebUI build.
+- Simplified `runwarden-assurance` to report lint/render and scenario
+  evaluation support.
 
-### Fixed
+### Added
 
-- Fixed Windows workspace test failures by escaping manifest fixture paths,
-  preserving scoped-root evidence paths relative to their configured root, and
-  making provider runtime assertions platform-aware.
-- Fixed Reviewer Console launch bundles to use file `launch_url` values, reject
-  artifact path escapes, render pending approval state, and submit browser
-  approve/deny decisions through the token-protected Local API.
-- Preserved EOF-terminated multiline raw JSON support in `runwarden-mcp` while
-  keeping bounded stdio frame reads.
-- Aligned Rust and CLI agent-config certification with TypeScript config tools
-  for malformed `args` and `transport` override rejection.
-- Verified CLI-bound file digests before persisting consumed approval state.
-- Clarified completed report-claim semantics so negated denial text does not
-  require a denial observation.
+- Added four reproducible attack scenarios:
+  `prompt-injection-file-exfil`, `tool-hijack-email-api`,
+  `memory-knowledge-poisoning`, and `environment-local-web-risk`.
+- Added deterministic demo generation through `runwarden demo run`.
+- Added scenario-suite report rendering through
+  `runwarden report render --scenario-suite scenarios`.
+
+### Removed
+
+- Removed non-contest delivery surfaces from the active workspace and public
+  command set.
+- Removed legacy scenario corpora so `scenarios/` contains only the four main
+  contest scenarios.
 
 ## [0.1.0.0] - 2026-05-28
 
 ### Added
 
-- Added the Runwarden enterprise Rust workspace with kernel enforcement, provider contracts, authority approvals, trace evidence, artifact sealing, assurance checks, CLI, MCP, and Local API crates.
-- Added mediated provider surfaces for input, evidence, trace, report, audit, accountability, certification, eval, benchmark, and external-provider handoff paths.
-- Added Local API and MCP boundaries that expose only Runwarden-managed operations, preserve side-effect state, require control-plane authorization, and route provider calls through kernel decisions.
-- Added Reviewer Console view-model and static rendering packages, TypeScript SDK helpers, MCP helper utilities, and config safety tools.
-- Added scenario fixtures, schema artifacts, security assessment skill packaging, CI gates, release evidence workflow, release smoke checks, and generated artifact verification.
-- Added real external MCP stdio, HTTP, and SSE adapter execution contracts behind provider manifest allowlists and origin checks.
-- Added dedicated `runwarden authority create` and `runwarden authority inspect` commands for bound approval records.
-- Added complete scenario golden corpora, split reference documentation, generated TypeScript contract checks, `runwarden-kernel` binary, and WebUI responsive/accessibility gates.
+- Added the Rust security kernel, provider mediation, MCP boundary, CLI,
+  trace evidence, report citation linting, approval records, schema artifacts,
+  WebUI rendering package, and scenario fixture foundation.
 
 ### Fixed
 
-- Prevented approval replay by persisting consumed approval state after Local API provider calls.
-- Bound provider policy outcomes to deterministic `obs_*` IDs and trace event labels before side effects.
-- Ensured MCP `runwarden.provider.call` respects kernel session allowlists before executing inline providers.
-- Reported external providers without an adapter as incomplete instead of completed.
-- Closed the recorded follow-up gaps from the initial plan completion audit.
-- Hardened external MCP stdio execution, DNS rebinding/private egress checks, MCP stdio frame bounds, CLI approval file-digest binding, actor-bound authz, artifact/UI output path containment, reviewer-console HTML escaping, semantic redaction sidecar verification, and semantic report citation linting.
-
-### Changed
-
-- Documented the Runwarden security model, design system, CLI, MCP, reviewer console, release process, and enterprise submission map.
-- Wired `runwarden eval scenarios --json` and generated TypeScript declaration drift checks into local and CI gates.
+- Bound provider policy outcomes to deterministic `obs_*` IDs and trace event
+  labels before side effects.
+- Ensured MCP `runwarden.provider.call` respects kernel session allowlists
+  before executing providers.
+- Hardened external MCP adapter execution, private egress checks, stdio frame
+  bounds, CLI approval binding, actor-bound authz, output path containment, and
+  semantic report citation linting.

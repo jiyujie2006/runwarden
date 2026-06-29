@@ -1941,14 +1941,14 @@ fn run_strict_check() -> anyhow::Result<()> {
         ensure_required_scenario_files(&root.join("scenarios").join(scenario))?;
     }
 
-    let release_gate = fs::read_to_string(root.join("scripts/release_gate_local.sh"))?;
+    let local_gate = fs::read_to_string(root.join("scripts/release_gate_local.sh"))?;
     for command in [
         "runwarden eval scenarios --json",
         "runwarden demo run --scenario prompt-injection-file-exfil",
         "runwarden report render --scenario-suite scenarios",
     ] {
-        if !release_gate.contains(command) {
-            anyhow::bail!("strict check failed: release gate does not run {command}");
+        if !local_gate.contains(command) {
+            anyhow::bail!("strict check failed: contest gate does not run {command}");
         }
     }
 

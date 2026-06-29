@@ -123,10 +123,12 @@ fn active_typescript_surface_is_static_webui_only() {
     let root = workspace_root();
     let workspace =
         fs::read_to_string(root.join("pnpm-workspace.yaml")).expect("read pnpm workspace");
-    assert!(workspace.contains("packages/webui"));
-    assert!(!workspace.contains("packages/agent-sdk"));
-    assert!(!workspace.contains("packages/config-tools"));
-    assert!(!workspace.contains("packages/mcp-helpers"));
+    let package_entries: Vec<_> = workspace
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("- "))
+        .map(|entry| entry.trim_matches('"'))
+        .collect();
+    assert_eq!(package_entries, ["packages/webui"]);
 }
 
 fn assert_schema_title(schema: schemars::schema::RootSchema, expected: &str) {

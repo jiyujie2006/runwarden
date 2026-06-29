@@ -6,8 +6,8 @@
       "obs_refs": ["obs_eval_1"]
     },
     {
-      "id": "raw-shell-denied",
-      "text": "Raw shell access was denied.",
+      "id": "local-network-blocked",
+      "text": "Local/private network access was blocked.",
       "obs_refs": ["obs_eval_2"]
     }
   ]

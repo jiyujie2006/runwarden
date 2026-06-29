@@ -13,11 +13,11 @@ runwarden report lint --report tests/fixtures/default-report.json --trace tests/
 runwarden report render --report tests/fixtures/default-report.json --trace tests/fixtures/default-trace.json --format html --json
 ```
 
-The strict assurance gate requires all expected observations to appear in the
-final report:
+The scenario gate requires all expected observations to appear in the final
+report:
 
 ```bash
-runwarden eval all --json
+runwarden eval scenarios --json
 ```
 
 Maintained reference: [Evidence and Accountability](../../docs/reference/evidence-and-accountability.md).

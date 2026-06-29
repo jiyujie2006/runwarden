@@ -89,5 +89,4 @@ fn session_inspect_and_provider_list_read_persisted_session() {
     let list_stdout = String::from_utf8(provider_list.stdout).expect("utf8 stdout");
     assert!(list_stdout.contains("runwarden.input.inspect"));
     assert!(list_stdout.contains("external.api.request"));
-    assert!(!list_stdout.contains("external.shell.command"));
 }

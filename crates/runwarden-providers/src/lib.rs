@@ -2257,14 +2257,12 @@ pub mod catalog {
                 .into_iter()
                 .map(ToString::to_string)
                 .collect(),
-            command_allowlist: if spec.id == "external.shell.command" {
-                vec!["git".to_string(), "cargo".to_string(), "pnpm".to_string()]
-            } else if is_stdio_mcp {
+            command_allowlist: if is_stdio_mcp {
                 vec![spec.downstream_identity.to_string()]
             } else {
                 Vec::new()
             },
-            working_root: if spec.id == "external.shell.command" || is_stdio_mcp {
+            working_root: if is_stdio_mcp {
                 Some(".".to_string())
             } else {
                 None

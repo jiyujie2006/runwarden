@@ -51,14 +51,15 @@ fn first_party_catalog_populates_kernel_registry() {
 #[test]
 fn external_catalog_declares_kernel_managed_external_provider_families() {
     let providers = default_external_providers();
-    let ids: Vec<_> = providers
+    let mut ids: Vec<_> = providers
         .iter()
         .map(|provider| provider.id.as_str())
         .collect();
+    let mut expected = EXTERNAL_PROVIDER_IDS.to_vec();
+    ids.sort_unstable();
+    expected.sort_unstable();
 
-    for expected in EXTERNAL_PROVIDER_IDS {
-        assert!(ids.contains(expected), "missing {expected}");
-    }
+    assert_eq!(ids, expected);
     assert!(providers.iter().any(|provider| {
         provider.id == "external.mcp.browser.open_page"
             && provider.class == ProviderClass::External
@@ -70,9 +71,6 @@ fn external_catalog_declares_kernel_managed_external_provider_families() {
             && provider.class == ProviderClass::External
             && provider.side_effects.contains(&SideEffectKind::Network)
     }));
-    assert!(!ids.contains(&"external.shell.command"));
-    assert!(!ids.contains(&"external.scanner.run"));
-    assert!(!ids.contains(&"external.enterprise.ticket_lookup"));
 }
 
 #[test]

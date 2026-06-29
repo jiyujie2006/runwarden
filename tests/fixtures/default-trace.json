@@ -12,12 +12,13 @@
   {
     "obs_id": "obs_eval_2",
     "event_type": "provider_denied",
-    "provider": "external.shell.command",
+    "provider": "external.mcp.browser.open_page",
     "payload": {
       "decision": "denied",
-      "reason": "shell provider disabled by default"
+      "reason": "blocked localhost/private network egress",
+      "side_effect_executed": false
     },
     "previous_hash": "62fe421c4b05d85d51c9b0457d78777f547b4589870de85f11422e4da5037622",
-    "event_hash": "c2dd376aedc0166f72c110bd25c6e4298c393fbe9f9f991e16f9cd059e588534"
+    "event_hash": "afd3bf289cdee4eeddf01c46b725cdb8c4dbf46d96c27cc57349927b63eaca8d"
   }
 ]

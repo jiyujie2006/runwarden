@@ -1,4 +1,4 @@
-# Contest Verification Process
+# Contest Verification
 
 Run the local contest gate before publishing or submitting review evidence.
 

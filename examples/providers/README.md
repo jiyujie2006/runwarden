@@ -9,42 +9,36 @@ can be used behind the Runwarden boundary.
 - `external.mcp.browser.open_page.json`: external MCP browser tool manifest.
 - `kernel.toml`: example kernel/provider catalog configuration.
 
-Validate the example manifest:
+Validate provider behavior through the active contest checks:
 
 ```bash
-runwarden cert provider-manifest --manifest examples/providers/external.mcp.browser.open_page.json --json
+cargo test --workspace
+target/debug/runwarden eval scenarios --json
 ```
 
 ## First-Party Provider Catalog
 
-The provider registry currently exposes these first-party provider IDs:
+The contest provider registry exposes these first-party provider IDs:
 
 - `runwarden.input.inspect`
-- `runwarden.evidence.inspect`
 - `runwarden.trace.verify`
 - `runwarden.trace.export`
-- `runwarden.report.scaffold`
 - `runwarden.report.lint`
 - `runwarden.report.render`
-- `runwarden.audit.summary`
-- `runwarden.accountability.summary`
-- `runwarden.cert.all`
-- `runwarden.eval.all`
-- `runwarden.eval.agent-native`
-- `runwarden.bench.run`
 
-## External Provider Families
+## External And Demo Provider Families
 
-The checked-in external provider families are:
+The contest catalog models these mediated external/demo provider families:
 
 - `external.mcp.browser.open_page`
 - `external.mcp.filesystem.read_file`
+- `external.mcp.filesystem.write_file`
+- `external.email.send`
 - `external.api.request`
-- `external.scanner.run`
-- `external.shell.command`
-- `external.plugin.security_scan`
-- `external.skill.assessment_helper`
-- `external.enterprise.ticket_lookup`
+- `external.memory.read`
+- `external.memory.write`
+- `external.knowledge.read`
+- `external.knowledge.write`
 
 External provider execution is selected from registry metadata and manifest
 fields. Do not use provider id prefixes as the source of truth for dispatch.
