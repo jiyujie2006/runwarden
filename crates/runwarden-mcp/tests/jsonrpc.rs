@@ -255,7 +255,7 @@ fn removed_session_creation_tool_is_rejected_without_side_effects() {
     let response = call_tool(
         9,
         "runwarden.session.create_from_manifest",
-        json!({ "session_id": "enterprise_ops", "manifest_toml": "" }),
+        json!({ "session_id": "contest_ops", "manifest_toml": "" }),
     );
 
     assert_eq!(response["error"]["code"], -32602);

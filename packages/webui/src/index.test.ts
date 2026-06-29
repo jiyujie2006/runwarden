@@ -83,7 +83,7 @@ describe("createDemoReviewerConsoleViewModel", () => {
 });
 
 describe("renderDemoReviewerConsoleHtml", () => {
-  it("renders static demo HTML without Local API or script execution", () => {
+  it("renders static demo HTML without control-plane calls or script execution", () => {
     const html = renderDemoReviewerConsoleHtml([demoInput]);
 
     expect(html).toContain("Contest Reviewer Console");

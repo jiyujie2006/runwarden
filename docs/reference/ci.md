@@ -26,9 +26,6 @@ the local full gate exercises the contest demo workflow end to end.
 - `target/debug/runwarden report render --scenario-suite scenarios --format markdown --output artifacts/reports/contest-report.md --json`
 - `target/debug/runwarden ui build --input artifacts/demo --output artifacts/reviewer-console.html --json`
 
-The script name is retained as the broader local verification entry point; it
-no longer runs cert, bench, Local API, release-smoke, or artifact-bundle flows.
-
 ## Tooling
 
 Local gate scripts prefer `cargo-deny` and fail with an installation hint when

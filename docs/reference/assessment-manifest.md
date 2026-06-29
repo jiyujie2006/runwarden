@@ -21,7 +21,7 @@ assessment scope. They are the input for persisted session manifests.
 `runwarden session create` derives a session from an assessment manifest:
 
 ```bash
-runwarden session create --manifest scenarios/enterprise-agent-security/manifests/assessment.toml --session enterprise_ops --json
+runwarden session create --manifest scenarios/prompt-injection-file-exfil/manifests/assessment.toml --session contest_ops --json
 ```
 
 The resulting session carries the provider allowlist, scoped roots, actor,

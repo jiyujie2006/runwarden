@@ -8,7 +8,7 @@ fn trace(obs_id: &str) -> TraceEvent {
     TraceEvent::sealed(
         obs_id.to_string(),
         "provider_completed".to_string(),
-        Some("runwarden.evidence.inspect".to_string()),
+        Some("runwarden.input.inspect".to_string()),
         json!({"ok": true}),
         None,
     )

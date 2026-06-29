@@ -14,18 +14,9 @@ Reviewed surfaces:
 - Scenario golden corpora, schemas, scripts, GitHub workflows, and maintained
   docs.
 
-Removed or inactive mainline surfaces:
-
-- `crates/runwarden-api`
-- `packages/agent-sdk`
-- `packages/config-tools`
-- `packages/mcp-helpers`
-- CLI branches for agent config, cert, bench, artifact bundles, Local API, and
-  release smoke.
-
 ## Architecture Findings
 
-Runwarden now keeps the public workflow centered on:
+Runwarden keeps the public workflow centered on:
 
 - Rust-owned security decisions through `runwarden-kernel`,
   `runwarden-providers`, `runwarden-assurance`, `runwarden-cli`, and
@@ -73,9 +64,6 @@ target/debug/runwarden eval scenarios --json
 
 ## Residual Risks
 
-- `runwarden-assurance` still contains compatibility helpers that are no longer
-  public CLI or MCP surfaces. Keep docs and gates pointed at report/eval/demo
-  behavior.
 - Real LLM adapters are out of scope for the default demo path; adding one must
   keep provider policy in Rust.
 - Full verification depends on local Rust, pnpm, Node, and `cargo-deny`

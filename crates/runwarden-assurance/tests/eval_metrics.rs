@@ -9,7 +9,7 @@ fn trace_events(obs_ids: &[&str]) -> Vec<TraceEvent> {
         store.append_signed(
             (*obs_id).to_string(),
             "provider_completed",
-            Some("runwarden.evidence.inspect"),
+            Some("runwarden.input.inspect"),
             json!({"ok": true}),
         );
     }

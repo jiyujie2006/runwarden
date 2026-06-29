@@ -1,8 +1,8 @@
 # Reviewer Console Guide
 
 The Reviewer Console is a static security workbench for humans. It displays
-Rust-produced demo JSON and does not call a Local API or submit approval
-decisions. It is not a policy engine.
+Rust-produced demo JSON and does not submit approval decisions. It is not a
+policy engine.
 
 ## Local Build
 

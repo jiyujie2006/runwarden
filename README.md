@@ -1,6 +1,6 @@
 # Runwarden Contest Red-Team Range
 
-Runwarden is a Rust-owned security kernel for demonstrating how agent tool use can be mediated, traced, and reported under adversarial prompts. The contest edition focuses on four reproducible attack chains instead of enterprise release, SDK, or Local API delivery.
+Runwarden is a Rust-owned security kernel for demonstrating how agent tool use can be mediated, traced, and reported under adversarial prompts. The contest edition focuses on four reproducible attack chains and a trace-backed reviewer workflow.
 
 Agents see only `runwarden-mcp`. Filesystem, browser, email, API, memory, knowledge, and downstream MCP capabilities are represented as Runwarden providers and evaluated by Rust policy before any trusted side effect.
 

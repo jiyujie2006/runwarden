@@ -8,9 +8,9 @@ fn unknown_provider_is_denied_before_side_effect() {
     let registry = ProviderRegistry::default();
     let call = ProviderCall {
         session_id: "session-1".to_string(),
-        provider: "external.shell.command".to_string(),
-        action: "run".to_string(),
-        arguments: json!({"command":"curl http://169.254.169.254"}),
+        provider: "external.api.request".to_string(),
+        action: "request".to_string(),
+        arguments: json!({"url":"http://169.254.169.254/latest/meta-data"}),
         actor_id: Some("agent-1".to_string()),
         authz_id: Some("authz-1".to_string()),
         approval_id: None,
@@ -21,7 +21,7 @@ fn unknown_provider_is_denied_before_side_effect() {
     assert_eq!(denial.decision, PolicyDecision::Denied);
     assert_eq!(denial.execution_status, ExecutionStatus::NotExecuted);
     assert!(!denial.envelope.side_effect_executed);
-    assert_eq!(denial.envelope.provider, "external.shell.command");
+    assert_eq!(denial.envelope.provider, "external.api.request");
 }
 
 #[test]
@@ -31,7 +31,7 @@ fn trace_store_pages_without_loading_unrequested_events() {
         store.append(TraceEvent {
             obs_id: format!("obs_{idx}"),
             event_type: "provider_policy_evaluated".to_string(),
-            provider: Some("runwarden.evidence.inspect".to_string()),
+            provider: Some("runwarden.input.inspect".to_string()),
             payload: json!({"idx": idx}),
             previous_hash: None,
             event_hash: format!("hash_{idx}"),
@@ -57,7 +57,7 @@ fn trace_store_query_filters_events_and_enforces_byte_budget() {
                 "provider_completed".to_string()
             },
             provider: Some(if idx < 3 {
-                "runwarden.evidence.inspect".to_string()
+                "runwarden.input.inspect".to_string()
             } else {
                 "runwarden.report.render".to_string()
             }),
@@ -70,7 +70,7 @@ fn trace_store_query_filters_events_and_enforces_byte_budget() {
     let page = store.query(TraceQuery {
         offset: 0,
         limit: 10,
-        provider: Some("runwarden.evidence.inspect".to_string()),
+        provider: Some("runwarden.input.inspect".to_string()),
         event_type: Some("provider_completed".to_string()),
         obs_prefix: None,
         max_bytes: Some(10_000),
@@ -144,13 +144,13 @@ fn trace_store_verifies_hash_chain_and_rejects_tamper() {
     store.append_signed(
         "obs_1",
         "provider_policy_evaluated",
-        Some("runwarden.evidence.inspect"),
+        Some("runwarden.input.inspect"),
         json!({"decision":"allowed"}),
     );
     store.append_signed(
         "obs_2",
         "provider_completed",
-        Some("runwarden.evidence.inspect"),
+        Some("runwarden.input.inspect"),
         json!({"status":"completed"}),
     );
 

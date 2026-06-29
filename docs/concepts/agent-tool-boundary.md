@@ -44,9 +44,9 @@ outside the kernel boundary.
 ## Verification
 
 ```bash
-runwarden agent generate-config --client claude --output examples/agent-configs/claude.runwarden-only.json
-runwarden agent check-config --client claude --input examples/agent-configs/claude.runwarden-only.json --json
-runwarden eval agent-native --json
+runwarden eval scenarios --json
+runwarden demo run --scenario prompt-injection-file-exfil --output artifacts/demo/prompt-injection-file-exfil --json
+runwarden provider list --json
 ```
 
 Maintained reference: [Agent Integration](../reference/agent-integration.md).

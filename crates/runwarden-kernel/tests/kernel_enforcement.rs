@@ -57,7 +57,7 @@ fn base_policy(provider_id: &str) -> KernelPolicy {
 #[test]
 fn provider_not_in_session_allowlist_is_denied_before_side_effect() {
     let registry = registry_with(provider(
-        "runwarden.evidence.inspect",
+        "runwarden.input.inspect",
         ProviderRisk::Low,
         vec![SideEffectKind::FileRead],
     ));
@@ -65,7 +65,7 @@ fn provider_not_in_session_allowlist_is_denied_before_side_effect() {
     let mut enforcer = KernelEnforcer::new(registry, policy);
 
     let outcome = enforcer.evaluate_call(&call(
-        "runwarden.evidence.inspect",
+        "runwarden.input.inspect",
         json!({"root":"evidence","target_path":"/srv/runwarden/evidence/input.txt"}),
     ));
 
@@ -80,7 +80,7 @@ fn provider_not_in_session_allowlist_is_denied_before_side_effect() {
 
 #[test]
 fn provider_policy_outcome_includes_observation_id_and_trace_event() {
-    let provider_id = "runwarden.evidence.inspect";
+    let provider_id = "runwarden.input.inspect";
     let registry = registry_with(provider(
         provider_id,
         ProviderRisk::Low,
@@ -108,7 +108,7 @@ fn provider_policy_outcome_includes_observation_id_and_trace_event() {
 
 #[test]
 fn provider_policy_observation_id_changes_with_session_and_arguments() {
-    let provider_id = "runwarden.evidence.inspect";
+    let provider_id = "runwarden.input.inspect";
     let registry = registry_with(provider(
         provider_id,
         ProviderRisk::Low,
@@ -152,7 +152,7 @@ fn authz_bound_to_session_actor_rejects_different_actor() {
 version = "1"
 name = "actor-bound authz"
 mode = "audit"
-provider_allowlist = ["runwarden.evidence.inspect"]
+provider_allowlist = ["runwarden.input.inspect"]
 
 [authorization]
 id = "authz-active"
@@ -168,12 +168,12 @@ enabled = true
     .expect("assessment manifest");
     let session = SessionManifest::from_assessment("session-1", &assessment);
     let registry = registry_with(provider(
-        "runwarden.evidence.inspect",
+        "runwarden.input.inspect",
         ProviderRisk::Low,
         vec![SideEffectKind::None],
     ));
     let mut enforcer = KernelEnforcer::new(registry, session.to_kernel_policy());
-    let mut forged = call("runwarden.evidence.inspect", json!({}));
+    let mut forged = call("runwarden.input.inspect", json!({}));
     forged.actor_id = Some("agent-2".to_string());
 
     let outcome = enforcer.evaluate_call(&forged);
@@ -207,7 +207,7 @@ fn network_side_effect_requires_reviewer_approval_even_for_low_risk_provider() {
 
 #[test]
 fn root_escape_is_denied_before_side_effect() {
-    let provider_id = "runwarden.evidence.inspect";
+    let provider_id = "runwarden.input.inspect";
     let registry = registry_with(provider(
         provider_id,
         ProviderRisk::Low,
@@ -228,7 +228,7 @@ fn root_escape_is_denied_before_side_effect() {
 
 #[test]
 fn empty_normalized_scoped_root_is_rejected_before_scope_checks() {
-    let provider_id = "runwarden.evidence.inspect";
+    let provider_id = "runwarden.input.inspect";
     let registry = registry_with(provider(
         provider_id,
         ProviderRisk::Low,
@@ -265,7 +265,7 @@ fn symlink_escape_inside_scoped_root_is_denied_before_side_effect() {
     )
     .expect("symlink");
 
-    let provider_id = "runwarden.evidence.inspect";
+    let provider_id = "runwarden.input.inspect";
     let registry = registry_with(provider(
         provider_id,
         ProviderRisk::Low,
@@ -336,7 +336,7 @@ fn ipv4_mapped_private_egress_is_denied_before_side_effect() {
 
 #[test]
 fn argument_budget_exceeded_is_denied_before_side_effect() {
-    let provider_id = "runwarden.evidence.inspect";
+    let provider_id = "runwarden.input.inspect";
     let registry = registry_with(provider(
         provider_id,
         ProviderRisk::Low,
@@ -362,7 +362,7 @@ fn argument_budget_exceeded_is_denied_before_side_effect() {
 
 #[test]
 fn inactive_assessment_is_denied_before_side_effect() {
-    let provider_id = "runwarden.evidence.inspect";
+    let provider_id = "runwarden.input.inspect";
     let registry = registry_with(provider(
         provider_id,
         ProviderRisk::Low,
@@ -387,7 +387,7 @@ fn inactive_assessment_is_denied_before_side_effect() {
 
 #[test]
 fn revoked_authz_is_denied_before_side_effect() {
-    let provider_id = "runwarden.evidence.inspect";
+    let provider_id = "runwarden.input.inspect";
     let registry = registry_with(provider(
         provider_id,
         ProviderRisk::Low,
@@ -410,7 +410,7 @@ fn revoked_authz_is_denied_before_side_effect() {
 #[test]
 fn expired_and_denied_authz_are_denied_before_side_effect() {
     for state in [AuthzState::Expired, AuthzState::Denied] {
-        let provider_id = "runwarden.evidence.inspect";
+        let provider_id = "runwarden.input.inspect";
         let registry = registry_with(provider(
             provider_id,
             ProviderRisk::Low,

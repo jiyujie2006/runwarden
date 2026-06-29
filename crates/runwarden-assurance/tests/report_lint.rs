@@ -8,7 +8,7 @@ fn trace(obs_id: &str) -> TraceEvent {
     TraceEvent::sealed(
         obs_id.to_string(),
         "provider_completed".to_string(),
-        Some("runwarden.evidence.inspect".to_string()),
+        Some("runwarden.input.inspect".to_string()),
         json!({"ok": true}),
         None,
     )
@@ -35,7 +35,7 @@ fn trace_events(obs_ids: &[&str]) -> Vec<TraceEvent> {
         store.append_signed(
             (*obs_id).to_string(),
             "provider_completed",
-            Some("runwarden.evidence.inspect"),
+            Some("runwarden.input.inspect"),
             json!({"ok": true}),
         );
     }
@@ -116,7 +116,7 @@ fn report_lint_accepts_allowed_claim_with_allowed_decision() {
     let trace_events = vec![trace_with_payload(
         "obs_1",
         "provider_completed",
-        "runwarden.evidence.inspect",
+        "runwarden.input.inspect",
         json!({"decision": "allowed"}),
     )];
     let report = ReportDraft::new(vec![ReportClaim::new(
@@ -257,7 +257,7 @@ fn report_lint_rejects_structured_support_when_side_effect_state_differs() {
     let trace_events = vec![trace_with_payload(
         "obs_1",
         "provider_denied",
-        "external.shell.command",
+        "external.api.request",
         json!({
             "decision": "denied",
             "execution_status": "not_executed",
@@ -267,11 +267,11 @@ fn report_lint_rejects_structured_support_when_side_effect_state_differs() {
     let report = ReportDraft::new(vec![
         ReportClaim::new(
             "finding-1",
-            "Shell was denied before side effects",
+            "API request was denied before side effects",
             ["obs_1"],
         )
         .with_support(ReportClaimSupport {
-            provider: Some("external.shell.command".to_string()),
+            provider: Some("external.api.request".to_string()),
             event_type: Some("provider_denied".to_string()),
             decision: Some("denied".to_string()),
             execution_status: Some("not_executed".to_string()),

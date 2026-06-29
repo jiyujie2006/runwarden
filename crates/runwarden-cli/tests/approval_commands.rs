@@ -7,7 +7,7 @@ fn approval_record(id: &str) -> ApprovalRecord {
     ApprovalRecord::new(
         id,
         ApprovalBinding {
-            session_id: "enterprise_ops".to_string(),
+            session_id: "contest_ops".to_string(),
             provider: "runwarden.report.render".to_string(),
             action: "render".to_string(),
             argument_hash: "arg_hash_1".to_string(),

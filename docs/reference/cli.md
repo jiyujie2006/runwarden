@@ -32,8 +32,6 @@ runwarden ui build --input artifacts/demo --output artifacts/reviewer-console.ht
 runwarden ui serve --file artifacts/reviewer-console.html --json
 ```
 
-Removed from the contest CLI: `agent *`, `cert *`, `bench *`, `artifact *`, `api serve`, and `release smoke`.
-
 ## Provider Calls
 
 Provider calls are evaluated by `KernelEnforcer` before execution. The CLI performs a pre-read policy check before binding file digests so traversal and scoped-root failures are denied before any file read.

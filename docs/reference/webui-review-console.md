@@ -1,6 +1,6 @@
 # WebUI Review Console
 
-The contest WebUI is a dependency-free static renderer for Rust-produced demo JSON. It has no Local API dependency and does not submit approval decisions.
+The contest WebUI is a dependency-free static renderer for Rust-produced demo JSON. It does not submit approval decisions.
 
 ## UI Contract
 

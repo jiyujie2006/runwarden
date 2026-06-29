@@ -5,9 +5,9 @@ use serde_json::json;
 #[test]
 fn provider_outcome_separates_policy_decision_from_execution_status() {
     let outcome = ProviderOutcome::denied_before_side_effect(
-        "external.shell.command",
-        "run",
-        "shell provider is disabled",
+        "external.api.request",
+        "request",
+        "metadata API request is disabled",
     );
 
     assert_eq!(outcome.decision, PolicyDecision::Denied);
@@ -87,7 +87,7 @@ fn approval_record_can_be_denied_from_pending_with_reason() {
 fn provider_call_keeps_authority_fields_explicit() {
     let call = ProviderCall {
         session_id: "session-1".to_string(),
-        provider: "runwarden.evidence.inspect".to_string(),
+        provider: "runwarden.input.inspect".to_string(),
         action: "inspect".to_string(),
         arguments: json!({"root":"evidence"}),
         actor_id: Some("agent-1".to_string()),

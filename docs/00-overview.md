@@ -30,9 +30,6 @@ Runwarden makes those answers reproducible from checked-in scenarios.
 - `runwarden-mcp`: the only MCP boundary exposed to agents.
 - `packages/webui`: presentation-only static reviewer console renderer.
 
-The old Local API, SDK, config helper, MCP helper, cert, bench, release-smoke,
-and artifact-bundle surfaces are not part of the contest mainline.
-
 ## Proof Loop
 
 1. Create a manifest-backed session.

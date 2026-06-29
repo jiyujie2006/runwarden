@@ -41,9 +41,8 @@ scoped-root, approval, and digest binding before execution.
 
 ## Contest Checks
 
-The contest CLI no longer exposes `runwarden cert provider-manifest`. Manifest
-contracts are exercised through provider catalog tests, kernel policy tests, and
-scenario/demo execution:
+Manifest contracts are exercised through provider catalog tests, kernel policy
+tests, and scenario/demo execution:
 
 ```bash
 cargo test --workspace
