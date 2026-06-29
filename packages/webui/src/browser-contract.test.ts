@@ -11,6 +11,7 @@ describe("static demo console browser contract", () => {
         metrics: { trace_completeness: 1, report_citation_accuracy: 1 },
         report: { claims: [] },
         trace: [],
+        trace_verification: { verified: true },
         lint: { ok: true }
       }
     ]);

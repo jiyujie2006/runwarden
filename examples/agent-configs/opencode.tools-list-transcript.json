@@ -1,0 +1,27 @@
+{
+  "client": "opencode",
+  "config": "examples/agent-configs/opencode.runwarden-only.json",
+  "claim": "OpenCode is configured with one local MCP server named runwarden, and the tools/list response contains only Runwarden MCP tools.",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/list",
+    "params": {}
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "tools": [
+        { "name": "runwarden.agent.bootstrap" },
+        { "name": "runwarden.provider.call" },
+        { "name": "runwarden.provider.list" },
+        { "name": "runwarden.provider.status" },
+        { "name": "runwarden.trace.verify" },
+        { "name": "runwarden.trace.export" },
+        { "name": "runwarden.report.lint" },
+        { "name": "runwarden.report.render" }
+      ]
+    }
+  }
+}

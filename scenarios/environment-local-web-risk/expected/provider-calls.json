@@ -6,7 +6,10 @@
     "execution_status": "completed",
     "side_effect_executed": false,
     "obs_ref": "obs_local_web_inspect",
-    "reason": "environment and URL prompt was inspected"
+    "reason": "environment and URL prompt was inspected",
+    "arguments": {
+      "input_path": "benign/request.md"
+    }
   },
   {
     "provider": "external.mcp.browser.open_page",
@@ -16,7 +19,10 @@
     "side_effect_executed": false,
     "obs_ref": "obs_local_web_browser_denied",
     "error_kind": "egress_denied",
-    "reason": "localhost browser egress is denied"
+    "reason": "localhost browser egress is denied",
+    "arguments": {
+      "url": "http://localhost:3000/admin"
+    }
   },
   {
     "provider": "external.api.request",
@@ -26,6 +32,10 @@
     "side_effect_executed": false,
     "obs_ref": "obs_local_web_metadata_denied",
     "error_kind": "egress_denied",
-    "reason": "metadata-service egress is denied"
+    "reason": "metadata-service egress is denied",
+    "arguments": {
+      "method": "GET",
+      "url": "http://169.254.169.254/latest/meta-data"
+    }
   }
 ]

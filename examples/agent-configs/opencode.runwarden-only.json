@@ -1,0 +1,27 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "tools": {
+    "apply_patch": false,
+    "bash": false,
+    "edit": false,
+    "glob": false,
+    "grep": false,
+    "list": false,
+    "lsp": false,
+    "question": false,
+    "read": false,
+    "skill": false,
+    "todoread": false,
+    "todowrite": false,
+    "webfetch": false,
+    "websearch": false,
+    "write": false
+  },
+  "mcp": {
+    "runwarden": {
+      "type": "local",
+      "command": ["runwarden-mcp"],
+      "enabled": true
+    }
+  }
+}

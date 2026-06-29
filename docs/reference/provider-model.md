@@ -23,3 +23,11 @@ Providers are the only callable tool surface. First-party providers are implemen
 - `external.knowledge.write`
 
 High-risk, network-active, file-writing, credential, destructive, report-claim, and artifact-writing providers require approval before trusted side effects.
+
+In contest replay, external providers are simulated after Rust policy allows
+the call. The simulation result is still emitted as provider evidence, but
+`event_type=provider_simulated_replay`, `execution_status=simulated`,
+`simulated=true`, and `side_effect_executed=false` mean no trusted external
+effect was performed.
+Review-blocked and denied external providers also report
+`side_effect_executed=false`.

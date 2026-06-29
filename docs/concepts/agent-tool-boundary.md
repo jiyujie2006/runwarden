@@ -37,9 +37,11 @@ A safe agent config exposes exactly one MCP server named `runwarden`:
 }
 ```
 
-Empty `args: []` is allowed. Non-empty or malformed args and any `env`, `cwd`,
-`url`, or `transport` override are rejected because they can redirect execution
-outside the kernel boundary.
+Empty `args: []` is allowed. Non-empty or malformed args and any `env`,
+`environment`, `cwd`, `url`, or `transport` override are rejected because they
+can redirect execution outside the kernel boundary.
+The rejection is enforced by Rust-side fixture validation for the checked-in
+Claude/OpenCode examples and unsafe counterexamples.
 
 ## Verification
 
@@ -47,6 +49,7 @@ outside the kernel boundary.
 runwarden eval scenarios --json
 runwarden demo run --scenario prompt-injection-file-exfil --output artifacts/demo/prompt-injection-file-exfil --json
 runwarden provider list --json
+cargo test -p runwarden-mcp --test e2e_agent_flow
 ```
 
 Maintained reference: [Agent Integration](../reference/agent-integration.md).

@@ -14,3 +14,8 @@ External capabilities are integrated as Runwarden providers, never exposed direc
 ## MCP Adapters
 
 MCP adapters support `stdio`, `http`, and `sse` contracts. Stdio adapters require a trusted runtime root, exact command allowlisting, no shell-capable command, no request-supplied command arguments, bounded output, and process-tree cleanup. HTTP/SSE adapters deny hostname resolutions to private or local addresses before connecting.
+
+The contest package does not invoke trusted downstream adapters during local
+replay. External provider ids use the same Rust-owned manifest and policy
+contract, then return simulated outcomes and `obs_*` evidence for judges to
+replay without raw downstream side effects.

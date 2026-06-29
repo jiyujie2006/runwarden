@@ -34,6 +34,7 @@ export interface DemoScenarioInput {
   metrics: DemoMetrics;
   report: DemoReport;
   trace?: unknown[];
+  trace_verification?: { verified?: boolean };
   lint?: { ok: boolean };
 }
 
@@ -76,8 +77,7 @@ export function createDemoReviewerConsoleViewModel(
       input.report.claims.flatMap((claim) => claim.obs_refs)
     );
 
-    const traceState: DemoTraceState =
-      input.trace && input.lint?.ok !== false ? "verified" : "missing";
+    const traceState = traceStateFromVerification(input.trace_verification);
 
     return {
       scenario: input.scenario,
@@ -101,9 +101,7 @@ export function createDemoReviewerConsoleViewModel(
         scenarios,
         (scenario) => scenario.blockedSideEffectCount
       ),
-      traceState: scenarios.every((scenario) => scenario.traceState === "verified")
-        ? "verified"
-        : "missing"
+      traceState: suiteTraceState(scenarios)
     },
     scenarios
   };
@@ -182,6 +180,28 @@ function unique(values: string[]): string[] {
 
 function sum<T>(items: T[], read: (item: T) => number): number {
   return items.reduce((total, item) => total + read(item), 0);
+}
+
+function traceStateFromVerification(
+  verification: DemoScenarioInput["trace_verification"]
+): DemoTraceState {
+  if (verification?.verified === true) {
+    return "verified";
+  }
+  if (verification?.verified === false) {
+    return "tampered";
+  }
+  return "missing";
+}
+
+function suiteTraceState(scenarios: DemoScenarioSummary[]): DemoTraceState {
+  if (scenarios.every((scenario) => scenario.traceState === "verified")) {
+    return "verified";
+  }
+  if (scenarios.some((scenario) => scenario.traceState === "tampered")) {
+    return "tampered";
+  }
+  return "missing";
 }
 
 function escapeHtml(value: string): string {

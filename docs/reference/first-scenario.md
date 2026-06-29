@@ -15,6 +15,10 @@ A scenario is a reproducible golden-corpus fixture for one attack chain.
 - `expected/report.json`
 - `expected/eval-baseline.json`
 
+`expected/provider-calls.json` records the scripted provider, action,
+decision, execution status, side-effect state, `obs_ref`, reason, and replay
+arguments. `expected/report.json` must cite the matching `obs_*` refs.
+
 ## Main Scenarios
 
 - `prompt-injection-file-exfil`
@@ -26,4 +30,5 @@ Validate with:
 
 ```bash
 runwarden eval scenarios --json
+runwarden demo run --scenario prompt-injection-file-exfil --output artifacts/demo/prompt-injection-file-exfil --json
 ```

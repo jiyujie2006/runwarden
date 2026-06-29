@@ -45,6 +45,22 @@ fn tools_list_exposes_only_runwarden_tools() {
         tools.iter().all(|tool| tool.get("outputSchema").is_some()),
         "every MCP tool must declare an outputSchema"
     );
+
+    let provider_call = tools
+        .iter()
+        .find(|tool| tool["name"] == "runwarden.provider.call")
+        .expect("provider.call descriptor");
+    assert_eq!(provider_call["inputSchema"]["additionalProperties"], false);
+    assert_eq!(
+        provider_call["inputSchema"]["required"],
+        json!(["provider"])
+    );
+    assert!(
+        provider_call["inputSchema"]["properties"]
+            .get("simulated_approval")
+            .is_none(),
+        "agent-controlled simulated approval must not be in the schema"
+    );
 }
 
 #[test]
@@ -196,6 +212,78 @@ fn provider_call_rejects_unknown_provider_without_execution() {
 }
 
 #[test]
+fn provider_call_holds_external_provider_for_review_without_execution() {
+    let response = call_tool(
+        16,
+        "runwarden.provider.call",
+        json!({ "provider": "external.email.send", "to": "ops@example.com" }),
+    );
+
+    assert!(response.get("error").is_none());
+    assert_eq!(response["result"]["isError"], true);
+
+    let payload = tool_payload(&response);
+    assert_eq!(payload["decision"], "requires_review");
+    assert_eq!(payload["envelope"]["error_kind"], "approval_invalid");
+    assert_eq!(payload["side_effect_executed"], false);
+    assert!(
+        payload["obs_ref"]
+            .as_str()
+            .is_some_and(|obs| obs.starts_with("obs_"))
+    );
+    assert_eq!(
+        payload["trace_event"]["event_type"],
+        "provider_approval_pending"
+    );
+    assert_eq!(
+        payload["trace_event"]["payload"]["side_effect_executed"],
+        false
+    );
+}
+
+#[test]
+fn provider_call_denies_external_egress_before_review_or_execution() {
+    let response = call_tool(
+        17,
+        "runwarden.provider.call",
+        json!({
+            "provider": "external.api.request",
+            "url": "http://127.0.0.1/latest/meta-data"
+        }),
+    );
+
+    assert!(response.get("error").is_none());
+    assert_eq!(response["result"]["isError"], true);
+
+    let payload = tool_payload(&response);
+    assert_eq!(payload["decision"], "denied");
+    assert_eq!(payload["envelope"]["error_kind"], "egress_denied");
+    assert_eq!(payload["side_effect_executed"], false);
+    assert_eq!(payload["trace_event"]["event_type"], "provider_denied");
+}
+
+#[test]
+fn provider_call_rejects_agent_supplied_simulated_approval() {
+    let response = call_tool(
+        18,
+        "runwarden.provider.call",
+        json!({
+            "provider": "external.api.request",
+            "url": "https://api.example.com/upload",
+            "simulated_approval": true
+        }),
+    );
+
+    assert_eq!(response["error"]["code"], -32602);
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("simulated_approval"))
+    );
+    assert_eq!(response["error"]["data"]["side_effect_executed"], false);
+}
+
+#[test]
 fn provider_list_returns_kernel_managed_registry_metadata() {
     let response = call_tool(
         6,
@@ -219,6 +307,24 @@ fn provider_list_returns_kernel_managed_registry_metadata() {
 }
 
 #[test]
+fn provider_list_includes_external_catalog_without_raw_mcp_tools() {
+    let response = call_tool(19, "runwarden.provider.list", json!({}));
+    let payload = tool_payload(&response);
+    let providers = payload["providers"].as_array().expect("providers");
+
+    assert!(providers.iter().any(|provider| {
+        provider["id"] == "external.mcp.browser.open_page"
+            && provider["class"] == "external"
+            && provider["kind"] == "mcp"
+    }));
+    assert!(providers.iter().all(|provider| {
+        provider["id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("runwarden.") || id.starts_with("external."))
+    }));
+}
+
+#[test]
 fn provider_status_reports_availability_without_side_effects() {
     let response = call_tool(
         7,
@@ -232,6 +338,49 @@ fn provider_status_reports_availability_without_side_effects() {
     assert_eq!(payload["available"], true);
     assert_eq!(payload["approval_required"], true);
     assert_eq!(payload["side_effect_executed"], false);
+}
+
+#[test]
+fn provider_status_reports_external_provider_risk_and_approval_requirement() {
+    let response = call_tool(
+        20,
+        "runwarden.provider.status",
+        json!({ "provider": "external.mcp.filesystem.write_file" }),
+    );
+
+    let payload = tool_payload(&response);
+
+    assert_eq!(payload["provider"], "external.mcp.filesystem.write_file");
+    assert_eq!(payload["available"], true);
+    assert_eq!(payload["kind"], "mcp");
+    assert_eq!(payload["risk"], "file_write");
+    assert_eq!(payload["approval_required"], true);
+    assert_eq!(payload["side_effect_executed"], false);
+}
+
+#[test]
+fn provider_tools_reject_malformed_or_unknown_schema_keys() {
+    let unknown_key = call_tool(
+        21,
+        "runwarden.provider.call",
+        json!({
+            "provider": "runwarden.input.inspect",
+            "command": "curl http://169.254.169.254/latest/meta-data"
+        }),
+    );
+    assert_eq!(unknown_key["error"]["code"], -32602);
+    assert_eq!(unknown_key["error"]["data"]["side_effect_executed"], false);
+
+    let malformed_list = call_tool(
+        22,
+        "runwarden.provider.list",
+        json!({ "session_allowed_providers": "external.api.request" }),
+    );
+    assert_eq!(malformed_list["error"]["code"], -32602);
+    assert_eq!(
+        malformed_list["error"]["data"]["side_effect_executed"],
+        false
+    );
 }
 
 #[test]

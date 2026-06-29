@@ -207,6 +207,7 @@ fn report_lint_accepts_structured_support_matching_trace_event_fields() {
             decision: Some("requires_review".to_string()),
             execution_status: Some("not_executed".to_string()),
             side_effect_executed: Some(false),
+            simulated: None,
         }),
     ]);
 
@@ -240,6 +241,7 @@ fn report_lint_rejects_structured_support_citing_wrong_decision() {
             decision: Some("requires_review".to_string()),
             execution_status: Some("not_executed".to_string()),
             side_effect_executed: Some(false),
+            simulated: None,
         }),
     ]);
 
@@ -276,6 +278,7 @@ fn report_lint_rejects_structured_support_when_side_effect_state_differs() {
             decision: Some("denied".to_string()),
             execution_status: Some("not_executed".to_string()),
             side_effect_executed: Some(false),
+            simulated: None,
         }),
     ]);
 
@@ -286,6 +289,107 @@ fn report_lint_rejects_structured_support_when_side_effect_state_differs() {
         result.errors[0].kind,
         ReportLintErrorKind::UnsupportedObservation
     );
+}
+
+#[test]
+fn report_lint_rejects_simulated_completed_claim_without_simulated_support() {
+    let trace_events = vec![trace_with_payload(
+        "obs_1",
+        "provider_simulated_replay",
+        "external.api.request",
+        json!({
+            "decision": "allowed",
+            "execution_status": "simulated",
+            "side_effect_executed": false,
+            "simulated": true
+        }),
+    )];
+    let report = ReportDraft::new(vec![ReportClaim::new(
+        "finding-1",
+        "External API request completed",
+        ["obs_1"],
+    )]);
+
+    let result = lint_report_against_trace(&report, &trace_events);
+
+    assert!(!result.ok);
+    assert_eq!(
+        result.errors[0].kind,
+        ReportLintErrorKind::UnsupportedObservation
+    );
+}
+
+#[test]
+fn report_lint_rejects_structured_support_missing_simulated_expectation_for_simulated_event() {
+    let trace_events = vec![trace_with_payload(
+        "obs_1",
+        "provider_simulated_replay",
+        "external.api.request",
+        json!({
+            "decision": "allowed",
+            "execution_status": "simulated",
+            "side_effect_executed": false,
+            "simulated": true
+        }),
+    )];
+    let report = ReportDraft::new(vec![
+        ReportClaim::new(
+            "finding-1",
+            "External API request was replayed without trusted side effects",
+            ["obs_1"],
+        )
+        .with_support(ReportClaimSupport {
+            provider: Some("external.api.request".to_string()),
+            event_type: Some("provider_simulated_replay".to_string()),
+            decision: Some("allowed".to_string()),
+            execution_status: Some("simulated".to_string()),
+            side_effect_executed: Some(false),
+            simulated: None,
+        }),
+    ]);
+
+    let result = lint_report_against_trace(&report, &trace_events);
+
+    assert!(!result.ok);
+    assert_eq!(
+        result.errors[0].kind,
+        ReportLintErrorKind::UnsupportedObservation
+    );
+}
+
+#[test]
+fn report_lint_accepts_simulated_replay_with_explicit_support() {
+    let trace_events = vec![trace_with_payload(
+        "obs_1",
+        "provider_simulated_replay",
+        "external.api.request",
+        json!({
+            "decision": "allowed",
+            "execution_status": "simulated",
+            "side_effect_executed": false,
+            "simulated": true
+        }),
+    )];
+    let report = ReportDraft::new(vec![
+        ReportClaim::new(
+            "finding-1",
+            "External API request was simulated without trusted side effects",
+            ["obs_1"],
+        )
+        .with_support(ReportClaimSupport {
+            provider: Some("external.api.request".to_string()),
+            event_type: Some("provider_simulated_replay".to_string()),
+            decision: Some("allowed".to_string()),
+            execution_status: Some("simulated".to_string()),
+            side_effect_executed: Some(false),
+            simulated: Some(true),
+        }),
+    ]);
+
+    let result = lint_report_against_trace(&report, &trace_events);
+
+    assert!(result.ok, "{result:#?}");
+    assert!(result.errors.is_empty());
 }
 
 #[test]

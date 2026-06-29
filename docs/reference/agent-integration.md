@@ -5,3 +5,23 @@ Agents integrate by exposing only `runwarden-mcp`.
 Raw filesystem, shell, browser, HTTP, and vendor MCP servers must not be visible directly to the agent. Those capabilities are modeled as Runwarden providers and mediated by Rust policy.
 
 The contest edition removed agent-config generation/check commands from the CLI. Agent configuration remains a deployment concern: the safe shape is one MCP server named Runwarden whose command launches `runwarden-mcp`, without downstream server overrides.
+The Rust MCP crate validates the checked-in safe and unsafe examples: empty
+`args: []` is allowed, while non-empty or malformed `args` and any `env`,
+`environment`, `cwd`, `url`, or `transport` override are rejected.
+
+Checked-in examples:
+
+- `examples/agent-configs/claude.runwarden-only.json`
+- `examples/agent-configs/opencode.runwarden-only.json`
+- `examples/agent-configs/opencode.tools-list-transcript.json`
+
+The OpenCode transcript fixture records the `tools/list` response from
+`runwarden-mcp` and is validated by the MCP tests. It must contain only
+`runwarden.*` tools and must not list raw shell, filesystem, browser, HTTP, or
+downstream MCP tools.
+
+Validation coverage:
+
+```bash
+cargo test -p runwarden-mcp --test e2e_agent_flow
+```

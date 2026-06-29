@@ -5,7 +5,9 @@ use runwarden_assurance::report::{
 use runwarden_kernel::evidence::{InMemoryTraceStore, TraceEvent, TraceQuery};
 use runwarden_kernel::kernel::{KernelEnforcer, KernelPolicy, ProviderRegistry};
 use runwarden_kernel::{ErrorKind, KernelProvider, PolicyDecision, ProviderCall, ProviderOutcome};
-use runwarden_providers::catalog::default_first_party_providers;
+use runwarden_providers::catalog::{
+    default_external_providers, default_first_party_providers, full_provider_registry,
+};
 use runwarden_providers::input::{InputInspectPolicy, InputSource, inspect_input};
 use serde_json::{Value, json};
 
@@ -44,6 +46,36 @@ const RUNWARDEN_TOOLS: &[(&str, &str)] = &[
     ),
 ];
 const MAX_STDIO_FRAME_BYTES: usize = 1_048_576;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentConfigValidation {
+    pub ok: bool,
+    pub errors: Vec<String>,
+    pub side_effect_executed: bool,
+}
+
+pub fn validate_runwarden_only_agent_config(config: &Value) -> AgentConfigValidation {
+    let mut errors = Vec::new();
+    let has_claude_shape = config.get("mcpServers").is_some();
+    let has_opencode_shape = config.get("mcp").is_some();
+
+    match (has_claude_shape, has_opencode_shape) {
+        (true, false) => validate_claude_mcp_config(config, &mut errors),
+        (false, true) => validate_opencode_mcp_config(config, &mut errors),
+        (true, true) => {
+            errors.push("agent config must not define both mcpServers and mcp".to_string())
+        }
+        (false, false) => {
+            errors.push("agent config must define exactly one Runwarden MCP server".to_string())
+        }
+    }
+
+    AgentConfigValidation {
+        ok: errors.is_empty(),
+        errors,
+        side_effect_executed: false,
+    }
+}
 
 pub fn handle_stdio_payload(payload: &str) -> anyhow::Result<String> {
     let body = decode_stdio_body(payload)?;
@@ -144,10 +176,7 @@ fn tool_descriptors() -> Vec<Value> {
             json!({
                 "name": name,
                 "description": description,
-                "inputSchema": {
-                    "type": "object",
-                    "additionalProperties": true
-                },
+                "inputSchema": tool_input_schema(name),
                 "outputSchema": {
                     "type": "object",
                     "additionalProperties": true
@@ -155,6 +184,79 @@ fn tool_descriptors() -> Vec<Value> {
             })
         })
         .collect()
+}
+
+fn tool_input_schema(name: &str) -> Value {
+    match name {
+        "runwarden.provider.call" => json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["provider"],
+            "properties": provider_call_schema_properties()
+        }),
+        "runwarden.provider.list" => json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "session_allowed_providers": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                }
+            }
+        }),
+        "runwarden.provider.status" => json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["provider"],
+            "properties": {
+                "provider": { "type": "string" },
+                "session_allowed_providers": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                }
+            }
+        }),
+        _ => json!({
+            "type": "object",
+            "additionalProperties": true
+        }),
+    }
+}
+
+fn provider_call_schema_properties() -> Value {
+    json!({
+        "provider": { "type": "string" },
+        "action": { "type": "string" },
+        "session_id": { "type": "string" },
+        "actor_id": { "type": "string" },
+        "authz_id": { "type": "string" },
+        "approval_id": { "type": "string" },
+        "active_assessment": { "type": "boolean" },
+        "session_allowed_providers": {
+            "type": "array",
+            "items": { "type": "string" }
+        },
+        "input_text": { "type": "string" },
+        "input_path": { "type": "string" },
+        "trace_path": { "type": "string" },
+        "report_path": { "type": "string" },
+        "root": { "type": "string" },
+        "root_path": { "type": "string" },
+        "format": { "type": "string" },
+        "url": { "type": "string" },
+        "method": { "type": "string" },
+        "body": {},
+        "path": { "type": "string" },
+        "to": { "type": "string" },
+        "subject": { "type": "string" },
+        "content": { "type": "string" },
+        "key": { "type": "string" },
+        "value": {},
+        "query": {},
+        "payload": {},
+        "trace_events": { "type": "array" },
+        "report": { "type": "object" }
+    })
 }
 
 fn handle_tools_call(id: Value, params: Option<&Value>) -> Value {
@@ -200,9 +302,17 @@ fn handle_tools_call(id: Value, params: Option<&Value>) -> Value {
 }
 
 fn handle_provider_call(id: Value, params: Option<&Value>) -> Value {
+    let empty_arguments = json!({});
     let arguments = params
         .and_then(|params| params.get("arguments"))
-        .unwrap_or(&Value::Null);
+        .unwrap_or(&empty_arguments);
+    if let Err(message) = validate_argument_object(
+        arguments,
+        PROVIDER_CALL_ALLOWED_ARGUMENT_KEYS,
+        "provider call",
+    ) {
+        return jsonrpc_error(id, -32602, &message, json!({"side_effect_executed": false}));
+    }
     let Some(provider) = arguments.get("provider").and_then(Value::as_str) else {
         return jsonrpc_error(
             id,
@@ -214,7 +324,7 @@ fn handle_provider_call(id: Value, params: Option<&Value>) -> Value {
 
     let call = provider_call_from_arguments(provider, arguments);
     let mut enforcer = KernelEnforcer::new(
-        first_party_provider_registry(),
+        full_provider_registry(),
         kernel_policy_from_arguments(provider, arguments),
     );
     let outcome = enforcer.evaluate_call(&call);
@@ -240,10 +350,18 @@ fn handle_provider_call(id: Value, params: Option<&Value>) -> Value {
                     "decision": "allowed",
                     "execution_status": "completed",
                     "side_effect_executed": false,
+                    "obs_ref": &outcome.observation_id,
+                    "trace_event": trace_event_for_provider_result(
+                        &outcome,
+                        "provider_completed",
+                        "completed",
+                        false
+                    ),
                     "output": inspection
                 }),
             )
         }
+        other if provider_is_external(other) => tool_result(id, external_provider_result(&outcome)),
         other => tool_error_result(
             id,
             json!({
@@ -253,6 +371,146 @@ fn handle_provider_call(id: Value, params: Option<&Value>) -> Value {
                 "side_effect_executed": false
             }),
         ),
+    }
+}
+
+const PROVIDER_CALL_ALLOWED_ARGUMENT_KEYS: &[&str] = &[
+    "provider",
+    "action",
+    "session_id",
+    "actor_id",
+    "authz_id",
+    "approval_id",
+    "active_assessment",
+    "session_allowed_providers",
+    "input_text",
+    "input_path",
+    "trace_path",
+    "report_path",
+    "root",
+    "root_path",
+    "format",
+    "url",
+    "method",
+    "body",
+    "path",
+    "to",
+    "subject",
+    "content",
+    "key",
+    "value",
+    "query",
+    "payload",
+    "trace_events",
+    "report",
+];
+
+const PROVIDER_LIST_ALLOWED_ARGUMENT_KEYS: &[&str] = &["session_allowed_providers"];
+const PROVIDER_STATUS_ALLOWED_ARGUMENT_KEYS: &[&str] = &["provider", "session_allowed_providers"];
+
+fn validate_argument_object(
+    arguments: &Value,
+    allowed_keys: &[&str],
+    label: &str,
+) -> Result<(), String> {
+    let Some(object) = arguments.as_object() else {
+        return Err(format!("{label} arguments must be an object"));
+    };
+    for (key, value) in object {
+        if !allowed_keys.contains(&key.as_str()) {
+            return Err(format!("{label} argument is not allowed: {key}"));
+        }
+        if key == "session_allowed_providers" && !is_string_array(value) {
+            return Err(format!(
+                "{label} arguments.session_allowed_providers must be an array of strings"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn is_string_array(value: &Value) -> bool {
+    value
+        .as_array()
+        .is_some_and(|items| items.iter().all(Value::is_string))
+}
+
+fn validate_claude_mcp_config(config: &Value, errors: &mut Vec<String>) {
+    let Some(servers) = config.get("mcpServers").and_then(Value::as_object) else {
+        errors.push("mcpServers must be an object".to_string());
+        return;
+    };
+    validate_single_runwarden_server(servers, "mcpServers", errors);
+    let Some(server) = servers.get("runwarden") else {
+        return;
+    };
+    validate_common_runwarden_server_fields(server, "mcpServers.runwarden", errors);
+    if server.get("command").and_then(Value::as_str) != Some("runwarden-mcp") {
+        errors.push("mcpServers.runwarden.command must be exactly runwarden-mcp".to_string());
+    }
+}
+
+fn validate_opencode_mcp_config(config: &Value, errors: &mut Vec<String>) {
+    let Some(servers) = config.get("mcp").and_then(Value::as_object) else {
+        errors.push("mcp must be an object".to_string());
+        return;
+    };
+    validate_single_runwarden_server(servers, "mcp", errors);
+    let Some(server) = servers.get("runwarden") else {
+        return;
+    };
+    validate_common_runwarden_server_fields(server, "mcp.runwarden", errors);
+    if server.get("type").and_then(Value::as_str) != Some("local") {
+        errors.push("mcp.runwarden.type must be local".to_string());
+    }
+    if server.get("enabled").and_then(Value::as_bool) == Some(false) {
+        errors.push("mcp.runwarden.enabled must not be false".to_string());
+    }
+    let command_ok = server
+        .get("command")
+        .and_then(Value::as_array)
+        .is_some_and(|items| items.len() == 1 && items[0].as_str() == Some("runwarden-mcp"));
+    if !command_ok {
+        errors.push("mcp.runwarden.command must be exactly [\"runwarden-mcp\"]".to_string());
+    }
+
+    let Some(tools) = config.get("tools").and_then(Value::as_object) else {
+        errors.push("OpenCode config must disable built-in tools".to_string());
+        return;
+    };
+    for (name, value) in tools {
+        if value.as_bool() != Some(false) {
+            errors.push(format!("OpenCode built-in tool must be disabled: {name}"));
+        }
+    }
+}
+
+fn validate_single_runwarden_server(
+    servers: &serde_json::Map<String, Value>,
+    label: &str,
+    errors: &mut Vec<String>,
+) {
+    if servers.len() != 1 || !servers.contains_key("runwarden") {
+        errors.push(format!(
+            "{label} must contain exactly one server named runwarden"
+        ));
+    }
+}
+
+fn validate_common_runwarden_server_fields(server: &Value, label: &str, errors: &mut Vec<String>) {
+    let Some(server_object) = server.as_object() else {
+        errors.push(format!("{label} must be an object"));
+        return;
+    };
+    for field in ["env", "environment", "cwd", "url", "transport"] {
+        if server_object.contains_key(field) {
+            errors.push(format!("{label}.{field} must not be set"));
+        }
+    }
+    if let Some(args) = server_object.get("args")
+        && !args.as_array().is_some_and(Vec::is_empty)
+    {
+        errors.push(format!("{label}.args must be an empty array when present"));
     }
 }
 
@@ -293,6 +551,13 @@ fn first_party_provider_registry() -> ProviderRegistry {
     registry
 }
 
+fn all_kernel_managed_providers() -> Vec<KernelProvider> {
+    default_first_party_providers()
+        .into_iter()
+        .chain(default_external_providers())
+        .collect()
+}
+
 fn kernel_policy_from_arguments(provider: &str, arguments: &Value) -> KernelPolicy {
     let mut policy = KernelPolicy::default();
     policy.active_assessment = arguments
@@ -329,7 +594,81 @@ fn provider_outcome_payload(outcome: &ProviderOutcome) -> Value {
     payload["error_kind"] = json!(&outcome.envelope.error_kind);
     payload["reason"] = json!(&outcome.envelope.reason);
     payload["side_effect_executed"] = json!(outcome.envelope.side_effect_executed);
+    payload["obs_ref"] = json!(&outcome.observation_id);
+    payload["trace_event"] = trace_event_for_outcome(outcome);
     payload
+}
+
+fn trace_event_for_outcome(outcome: &ProviderOutcome) -> Value {
+    let event_type = match outcome.decision {
+        PolicyDecision::Allowed => "provider_policy_evaluated",
+        PolicyDecision::Denied => "provider_denied",
+        PolicyDecision::RequiresReview => "provider_approval_pending",
+    };
+    trace_event_for_provider_result(
+        outcome,
+        event_type,
+        serde_json::to_value(&outcome.execution_status)
+            .ok()
+            .and_then(|value| value.as_str().map(ToString::to_string))
+            .as_deref()
+            .unwrap_or("not_executed"),
+        false,
+    )
+}
+
+fn trace_event_for_provider_result(
+    outcome: &ProviderOutcome,
+    event_type: &str,
+    execution_status: &str,
+    simulated: bool,
+) -> Value {
+    let event = TraceEvent::sealed(
+        outcome.observation_id.clone(),
+        event_type.to_string(),
+        Some(outcome.envelope.provider.clone()),
+        json!({
+            "provider": &outcome.envelope.provider,
+            "action": &outcome.envelope.action,
+            "decision": &outcome.decision,
+            "execution_status": execution_status,
+            "gate_id": &outcome.envelope.gate_id,
+            "reason": &outcome.envelope.reason,
+            "error_kind": &outcome.envelope.error_kind,
+            "side_effect_executed": outcome.envelope.side_effect_executed,
+            "simulated": simulated
+        }),
+        None,
+    );
+    serde_json::to_value(event).expect("trace event serializes")
+}
+
+fn external_provider_result(outcome: &ProviderOutcome) -> Value {
+    json!({
+        "provider": &outcome.envelope.provider,
+        "action": &outcome.envelope.action,
+        "decision": "allowed",
+        "execution_status": "simulated",
+        "simulated": true,
+        "side_effect_executed": false,
+        "obs_ref": &outcome.observation_id,
+        "trace_event": trace_event_for_provider_result(
+            outcome,
+            "provider_simulated_replay",
+            "simulated",
+            true
+        ),
+        "output": {
+            "message": "external provider replay is simulated after Rust policy allow",
+            "trusted_side_effect_executed": false
+        }
+    })
+}
+
+fn provider_is_external(provider_id: &str) -> bool {
+    default_external_providers()
+        .into_iter()
+        .any(|provider| provider.id == provider_id)
 }
 
 fn inline_trace_events(arguments: &Value) -> Vec<TraceEvent> {
@@ -464,9 +803,17 @@ fn trace_query_from_args(arguments: &Value) -> TraceQuery {
 }
 
 fn handle_provider_list(id: Value, params: Option<&Value>) -> Value {
+    let empty_arguments = json!({});
     let arguments = params
         .and_then(|params| params.get("arguments"))
-        .unwrap_or(&Value::Null);
+        .unwrap_or(&empty_arguments);
+    if let Err(message) = validate_argument_object(
+        arguments,
+        PROVIDER_LIST_ALLOWED_ARGUMENT_KEYS,
+        "provider list",
+    ) {
+        return jsonrpc_error(id, -32602, &message, json!({"side_effect_executed": false}));
+    }
     let allowed: Vec<_> = arguments
         .get("session_allowed_providers")
         .and_then(Value::as_array)
@@ -475,7 +822,7 @@ fn handle_provider_list(id: Value, params: Option<&Value>) -> Value {
         .filter_map(Value::as_str)
         .collect();
 
-    let providers: Vec<_> = default_first_party_providers()
+    let providers: Vec<_> = all_kernel_managed_providers()
         .into_iter()
         .filter(|provider| allowed.is_empty() || allowed.contains(&provider.id.as_str()))
         .collect();
@@ -490,9 +837,17 @@ fn handle_provider_list(id: Value, params: Option<&Value>) -> Value {
 }
 
 fn handle_provider_status(id: Value, params: Option<&Value>) -> Value {
+    let empty_arguments = json!({});
     let arguments = params
         .and_then(|params| params.get("arguments"))
-        .unwrap_or(&Value::Null);
+        .unwrap_or(&empty_arguments);
+    if let Err(message) = validate_argument_object(
+        arguments,
+        PROVIDER_STATUS_ALLOWED_ARGUMENT_KEYS,
+        "provider status",
+    ) {
+        return jsonrpc_error(id, -32602, &message, json!({"side_effect_executed": false}));
+    }
     let Some(provider_id) = arguments.get("provider").and_then(Value::as_str) else {
         return jsonrpc_error(
             id,
@@ -502,7 +857,7 @@ fn handle_provider_status(id: Value, params: Option<&Value>) -> Value {
         );
     };
 
-    let Some(provider) = find_first_party_provider(provider_id) else {
+    let Some(provider) = find_kernel_managed_provider(provider_id) else {
         return tool_error_result(
             id,
             json!({
@@ -611,8 +966,8 @@ fn report_and_trace_args(
     Some((report, trace_events))
 }
 
-fn find_first_party_provider(provider_id: &str) -> Option<KernelProvider> {
-    default_first_party_providers()
+fn find_kernel_managed_provider(provider_id: &str) -> Option<KernelProvider> {
+    all_kernel_managed_providers()
         .into_iter()
         .find(|provider| provider.id == provider_id)
 }

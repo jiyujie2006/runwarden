@@ -47,6 +47,8 @@ pub mod report {
         pub execution_status: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub side_effect_executed: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub simulated: Option<bool>,
     }
 
     impl ReportClaimSupport {
@@ -56,6 +58,7 @@ pub mod report {
                 || self.decision.is_some()
                 || self.execution_status.is_some()
                 || self.side_effect_executed.is_some()
+                || self.simulated.is_some()
         }
     }
 
@@ -194,6 +197,12 @@ pub mod report {
     }
 
     fn observation_supports_claim(claim: &ReportClaim, event: &TraceEvent) -> bool {
+        if event_is_simulated(event)
+            && claim.support.as_ref().and_then(|support| support.simulated) != Some(true)
+        {
+            return false;
+        }
+
         if let Some(support) = &claim.support
             && support.has_expectations()
         {
@@ -226,6 +235,10 @@ pub mod report {
         support: &ReportClaimSupport,
         event: &TraceEvent,
     ) -> bool {
+        if event_is_simulated(event) && support.simulated != Some(true) {
+            return false;
+        }
+
         string_field_matches(support.provider.as_deref(), event.provider.as_deref())
             && string_field_matches(
                 support.event_type.as_deref(),
@@ -243,6 +256,7 @@ pub mod report {
                 support.side_effect_executed,
                 payload_bool(&event.payload, "side_effect_executed"),
             )
+            && bool_field_matches(support.simulated, Some(event_is_simulated(event)))
     }
 
     fn string_field_matches(expected: Option<&str>, actual: Option<&str>) -> bool {
@@ -275,6 +289,10 @@ pub mod report {
                     .and_then(|envelope| envelope.get(key))
                     .and_then(serde_json::Value::as_bool)
             })
+    }
+
+    fn event_is_simulated(event: &TraceEvent) -> bool {
+        payload_bool(&event.payload, "simulated").unwrap_or(false)
     }
 
     fn verify_trace_hash_chain(

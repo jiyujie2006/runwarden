@@ -1,5 +1,7 @@
+use std::{fs, path::PathBuf};
+
 use runwarden_kernel::evidence::TraceEvent;
-use runwarden_mcp::handle_jsonrpc_body;
+use runwarden_mcp::{handle_jsonrpc_body, validate_runwarden_only_agent_config};
 use serde_json::{Value, json};
 
 #[test]
@@ -83,6 +85,166 @@ fn agent_only_assessment_flow_mediates_report_render_before_execution() {
     assert_eq!(render["side_effect_executed"], false);
 }
 
+#[test]
+fn opencode_example_config_and_transcript_expose_only_runwarden_tools() {
+    let root = workspace_root();
+    let config_path = root.join("examples/agent-configs/opencode.runwarden-only.json");
+    let transcript_path = root.join("examples/agent-configs/opencode.tools-list-transcript.json");
+    let config: Value =
+        serde_json::from_str(&fs::read_to_string(config_path).expect("opencode config"))
+            .expect("config JSON");
+    let transcript: Value =
+        serde_json::from_str(&fs::read_to_string(transcript_path).expect("transcript"))
+            .expect("transcript JSON");
+
+    let mcp = config["mcp"].as_object().expect("mcp object");
+    assert_eq!(mcp.len(), 1);
+    assert!(mcp.contains_key("runwarden"));
+    assert!(
+        validate_runwarden_only_agent_config(&config).ok,
+        "OpenCode config must pass the Rust Runwarden-only validator"
+    );
+    assert_eq!(config["mcp"]["runwarden"]["type"], "local");
+    assert_eq!(
+        config["mcp"]["runwarden"]["command"],
+        json!(["runwarden-mcp"])
+    );
+    for value in config["tools"].as_object().expect("tools object").values() {
+        assert_eq!(value, false, "OpenCode built-in tools must be disabled");
+    }
+    for forbidden in ["env", "environment", "cwd", "url", "transport", "args"] {
+        assert!(
+            config["mcp"]["runwarden"].get(forbidden).is_none(),
+            "OpenCode Runwarden-only config must not set {forbidden}"
+        );
+    }
+
+    let actual =
+        handle_jsonrpc_body(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#)
+            .expect("tools/list");
+    let mut actual_names = tool_names(&actual["result"]["tools"]);
+    let mut transcript_names = tool_names(&transcript["response"]["result"]["tools"]);
+    actual_names.sort();
+    transcript_names.sort();
+    assert_eq!(transcript_names, actual_names);
+    assert!(
+        actual_names
+            .iter()
+            .all(|name| name.starts_with("runwarden."))
+    );
+    for raw_or_downstream in [
+        "shell",
+        "bash",
+        "filesystem.read_file",
+        "browser.open_page",
+        "http.request",
+        "external.mcp.browser.open_page",
+    ] {
+        assert!(!actual_names.contains(&raw_or_downstream.to_string()));
+    }
+}
+
+#[test]
+fn runwarden_only_agent_config_validator_accepts_claude_empty_args() {
+    let root = workspace_root();
+    let config_path = root.join("examples/agent-configs/claude.runwarden-only.json");
+    let config: Value =
+        serde_json::from_str(&fs::read_to_string(config_path).expect("claude config"))
+            .expect("config JSON");
+
+    let validation = validate_runwarden_only_agent_config(&config);
+
+    assert!(validation.ok, "{:?}", validation.errors);
+    assert!(validation.errors.is_empty());
+    assert!(!validation.side_effect_executed);
+}
+
+#[test]
+fn runwarden_only_agent_config_validator_rejects_overrides_and_raw_servers() {
+    let root = workspace_root();
+    for path in [
+        "examples/agent-configs/unsafe.raw-filesystem.json",
+        "examples/agent-configs/unsafe.raw-shell.json",
+    ] {
+        let config: Value =
+            serde_json::from_str(&fs::read_to_string(root.join(path)).expect("unsafe config"))
+                .expect("config JSON");
+        let validation = validate_runwarden_only_agent_config(&config);
+
+        assert!(!validation.ok, "{path} should be rejected");
+        assert!(!validation.side_effect_executed);
+    }
+
+    for config in [
+        json!({
+            "mcpServers": {
+                "runwarden": {
+                    "command": "runwarden-mcp",
+                    "args": ["--unsafe"]
+                }
+            }
+        }),
+        json!({
+            "mcpServers": {
+                "runwarden": {
+                    "command": "runwarden-mcp",
+                    "args": "--unsafe"
+                }
+            }
+        }),
+        json!({
+            "mcpServers": {
+                "runwarden": {
+                    "command": "runwarden-mcp",
+                    "env": {"RUNWARDEN_POLICY": "off"}
+                }
+            }
+        }),
+        json!({
+            "mcp": {
+                "runwarden": {
+                    "type": "local",
+                    "command": ["runwarden-mcp"],
+                    "cwd": "/tmp"
+                }
+            },
+            "tools": {"bash": false}
+        }),
+        json!({
+            "mcp": {
+                "runwarden": {
+                    "type": "remote",
+                    "command": ["runwarden-mcp"]
+                }
+            },
+            "tools": {"bash": false}
+        }),
+        json!({
+            "mcp": {
+                "runwarden": {
+                    "type": "local",
+                    "command": ["runwarden-mcp", "--unsafe"]
+                }
+            },
+            "tools": {"bash": false}
+        }),
+        json!({
+            "mcp": {
+                "runwarden": {
+                    "type": "local",
+                    "command": ["runwarden-mcp"]
+                }
+            },
+            "tools": {"bash": true}
+        }),
+    ] {
+        let validation = validate_runwarden_only_agent_config(&config);
+
+        assert!(!validation.ok, "{config}");
+        assert!(!validation.side_effect_executed);
+    }
+}
+
 fn call_tool(id: u64, name: &str, arguments: Value) -> Value {
     handle_jsonrpc_body(
         &json!({
@@ -104,4 +266,22 @@ fn tool_payload(response: &Value) -> Value {
         .as_str()
         .expect("tool text");
     serde_json::from_str(text).expect("tool payload")
+}
+
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("crates dir")
+        .parent()
+        .expect("workspace root")
+        .to_path_buf()
+}
+
+fn tool_names(tools: &Value) -> Vec<String> {
+    tools
+        .as_array()
+        .expect("tools array")
+        .iter()
+        .map(|tool| tool["name"].as_str().expect("tool name").to_string())
+        .collect()
 }

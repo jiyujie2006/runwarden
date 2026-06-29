@@ -11,9 +11,10 @@ This index is the canonical map for the contest edition.
 
 ## Operate The Demo
 
-- [CLI Reference](reference/cli.md): sessions, providers, trace, reports, scenarios, demo runner, and static UI.
-- [MCP Reference](reference/mcp.md): exact agent-facing MCP tools.
-- [Reviewer Console](reference/webui-review-console.md): static demo console contract.
+- [CLI Reference](reference/cli.md): sessions, providers, trace, reports, scenarios, demo runner, and static/live UI.
+- [MCP Reference](reference/mcp.md): exact agent-facing MCP tools and provider-call replay evidence.
+- [Reviewer Console](reference/webui-review-console.md): static and live demo console contract.
+- [Agent Integration](reference/agent-integration.md): Runwarden-only MCP config shape and OpenCode fixture.
 - [First Scenario](reference/first-scenario.md): scenario folder contract.
 
 ## Security Model

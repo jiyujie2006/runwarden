@@ -57,6 +57,7 @@ const demoInput: DemoScenarioInput = {
     ]
   },
   trace: [{ obs_id: "obs_prompt_file_exfil_denied" }],
+  trace_verification: { verified: true },
   lint: { ok: true }
 };
 
@@ -79,6 +80,14 @@ describe("createDemoReviewerConsoleViewModel", () => {
       reportClaimCount: 1
     });
     expect(model.scenarios[0]?.reportObsRefs).toEqual(["obs_prompt_file_exfil_denied"]);
+  });
+
+  it("does not infer verified trace state from trace presence or lint success", () => {
+    const { trace_verification: _traceVerification, ...inputWithoutVerification } = demoInput;
+    const model = createDemoReviewerConsoleViewModel([inputWithoutVerification]);
+
+    expect(model.suite.traceState).toBe("missing");
+    expect(model.scenarios[0]?.traceState).toBe("missing");
   });
 });
 

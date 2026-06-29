@@ -1,5 +1,7 @@
 use std::{
     env, fs,
+    io::{Read, Write},
+    net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::ExitCode,
 };
@@ -223,6 +225,10 @@ enum UiCommand {
         port: u16,
         #[arg(long, default_value = "artifacts/reviewer-console.html")]
         file: PathBuf,
+        #[arg(long)]
+        live: bool,
+        #[arg(long)]
+        demo: Option<PathBuf>,
         #[arg(long)]
         json: bool,
     },
@@ -712,21 +718,29 @@ fn run_ui_command(command: UiCommand) -> anyhow::Result<()> {
             bind,
             port,
             file,
+            live,
+            demo,
             json,
         } => {
             let root = find_workspace_root(env::current_dir()?)?;
-            let file = resolve_workspace_output_path(&root, &file, "ui file")?;
-            let result = json!({
-                "mode": "static_demo_console",
-                "listen_addr": format!("{bind}:{port}"),
-                "file": file.to_string_lossy(),
-                "local_api_url": Value::Null,
-                "side_effect_executed": false
-            });
-            if json {
-                println!("{}", serde_json::to_string_pretty(&result)?);
+            if live {
+                let demo = demo.ok_or_else(|| anyhow::anyhow!("--demo is required with --live"))?;
+                let demo_path = resolve_workspace_output_path(&root, &demo, "ui demo")?;
+                run_live_demo_server(&bind, port, &demo_path, json)?;
             } else {
-                println!("serve static reviewer console {}", file.display());
+                let file = resolve_workspace_output_path(&root, &file, "ui file")?;
+                let result = json!({
+                    "mode": "static_demo_console",
+                    "listen_addr": format!("{bind}:{port}"),
+                    "file": file.to_string_lossy(),
+                    "local_api_url": Value::Null,
+                    "side_effect_executed": false
+                });
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                } else {
+                    println!("serve static reviewer console {}", file.display());
+                }
             }
         }
     }
@@ -1242,7 +1256,7 @@ fn call_external_provider(provider: &str) -> Value {
     json!({
         "provider": provider,
         "decision": "allowed",
-        "execution_status": "completed",
+        "execution_status": "simulated",
         "simulated": true,
         "side_effect_executed": false,
         "output": {
@@ -1282,6 +1296,7 @@ fn run_demo_scenario(root: &Path, scenario: &str, output: &Path) -> anyhow::Resu
     let report = read_report(&scenario_path.join("expected/report.json"))?;
     let baseline = read_json_value(&scenario_path.join("expected/eval-baseline.json"))?;
     let trace_events = trace_events_for_scenario(scenario, &scenario_path, &provider_calls)?;
+    let trace_verification = verify_trace_events(trace_events.clone());
     let lint = lint_report_against_trace(&report, &trace_events);
     if !lint.ok {
         anyhow::bail!("scenario report does not lint against generated trace");
@@ -1300,6 +1315,7 @@ fn run_demo_scenario(root: &Path, scenario: &str, output: &Path) -> anyhow::Resu
         "denials": denials,
         "report": report,
         "metrics": metrics.metrics,
+        "trace_verification": trace_verification,
         "lint": lint,
         "expected": baseline,
         "side_effect_executed": false
@@ -1478,10 +1494,12 @@ fn trace_events_for_scenario(
             .clone()
             .or_else(|| obs_refs.get(idx).cloned())
             .ok_or_else(|| anyhow::anyhow!("missing obs ref for provider call {}", idx + 1))?;
-        let event_type = match call.decision.as_str() {
-            "allowed" => "provider_completed",
-            "requires_review" => "provider_approval_pending",
-            "denied" => "provider_denied",
+        let simulated = call.execution_status == "simulated";
+        let event_type = match (call.decision.as_str(), simulated) {
+            ("allowed", true) => "provider_simulated_replay",
+            ("allowed", false) => "provider_completed",
+            ("requires_review", _) => "provider_approval_pending",
+            ("denied", _) => "provider_denied",
             _ => "provider_failed",
         };
         store.append_signed(
@@ -1490,13 +1508,15 @@ fn trace_events_for_scenario(
             Some(call.provider.clone()),
             json!({
                 "scenario": scenario,
-                "provider": call.provider,
-                "action": call.action,
-                "decision": call.decision,
-                "execution_status": call.execution_status,
-                "reason": call.reason,
-                "error_kind": call.error_kind,
-                "side_effect_executed": call.side_effect_executed
+                "provider": &call.provider,
+                "action": &call.action,
+                "decision": &call.decision,
+                "execution_status": &call.execution_status,
+                "reason": &call.reason,
+                "error_kind": &call.error_kind,
+                "arguments": &call.arguments,
+                "side_effect_executed": call.side_effect_executed,
+                "simulated": simulated
             }),
         );
     }
@@ -1574,19 +1594,7 @@ fn render_scenario_suite_report(
 }
 
 fn render_static_demo_console(input: &Path) -> anyhow::Result<String> {
-    let mut scenario_files = Vec::new();
-    if input.is_file() {
-        scenario_files.push(input.to_path_buf());
-    } else if input.exists() {
-        for entry in fs::read_dir(input)? {
-            let entry = entry?;
-            let candidate = entry.path().join("webui.json");
-            if candidate.exists() {
-                scenario_files.push(candidate);
-            }
-        }
-    }
-    scenario_files.sort();
+    let scenario_files = collect_demo_webui_files(input)?;
 
     let mut html = String::from(
         "<!doctype html><meta charset=\"utf-8\"><title>Runwarden Reviewer Console</title><main><h1>Runwarden Reviewer Console</h1>",
@@ -1599,15 +1607,211 @@ fn render_static_demo_console(input: &Path) -> anyhow::Result<String> {
         let scenario = value["scenario"].as_str().unwrap_or("unknown");
         let provider_count = value["provider_calls"].as_array().map_or(0, Vec::len);
         let denial_count = value["denials"].as_array().map_or(0, Vec::len);
+        let trace_status = match value
+            .get("trace_verification")
+            .and_then(|verification| verification.get("verified"))
+            .and_then(Value::as_bool)
+        {
+            Some(true) => "verified",
+            Some(false) => "tampered",
+            None => "missing",
+        };
         html.push_str(&format!(
-            "<section><h2>{}</h2><p>Provider calls: {}</p><p>Denials: {}</p><p>Trace: verified input required before report use</p></section>",
+            "<section><h2>{}</h2><p>Provider calls: {}</p><p>Denials: {}</p><p>Trace: {}</p></section>",
             html_escape(scenario),
             provider_count,
-            denial_count
+            denial_count,
+            trace_status
         ));
     }
     html.push_str("</main>");
     Ok(html)
+}
+
+fn collect_demo_webui_files(input: &Path) -> anyhow::Result<Vec<PathBuf>> {
+    let mut scenario_files = Vec::new();
+    if input.is_file() {
+        scenario_files.push(input.to_path_buf());
+    } else if input.exists() {
+        let direct = input.join("webui.json");
+        if direct.exists() {
+            scenario_files.push(direct);
+        }
+        for entry in fs::read_dir(input)? {
+            let entry = entry?;
+            let candidate = entry.path().join("webui.json");
+            if candidate.exists() {
+                scenario_files.push(candidate);
+            }
+        }
+    }
+    scenario_files.sort();
+    scenario_files.dedup();
+    Ok(scenario_files)
+}
+
+fn run_live_demo_server(bind: &str, port: u16, demo_path: &Path, json: bool) -> anyhow::Result<()> {
+    let replay_events = load_live_replay_events(demo_path)?;
+    let html = render_static_demo_console(demo_path)?;
+    let listener = TcpListener::bind((bind, port))?;
+    let listen_addr = listener.local_addr()?;
+    let result = json!({
+        "mode": "live_demo_replay",
+        "listen_addr": listen_addr.to_string(),
+        "events_url": format!("http://{listen_addr}/events"),
+        "demo": demo_path.to_string_lossy(),
+        "provider_call_count": replay_events.len(),
+        "local_api_url": Value::Null,
+        "side_effect_executed": false
+    });
+    if json {
+        println!("{}", serde_json::to_string(&result)?);
+    } else {
+        println!("serve live demo replay http://{listen_addr}/events");
+    }
+    std::io::stdout().flush()?;
+
+    for stream in listener.incoming() {
+        match stream {
+            Ok(stream) => serve_live_replay_request(stream, &html, &replay_events)?,
+            Err(err) => eprintln!("live replay connection failed: {err}"),
+        }
+    }
+    Ok(())
+}
+
+fn load_live_replay_events(demo_path: &Path) -> anyhow::Result<Vec<Value>> {
+    let files = collect_demo_webui_files(demo_path)?;
+    if files.is_empty() {
+        anyhow::bail!(
+            "live demo data is missing: expected webui.json under {}",
+            demo_path.display()
+        );
+    }
+
+    let mut events = Vec::new();
+    for file in files {
+        let value = read_json_value(&file)?;
+        let scenario = value["scenario"].as_str().unwrap_or("unknown");
+        let provider_calls = value["provider_calls"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("{} is missing provider_calls array", file.display()))?;
+        for (index, call) in provider_calls.iter().enumerate() {
+            let mut event = serde_json::Map::new();
+            event.insert("kind".to_string(), json!("provider_call"));
+            event.insert("scenario".to_string(), json!(scenario));
+            event.insert("sequence".to_string(), json!(index + 1));
+            if let Some(call_object) = call.as_object() {
+                for (key, value) in call_object {
+                    event.insert(key.clone(), value.clone());
+                }
+            }
+            events.push(Value::Object(event));
+        }
+    }
+
+    if events.is_empty() {
+        anyhow::bail!(
+            "live demo data is missing provider-call events under {}",
+            demo_path.display()
+        );
+    }
+    Ok(events)
+}
+
+fn serve_live_replay_request(
+    mut stream: TcpStream,
+    html: &str,
+    replay_events: &[Value],
+) -> anyhow::Result<()> {
+    let mut buffer = [0u8; 8192];
+    let bytes_read = stream.read(&mut buffer)?;
+    let request = String::from_utf8_lossy(&buffer[..bytes_read]);
+    let path = request
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .unwrap_or("/");
+
+    match path {
+        "/" | "/index.html" => write_http_response(
+            &mut stream,
+            "200 OK",
+            "text/html; charset=utf-8",
+            html.as_bytes(),
+            &[],
+        )?,
+        "/events" => {
+            let body = sse_replay_body(replay_events)?;
+            write_http_response(
+                &mut stream,
+                "200 OK",
+                "text/event-stream; charset=utf-8",
+                body.as_bytes(),
+                &[("Cache-Control", "no-cache")],
+            )?;
+        }
+        "/healthz" => write_http_response(
+            &mut stream,
+            "200 OK",
+            "application/json",
+            br#"{"ok":true}"#,
+            &[],
+        )?,
+        _ => write_http_response(
+            &mut stream,
+            "404 Not Found",
+            "text/plain; charset=utf-8",
+            b"not found",
+            &[],
+        )?,
+    }
+    Ok(())
+}
+
+fn sse_replay_body(replay_events: &[Value]) -> anyhow::Result<String> {
+    let mut body = String::new();
+    for (index, event) in replay_events.iter().enumerate() {
+        let event_id = event
+            .get("obs_ref")
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+            .unwrap_or_else(|| format!("event-{}", index + 1));
+        body.push_str(&format!("id: {event_id}\n"));
+        body.push_str("event: provider_call\n");
+        body.push_str("data: ");
+        body.push_str(&serde_json::to_string(event)?);
+        body.push_str("\n\n");
+    }
+    body.push_str("event: replay_complete\n");
+    body.push_str("data: ");
+    body.push_str(&serde_json::to_string(&json!({
+        "kind": "replay_complete",
+        "provider_call_count": replay_events.len()
+    }))?);
+    body.push_str("\n\n");
+    Ok(body)
+}
+
+fn write_http_response(
+    stream: &mut TcpStream,
+    status: &str,
+    content_type: &str,
+    body: &[u8],
+    headers: &[(&str, &str)],
+) -> anyhow::Result<()> {
+    write!(
+        stream,
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n",
+        body.len()
+    )?;
+    for (name, value) in headers {
+        write!(stream, "{name}: {value}\r\n")?;
+    }
+    stream.write_all(b"\r\n")?;
+    stream.write_all(body)?;
+    stream.flush()?;
+    Ok(())
 }
 
 fn ensure_contest_scenario(scenario: &str) -> anyhow::Result<()> {
