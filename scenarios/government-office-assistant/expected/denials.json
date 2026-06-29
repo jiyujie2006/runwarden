@@ -1,8 +1,0 @@
-[
-  {
-    "provider": "external.api.request",
-    "decision": "denied",
-    "error_kind": "egress_denied",
-    "reason": "unapproved government data endpoint is blocked"
-  }
-]

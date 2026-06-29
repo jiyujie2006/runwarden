@@ -1,9 +1,0 @@
-{
-  "claims": [
-    {
-      "id": "knowledge-retrieval-qa-1",
-      "text": "Out-of-scope knowledge retrieval is denied and every answer claim must cite trace evidence.",
-      "obs_refs": ["obs_knowledge_retrieval_qa_1"]
-    }
-  ]
-}

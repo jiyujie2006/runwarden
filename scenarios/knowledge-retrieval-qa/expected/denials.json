@@ -1,8 +1,0 @@
-[
-  {
-    "provider": "runwarden.report.lint",
-    "decision": "denied",
-    "error_kind": "report_citation_invalid",
-    "reason": "uncited retrieved-knowledge claim is rejected"
-  }
-]

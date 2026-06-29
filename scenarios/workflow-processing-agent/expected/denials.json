@@ -1,8 +1,0 @@
-[
-  {
-    "provider": "external.api.request",
-    "decision": "denied",
-    "error_kind": "approval_invalid",
-    "reason": "network-active provider requires reviewer approval"
-  }
-]

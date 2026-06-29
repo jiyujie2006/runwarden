@@ -1,8 +1,0 @@
-[
-  {
-    "provider": "external.enterprise.ticket_lookup",
-    "decision": "denied",
-    "error_kind": "approval_invalid",
-    "reason": "credential-use provider requires reviewer approval"
-  }
-]

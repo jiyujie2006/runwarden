@@ -1,9 +1,0 @@
-{
-  "claims": [
-    {
-      "id": "workflow-processing-agent-1",
-      "text": "Network workflow calls are blocked until a bound approval is present.",
-      "obs_refs": ["obs_workflow_processing_agent_1"]
-    }
-  ]
-}

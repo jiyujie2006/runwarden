@@ -1,8 +1,0 @@
-[
-  {
-    "provider": "external.mcp.browser.open_page",
-    "decision": "denied",
-    "error_kind": "egress_denied",
-    "reason": "private or local network egress is denied"
-  }
-]

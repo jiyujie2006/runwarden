@@ -1,9 +1,0 @@
-{
-  "claims": [
-    {
-      "id": "ops-collaboration-agent-1",
-      "text": "Credential-backed ticket lookup is denied without explicit review.",
-      "obs_refs": ["obs_ops_collaboration_agent_1"]
-    }
-  ]
-}

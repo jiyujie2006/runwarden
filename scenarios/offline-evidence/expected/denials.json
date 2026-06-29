@@ -1,8 +1,0 @@
-[
-  {
-    "provider": "runwarden.evidence.inspect",
-    "decision": "denied",
-    "error_kind": "root_escape",
-    "reason": "path traversal outside the evidence root is denied"
-  }
-]

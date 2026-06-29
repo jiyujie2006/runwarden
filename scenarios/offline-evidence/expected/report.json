@@ -1,9 +1,0 @@
-{
-  "claims": [
-    {
-      "id": "offline-evidence-1",
-      "text": "Evidence indexing rejected root escape attempts before side effects and preserves a verifiable trace reference.",
-      "obs_refs": ["obs_offline_evidence_1"]
-    }
-  ]
-}
