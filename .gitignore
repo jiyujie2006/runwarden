@@ -7,6 +7,9 @@ test-results/
 .turbo/
 .cache/
 .gstack/
+.agents/
+.codex/
+.trellis/
 .DS_Store
 *.log
 artifacts/
