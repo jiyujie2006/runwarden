@@ -20,6 +20,8 @@ reproducible from the checked-out repository.
 - JSON schemas in `schemas/`.
 - Scenario golden corpora in `scenarios/`.
 - Provider examples in `examples/providers/`.
+- Red-team harness and adversarial corpora in `redteam/run.py` and
+  `redteam/corpora/*.jsonl`.
 - Static reviewer console renderer in `packages/webui`.
 - Generated demo artifacts under `artifacts/demo/` when demo commands run.
 - Generated contest report under `artifacts/reports/` when report render runs.

@@ -17,7 +17,10 @@ Report claims may include structured support:
 
 When present, lint validates those fields against the cited trace event. Claims
 without structured support use text semantics only for clearly completed,
-allowed, denied, blocked, rejected, or review-blocked behavior.
+allowed, denied, blocked, rejected, or review-blocked behavior. A plain
+`completed` claim requires a completed event type or
+`execution_status=completed`; an `allowed` claim can be supported by an
+allowed/completed decision.
 
 Denied, blocked, rejected, and review-blocked text claims without structured
 support pass only when the cited trace payload states

@@ -17,6 +17,7 @@ runwarden approval pending --json
 runwarden approval approve approval-1 --reviewer reviewer_alice --reason "reviewed scope and risk" --json
 runwarden approval deny approval-1 --reviewer reviewer_alice --reason "out of scope" --json
 runwarden authority create --approval approval-1 --session demo --provider external.api.request --action request --arguments '{"url":"https://api.example.com/upload"}' --json
+runwarden authority inspect approval-1 --json
 
 runwarden trace verify --trace trace.json --json
 runwarden trace export --trace trace.json --provider runwarden.input.inspect --compact-refs --json
@@ -31,6 +32,7 @@ runwarden demo run --scenario prompt-injection-file-exfil --output artifacts/dem
 runwarden ui build --input artifacts/demo --output artifacts/reviewer-console.html --json
 runwarden ui serve --file artifacts/reviewer-console.html --json
 runwarden ui serve --live --demo artifacts/demo/prompt-injection-file-exfil --json
+runwarden ui serve --live --demo artifacts/demo/prompt-injection-file-exfil --llm-trace artifacts/llm-proxy/trace.jsonl --json
 ```
 
 ## Provider Calls
@@ -50,14 +52,20 @@ through Rust-owned provider outcomes, writes `trace.json`,
 
 ## Live Replay Server
 
-`runwarden ui serve --live --demo <relative-demo-dir>` starts a local replay
-server for existing demo artifacts. The server serves the static reviewer
-console at `/` and emits finite Server-Sent Events at `/events`; each
-`provider_call` event is derived from `webui.json` provider-call records and
-includes scenario, sequence, provider, action, decision, execution status,
-`side_effect_executed`, and `obs_ref`. The server does not submit approvals or
+`runwarden ui serve --file <relative-html> --json` validates the static console
+path and returns metadata with `local_api_url=null`; it does not start an HTTP
+server unless `--live` is passed.
+
+`runwarden ui serve --live --demo <relative-demo-dir> [--llm-trace
+<relative-jsonl>]` starts a local replay server for existing demo artifacts.
+The server serves the static reviewer console at `/` and emits finite
+Server-Sent Events at `/events`. `provider_call` events come from
+`webui.json`; when `--llm-trace` is supplied, `model_call` events from the
+LLM-proxy JSONL trace are appended. The server does not submit approvals or
 execute providers.
 
 ## Output Paths
 
-Demo, report, and UI output paths must be relative workspace paths. Absolute paths, parent traversal, and symlink components are rejected.
+Demo output, report output, UI build input/output, and UI serve `--file`,
+`--demo`, and `--llm-trace` paths must be relative workspace paths. Absolute
+paths, parent traversal, and symlink components are rejected.

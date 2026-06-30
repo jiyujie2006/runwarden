@@ -46,6 +46,13 @@ This index is the canonical map for the contest edition.
 - [Repository Review](repository-review.md)
 - [Roadmap](reference/roadmap.md)
 
+## Examples And Red-Team
+
+- [Provider Examples](../examples/providers/README.md)
+- [Report Examples](../examples/reports/README.md)
+- [Scenario Examples](../examples/scenarios/README.md)
+- [Red-Team Harness](../redteam/README.md)
+
 ## Scenario Fixtures
 
 - [Prompt Injection File Exfiltration](../scenarios/prompt-injection-file-exfil/README.md)

@@ -19,8 +19,11 @@ agent stack and score whether Runwarden blocked them. This is the contest delive
 
 ### `proxy-probe` — base-model input filter (fast, no LLM)
 
-Sends each attack prompt directly to `runwarden-llm-proxy` and scores whether the
-input filter blocked it (HTTP 403) before forwarding. Reproducible + offline.
+Sends each attack prompt to `runwarden-llm-proxy` at `/v1/chat/completions`
+with a mock upstream and scores whether the input filter blocked it (HTTP 403)
+before forwarding. This harness mode exercises the input filter only; the proxy
+binary also supports `/v1/responses`, output inspection, streaming SSE output
+blocking, and `model_call` trace JSONL. Reproducible + offline.
 
 ```bash
 python3 redteam/run.py proxy-probe \

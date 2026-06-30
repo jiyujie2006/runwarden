@@ -28,8 +28,8 @@ the local full gate exercises the contest demo workflow end to end.
 
 ## Tooling
 
-Local gate scripts prefer `cargo-deny` and fail with an installation hint when
-it is required but missing:
+Local gate scripts require `cargo-deny` and fail with an installation hint when
+it is missing:
 
 ```bash
 cargo install cargo-deny --version 0.19.6 --locked

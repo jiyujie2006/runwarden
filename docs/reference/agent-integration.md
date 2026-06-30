@@ -9,6 +9,10 @@ The Rust MCP crate validates the checked-in safe and unsafe examples: empty
 `args: []` is allowed, while non-empty or malformed `args` and any `env`,
 `environment`, `cwd`, `url`, or `transport` override are rejected.
 
+For OpenCode, the checked config must use `type: "local"`, `command:
+["runwarden-mcp"]`, must not set `enabled: false`, and must include a top-level
+`tools` object whose built-in tools are all set to `false`.
+
 Agent configuration arguments and MCP tool arguments do not carry Runwarden
 session policy. Agents cannot provide provider allowlists, active-assessment
 state, scoped roots, authz grants or ids, budgets, approval ids, or

@@ -6,7 +6,7 @@ repository owner.
 
 ## Security-Sensitive Invariants
 
-- Agents only see the Runwarden skill and `runwarden-mcp`.
+- Agents see only `runwarden-mcp`.
 - Raw shell, filesystem, browser, HTTP, and downstream MCP access are not
   exposed by default.
 - Runwarden-only agent configs may use empty `args: []`, but must reject

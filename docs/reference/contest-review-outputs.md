@@ -14,10 +14,20 @@ bash scripts/release_gate_local.sh
 
 ## Generated Review Outputs
 
-The local contest gate may write:
+`bash scripts/release_gate_local.sh` writes:
 
-- deterministic demo artifacts under `artifacts/demo/`
-- a Markdown report under `artifacts/reports/contest-report.md`
-- static reviewer console HTML at `artifacts/reviewer-console.html`
+- `artifacts/demo/<scenario>/trace.json`
+- `artifacts/demo/<scenario>/provider-calls.json`
+- `artifacts/demo/<scenario>/denials.json`
+- `artifacts/demo/<scenario>/report.json`
+- `artifacts/demo/<scenario>/metrics.json`
+- `artifacts/demo/<scenario>/webui.json`
+- `artifacts/reports/contest-report.md`
+- `artifacts/reviewer-console.html`
+
+`redteam/run.py proxy-probe` additionally writes
+`artifacts/redteam/proxy-probe-results.jsonl` and
+`artifacts/redteam/proxy-trace.jsonl`; `agent-drive` writes
+`artifacts/redteam/agent-drive-results.jsonl`.
 
 These outputs are review evidence, not installable product artifacts.

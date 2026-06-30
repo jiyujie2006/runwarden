@@ -27,6 +27,17 @@ Execution uses the manifest transport. If a request includes `transport`, it
 must exactly match the manifest transport. Manifests without an explicit
 transport are denied before adapter execution.
 
+`https` MCP manifests are not certified by the local adapter until a trusted
+HTTPS client adapter exists. HTTP and SSE execution currently accept only
+`http://` adapter URLs, still requiring exact origin allowlisting and
+private/local resolution denial before connecting.
+
+Stdio MCP manifests cannot require egress or credential controls:
+network-active risk, `network` or `credential_use` side effects, or non-empty
+`allowed_origins` fail certification with
+`stdio_egress_controls_unsupported` and execution returns `egress_denied`
+before spawn.
+
 Stdio MCP adapter requests cannot supply command arguments. Fixed adapter
 arguments must live inside a dedicated trusted wrapper or manifest-owned
 executable so allowlisted commands cannot be redirected outside the trusted
@@ -35,9 +46,9 @@ runtime root.
 Stdio execution is only allowed on platforms where Runwarden can clean up the
 adapter process tree.
 
-When an adapter request supplies `manifest_path`, relative paths resolve
-relative to that adapter request file and the resolved path is included in
-scoped-root, approval, and digest binding before execution.
+Adapter execution receives an already-loaded `ProviderManifest`;
+`manifest_path` on `ExternalMcpAdapterRequest` is not resolved by the local
+executor and is not part of scoped-root, approval, or digest binding today.
 
 ## Contest Checks
 

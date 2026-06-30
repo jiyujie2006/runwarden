@@ -30,6 +30,10 @@ Unknown tools, raw tools, and removed tools such as `runwarden.session.create_fr
   `session_allowed_providers`, `session_roots`, `authz_grants`, `budget`,
   `budgets`, `root`, `root_path`, `sandbox_root`, and self-approval fields.
 - Denials include `side_effect_executed: false`.
+- `runwarden.provider.call` implements `runwarden.input.inspect` and external
+  provider ids. First-party trace and report provider ids are listed for
+  registry/status metadata and exposed through dedicated MCP tools, not as
+  generic `provider.call` inline execution targets.
 - `runwarden.provider.list` and `runwarden.provider.status` include both
   first-party Runwarden providers and the external provider catalog. External
   tools are never exposed as MCP tools; they remain provider ids behind
@@ -47,7 +51,20 @@ Unknown tools, raw tools, and removed tools such as `runwarden.session.create_fr
   review-blocked calls always return `side_effect_executed=false`.
 - Provider-call results include `obs_ref` plus a sealed `trace_event` payload
   whose `obs_id` starts with `obs_*`.
+- Allowed external provider-call results include `anomaly: { score,
+  is_anomalous, reasons }`, produced by `runwarden-anomaly` from provider
+  sequence, argument size, and URL host. This is evidence metadata only; it
+  does not change allow, deny, or approval policy.
 
 ## Trace And Report Tools
 
-`runwarden.trace.verify` and `runwarden.trace.export` accept inline trace events and verify hash-chain integrity before returning evidence. `runwarden.report.lint` and `runwarden.report.render` accept inline report and trace payloads; render is blocked unless cited observations support the claims.
+`runwarden.trace.verify` accepts inline `trace_events` and returns verification
+status without side effects. `runwarden.trace.export` verifies inline trace
+events before policy evaluation and supports `offset`, `limit`, `provider`,
+`event_type`, `obs_prefix`, `max_bytes`, and `compact_refs`; MCP exports are
+review-blocked because trace export is an artifact-write provider and MCP
+callers cannot supply approvals. `runwarden.report.lint` accepts inline
+`report` and `trace_events` and enforces citation support.
+`runwarden.report.render` is review-blocked in the MCP inline path before
+rendering; agents should use lint through MCP and a reviewer-approved non-agent
+path for rendering.

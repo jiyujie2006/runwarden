@@ -4,17 +4,15 @@ The contest WebUI is a dependency-free static renderer for Rust-produced demo JS
 
 ## UI Contract
 
-The static console displays:
+`runwarden ui build` writes a minimal static console. It displays one section
+per discovered `webui.json` with scenario id, provider-call count, denial
+count, and trace status. If no demo JSON is found, it displays `No demo JSON
+loaded.`
 
-- scenario count
-- provider call count
-- denial count
-- requires-review count
-- blocked side-effect count
-- trace status
-- report claim count
-- cited obs refs
-- trace completeness and report citation accuracy
+The `packages/webui` view model supports suite counts, requires-review counts,
+blocked side-effect counts, report claim counts, cited obs refs, trace
+completeness, and citation accuracy; those fields are presentation-only and
+are not currently rendered by the Rust CLI builder.
 
 ## Policy Boundary
 
@@ -36,10 +34,11 @@ Run live replay with:
 runwarden ui serve --live --demo artifacts/demo/prompt-injection-file-exfil --json
 ```
 
-Live replay serves the static console at `/` and streams existing
-`webui.json` provider-call records at `/events` as Server-Sent Events. The
-stream is replay-only: events are Rust-produced demo state, and the WebUI does
-not make approval, egress, provider, report, or artifact decisions.
+Live replay serves the static console at `/` and streams existing `webui.json`
+provider-call records at `/events` as Server-Sent Events. With `--llm-trace`,
+it appends LLM-proxy `model_call` events from JSONL. The stream is replay-only:
+events are Rust-produced demo/model-filter state, and the WebUI does not make
+approval, egress, provider, report, or artifact decisions.
 
 Live replay event fields, including provider, decision, and model names, are
 rendered with DOM text APIs (`textContent`/text nodes), not as HTML. The live

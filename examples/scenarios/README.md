@@ -11,6 +11,7 @@ Each scenario includes:
 - `manifests/assessment.toml`
 - `benign/request.md`
 - `attacks/prompt-injection.md`
+- `agent/script.json`
 - `expected/denials.json`
 - `expected/provider-calls.json`
 - `expected/obs-refs.json`
