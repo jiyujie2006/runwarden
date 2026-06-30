@@ -109,9 +109,10 @@ fn report_render_scenario_suite_outputs_contest_report() {
 #[test]
 fn ui_build_creates_static_console_without_local_api() {
     let workspace = workspace_root();
-    let input_dir = PathBuf::from("target/runwarden-contest-test");
-    let output_file = PathBuf::from("target/runwarden-contest-test/reviewer-console.html");
-    let _ = fs::remove_file(workspace.join(&output_file));
+    let input_dir = PathBuf::from("target/runwarden-contest-test/ui-build-static-console");
+    let demo_dir = input_dir.join("prompt-injection-file-exfil");
+    let output_file = input_dir.join("reviewer-console.html");
+    let _ = fs::remove_dir_all(workspace.join(&input_dir));
 
     let demo = Command::new(env!("CARGO_BIN_EXE_runwarden"))
         .current_dir(&workspace)
@@ -121,12 +122,16 @@ fn ui_build_creates_static_console_without_local_api() {
             "--scenario",
             "prompt-injection-file-exfil",
             "--output",
-            "target/runwarden-contest-test/prompt-injection-file-exfil",
-            "--json",
         ])
+        .arg(&demo_dir)
+        .arg("--json")
         .output()
         .expect("run demo scenario");
-    assert!(demo.status.success());
+    assert!(
+        demo.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&demo.stderr)
+    );
 
     let output = Command::new(env!("CARGO_BIN_EXE_runwarden"))
         .current_dir(&workspace)
@@ -222,6 +227,72 @@ fn ui_serve_live_streams_demo_provider_calls_as_sse() {
 
     child.kill().expect("kill live server");
     child.wait().expect("wait live server");
+}
+
+#[test]
+fn ui_serve_live_console_renders_sse_values_as_text() {
+    let workspace = workspace_root();
+    let output_dir = PathBuf::from("target/runwarden-contest-test/live-console-text-rendering");
+    let absolute_output = workspace.join(&output_dir);
+    let _ = fs::remove_dir_all(&absolute_output);
+
+    let demo = Command::new(env!("CARGO_BIN_EXE_runwarden"))
+        .current_dir(&workspace)
+        .args([
+            "demo",
+            "run",
+            "--scenario",
+            "prompt-injection-file-exfil",
+            "--output",
+        ])
+        .arg(&output_dir)
+        .arg("--json")
+        .output()
+        .expect("run demo scenario");
+    assert!(
+        demo.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&demo.stderr)
+    );
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_runwarden"))
+        .current_dir(&workspace)
+        .args([
+            "ui",
+            "serve",
+            "--live",
+            "--demo",
+            output_dir.to_str().expect("utf8 path"),
+            "--bind",
+            "127.0.0.1",
+            "--port",
+            "0",
+            "--json",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn live ui server");
+
+    let startup = read_live_startup_json(&mut child);
+    let listen_addr = startup["listen_addr"].as_str().expect("listen_addr");
+
+    let mut stream = TcpStream::connect(listen_addr).expect("connect live server");
+    stream
+        .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        .expect("write request");
+    let mut response = String::new();
+    stream.read_to_string(&mut response).expect("read response");
+
+    child.kill().expect("kill live server");
+    child.wait().expect("wait live server");
+
+    assert!(response.contains("HTTP/1.1 200 OK"));
+    assert!(!response.contains("insertAdjacentHTML"));
+    assert!(
+        response.contains("textContent") || response.contains("createTextNode"),
+        "live console should render replay event fields with DOM text APIs"
+    );
 }
 
 #[test]

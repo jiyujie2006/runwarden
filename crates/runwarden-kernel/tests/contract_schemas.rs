@@ -107,7 +107,8 @@ fn checked_in_schema_artifacts_match_rust_contracts() {
                                     "event_type": {"type": "string"},
                                     "decision": {"type": "string"},
                                     "execution_status": {"type": "string"},
-                                    "side_effect_executed": {"type": "boolean"}
+                                    "side_effect_executed": {"type": "boolean"},
+                                    "simulated": {"type": "boolean"}
                                 }
                             }
                         }

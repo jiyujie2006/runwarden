@@ -40,3 +40,7 @@ Live replay serves the static console at `/` and streams existing
 `webui.json` provider-call records at `/events` as Server-Sent Events. The
 stream is replay-only: events are Rust-produced demo state, and the WebUI does
 not make approval, egress, provider, report, or artifact decisions.
+
+Live replay event fields, including provider, decision, and model names, are
+rendered with DOM text APIs (`textContent`/text nodes), not as HTML. The live
+console must not insert SSE JSON fields through HTML parsing APIs.

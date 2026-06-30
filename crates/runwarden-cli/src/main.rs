@@ -20,6 +20,7 @@ use runwarden_providers::catalog::{
     EXTERNAL_PROVIDER_IDS, FIRST_PARTY_PROVIDER_IDS, full_provider_registry,
 };
 use runwarden_providers::input::{InputInspectPolicy, InputSource, inspect_input};
+use runwarden_providers::tools;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use time::OffsetDateTime;
@@ -229,6 +230,8 @@ enum UiCommand {
         live: bool,
         #[arg(long)]
         demo: Option<PathBuf>,
+        #[arg(long)]
+        llm_trace: Option<PathBuf>,
         #[arg(long)]
         json: bool,
     },
@@ -472,8 +475,9 @@ fn run_provider_command(command: ProviderCommand) -> anyhow::Result<()> {
                 persist_consumed_cli_approval(&call, &enforcer.approval_binding_for_call(&call))?;
             }
 
+            let sandbox_root = tools::sandbox_root_from();
             let result = if provider_is_external(&provider) {
-                call_external_provider(&provider)
+                call_external_provider(&provider, &call.action, &call.arguments, &sandbox_root)
             } else {
                 call_first_party_provider(
                     &provider,
@@ -720,13 +724,18 @@ fn run_ui_command(command: UiCommand) -> anyhow::Result<()> {
             file,
             live,
             demo,
+            llm_trace,
             json,
         } => {
             let root = find_workspace_root(env::current_dir()?)?;
             if live {
                 let demo = demo.ok_or_else(|| anyhow::anyhow!("--demo is required with --live"))?;
                 let demo_path = resolve_workspace_output_path(&root, &demo, "ui demo")?;
-                run_live_demo_server(&bind, port, &demo_path, json)?;
+                let llm_trace_path = llm_trace
+                    .as_ref()
+                    .map(|trace| resolve_workspace_output_path(&root, trace, "llm trace"))
+                    .transpose()?;
+                run_live_demo_server(&bind, port, &demo_path, llm_trace_path.as_deref(), json)?;
             } else {
                 let file = resolve_workspace_output_path(&root, &file, "ui file")?;
                 let result = json!({
@@ -1252,16 +1261,32 @@ fn call_first_party_provider(
     }
 }
 
-fn call_external_provider(provider: &str) -> Value {
+fn call_external_provider(
+    provider: &str,
+    action: &str,
+    arguments: &Value,
+    sandbox_root: &Path,
+) -> Value {
+    let executed = tools::execute_external_tool(provider, action, arguments, sandbox_root);
+    let execution_status = executed
+        .get("execution_status")
+        .and_then(Value::as_str)
+        .unwrap_or("simulated");
+    let simulated = executed
+        .get("simulated")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let side_effect_executed = executed
+        .get("side_effect_executed")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     json!({
         "provider": provider,
         "decision": "allowed",
-        "execution_status": "simulated",
-        "simulated": true,
-        "side_effect_executed": false,
-        "output": {
-            "message": "contest demo provider execution is simulated after Rust policy allow"
-        }
+        "execution_status": execution_status,
+        "simulated": simulated,
+        "side_effect_executed": side_effect_executed,
+        "output": executed.get("output").cloned().unwrap_or(Value::Null)
     })
 }
 
@@ -1338,7 +1363,7 @@ fn run_demo_scenario(root: &Path, scenario: &str, output: &Path) -> anyhow::Resu
         "report_path": output_path.join("report.json").to_string_lossy(),
         "provider_call_count": provider_calls.len(),
         "denial_count": denials.as_array().map_or(0, Vec::len),
-        "side_effect_executed": true
+        "side_effect_executed": false
     }))
 }
 
@@ -1650,9 +1675,40 @@ fn collect_demo_webui_files(input: &Path) -> anyhow::Result<Vec<PathBuf>> {
     Ok(scenario_files)
 }
 
-fn run_live_demo_server(bind: &str, port: u16, demo_path: &Path, json: bool) -> anyhow::Result<()> {
-    let replay_events = load_live_replay_events(demo_path)?;
-    let html = render_static_demo_console(demo_path)?;
+/// Inline HTML+JS injected into the live reviewer console so the browser
+/// consumes the `/events` SSE stream and renders tool decisions + model-filter
+/// alerts in real time. Presentation only (no policy logic).
+const LIVE_ALERTS_HTML: &str = r#"<section id="live-alerts"><h3>Live alerts (tool + model)</h3><ul id="live-events"></ul></section>
+<script>
+const es = new EventSource('/events');
+const list = document.getElementById('live-events');
+function appendLiveEvent(text) {
+  const item = document.createElement('li');
+  item.textContent = text;
+  list.appendChild(item);
+}
+es.addEventListener('provider_call', e => { const d = JSON.parse(e.data); appendLiveEvent(`tool ${d.provider} -> ${d.decision}`); });
+es.addEventListener('model_call', e => { const d = JSON.parse(e.data); const p = d.payload || d; appendLiveEvent(`model ${p.model} -> ${p.decision}`); });
+es.addEventListener('replay_complete', () => appendLiveEvent('(replay complete)'));
+</script>
+"#;
+
+fn run_live_demo_server(
+    bind: &str,
+    port: u16,
+    demo_path: &Path,
+    llm_trace: Option<&Path>,
+    json: bool,
+) -> anyhow::Result<()> {
+    let mut replay_events = load_live_replay_events(demo_path)?;
+    let mut model_call_count = 0;
+    if let Some(trace) = llm_trace {
+        let model_events = load_llm_trace_events(trace)?;
+        model_call_count = model_events.len();
+        replay_events.extend(model_events);
+    }
+    let base_html = render_static_demo_console(demo_path)?;
+    let html = format!("{base_html}{LIVE_ALERTS_HTML}");
     let listener = TcpListener::bind((bind, port))?;
     let listen_addr = listener.local_addr()?;
     let result = json!({
@@ -1661,6 +1717,7 @@ fn run_live_demo_server(bind: &str, port: u16, demo_path: &Path, json: bool) -> 
         "events_url": format!("http://{listen_addr}/events"),
         "demo": demo_path.to_string_lossy(),
         "provider_call_count": replay_events.len(),
+        "model_call_count": model_call_count,
         "local_api_url": Value::Null,
         "side_effect_executed": false
     });
@@ -1698,7 +1755,6 @@ fn load_live_replay_events(demo_path: &Path) -> anyhow::Result<Vec<Value>> {
             .ok_or_else(|| anyhow::anyhow!("{} is missing provider_calls array", file.display()))?;
         for (index, call) in provider_calls.iter().enumerate() {
             let mut event = serde_json::Map::new();
-            event.insert("kind".to_string(), json!("provider_call"));
             event.insert("scenario".to_string(), json!(scenario));
             event.insert("sequence".to_string(), json!(index + 1));
             if let Some(call_object) = call.as_object() {
@@ -1706,6 +1762,7 @@ fn load_live_replay_events(demo_path: &Path) -> anyhow::Result<Vec<Value>> {
                     event.insert(key.clone(), value.clone());
                 }
             }
+            event.insert("kind".to_string(), json!("provider_call"));
             events.push(Value::Object(event));
         }
     }
@@ -1715,6 +1772,30 @@ fn load_live_replay_events(demo_path: &Path) -> anyhow::Result<Vec<Value>> {
             "live demo data is missing provider-call events under {}",
             demo_path.display()
         );
+    }
+    Ok(events)
+}
+
+/// Load model-call events from an LLM-proxy trace JSONL (one `model_call`
+/// event per line) so the live dashboard can stream model-filter alerts
+/// alongside tool decisions.
+fn load_llm_trace_events(trace_path: &Path) -> anyhow::Result<Vec<Value>> {
+    let contents = fs::read_to_string(trace_path).map_err(|err| {
+        anyhow::anyhow!("failed to read llm trace {}: {err}", trace_path.display())
+    })?;
+    let mut events = Vec::new();
+    for (index, line) in contents.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut event: serde_json::Map<String, Value> = match serde_json::from_str(line) {
+            Ok(Value::Object(map)) => map,
+            _ => continue,
+        };
+        event.insert("kind".to_string(), json!("model_call"));
+        event.insert("sequence".to_string(), json!(index + 1));
+        events.push(Value::Object(event));
     }
     Ok(events)
 }
@@ -1774,11 +1855,17 @@ fn sse_replay_body(replay_events: &[Value]) -> anyhow::Result<String> {
     for (index, event) in replay_events.iter().enumerate() {
         let event_id = event
             .get("obs_ref")
+            .or_else(|| event.get("obs_id"))
             .and_then(Value::as_str)
-            .map(ToString::to_string)
+            .map(sse_single_line)
             .unwrap_or_else(|| format!("event-{}", index + 1));
+        let kind = event
+            .get("kind")
+            .and_then(Value::as_str)
+            .and_then(sse_event_kind)
+            .unwrap_or("provider_call");
         body.push_str(&format!("id: {event_id}\n"));
-        body.push_str("event: provider_call\n");
+        body.push_str(&format!("event: {kind}\n"));
         body.push_str("data: ");
         body.push_str(&serde_json::to_string(event)?);
         body.push_str("\n\n");
@@ -1791,6 +1878,22 @@ fn sse_replay_body(replay_events: &[Value]) -> anyhow::Result<String> {
     }))?);
     body.push_str("\n\n");
     Ok(body)
+}
+
+fn sse_single_line(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| !matches!(ch, '\r' | '\n'))
+        .collect()
+}
+
+fn sse_event_kind(value: &str) -> Option<&'static str> {
+    match value {
+        "provider_call" => Some("provider_call"),
+        "model_call" => Some("model_call"),
+        "replay_complete" => Some("replay_complete"),
+        _ => None,
+    }
 }
 
 fn write_http_response(
@@ -2185,4 +2288,26 @@ fn html_escape(text: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sse_replay_body_sanitizes_event_id_and_kind_control_lines() {
+        let events = vec![json!({
+            "kind": "model_call\nid: injected",
+            "obs_ref": "obs_1\nevent: injected",
+            "provider": "external.api.request",
+            "decision": "denied"
+        })];
+
+        let body = sse_replay_body(&events).expect("sse body");
+
+        assert!(body.contains("id: obs_1event: injected\n"));
+        assert!(body.contains("event: provider_call\n"));
+        assert!(!body.contains("\nevent: injected\n"));
+        assert!(!body.contains("\nid: injected\n"));
+    }
 }

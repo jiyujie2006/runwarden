@@ -20,6 +20,7 @@ This index is the canonical map for the contest edition.
 ## Security Model
 
 - [Threat Model](reference/threat-model.md): adversarial assumptions and mitigations.
+- [Security Risk Analysis Report](security-risk-analysis-report.md): LLM application attack analysis, red-team evidence, and Runwarden supervision prototype notes.
 - [Agent Tool Boundary](concepts/agent-tool-boundary.md): why agents receive Runwarden instead of raw tools.
 - [Authority and Session](reference/authority-and-session.md): session allowlists and approval records.
 - [Provider Model](reference/provider-model.md): first-party and demo/external providers.

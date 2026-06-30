@@ -6,10 +6,9 @@ playwright-report/
 test-results/
 .turbo/
 .cache/
+__pycache__/
+*.py[cod]
 .gstack/
-.agents/
-.codex/
-.trellis/
 .DS_Store
 *.log
 artifacts/

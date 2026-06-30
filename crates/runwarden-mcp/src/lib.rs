@@ -1,4 +1,5 @@
 use anyhow::{Context, bail};
+use runwarden_anomaly::{AnomalyMonitor, BehaviorProfile};
 use runwarden_assurance::report::{
     RenderFormat, ReportDraft, lint_report_against_trace, render_report,
 };
@@ -9,7 +10,11 @@ use runwarden_providers::catalog::{
     default_external_providers, default_first_party_providers, full_provider_registry,
 };
 use runwarden_providers::input::{InputInspectPolicy, InputSource, inspect_input};
+use runwarden_providers::tools;
 use serde_json::{Value, json};
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::{Mutex, OnceLock};
 
 const RUNWARDEN_TOOLS: &[(&str, &str)] = &[
     (
@@ -110,21 +115,31 @@ pub fn handle_jsonrpc_message(body: &str) -> anyhow::Result<Option<Value>> {
     };
 
     match method {
-        "initialize" => Ok(Some(jsonrpc_ok(
-            id,
-            json!({
-                "protocolVersion": "2025-03-26",
-                "serverInfo": {
-                    "name": "runwarden-mcp",
-                    "version": env!("CARGO_PKG_VERSION")
-                },
-                "capabilities": {
-                    "tools": {
-                        "listChanged": false
+        "initialize" => {
+            // Echo the client's offered protocol version so newer clients
+            // (e.g. opencode, which sends "2025-11-25") don't reject the
+            // server for advertising an older version than they support.
+            let protocol_version = request
+                .get("params")
+                .and_then(|params| params.get("protocolVersion"))
+                .and_then(Value::as_str)
+                .unwrap_or("2025-03-26");
+            Ok(Some(jsonrpc_ok(
+                id,
+                json!({
+                    "protocolVersion": protocol_version,
+                    "serverInfo": {
+                        "name": "runwarden-mcp",
+                        "version": env!("CARGO_PKG_VERSION")
+                    },
+                    "capabilities": {
+                        "tools": {
+                            "listChanged": false
+                        }
                     }
-                }
-            }),
-        ))),
+                }),
+            )))
+        }
         "tools/list" => Ok(Some(jsonrpc_ok(id, json!({ "tools": tool_descriptors() })))),
         "tools/call" => Ok(Some(handle_tools_call(id, request.get("params")))),
         _ => Ok(Some(jsonrpc_error(
@@ -197,23 +212,14 @@ fn tool_input_schema(name: &str) -> Value {
         "runwarden.provider.list" => json!({
             "type": "object",
             "additionalProperties": false,
-            "properties": {
-                "session_allowed_providers": {
-                    "type": "array",
-                    "items": { "type": "string" }
-                }
-            }
+            "properties": {}
         }),
         "runwarden.provider.status" => json!({
             "type": "object",
             "additionalProperties": false,
             "required": ["provider"],
             "properties": {
-                "provider": { "type": "string" },
-                "session_allowed_providers": {
-                    "type": "array",
-                    "items": { "type": "string" }
-                }
+                "provider": { "type": "string" }
             }
         }),
         _ => json!({
@@ -227,21 +233,11 @@ fn provider_call_schema_properties() -> Value {
     json!({
         "provider": { "type": "string" },
         "action": { "type": "string" },
-        "session_id": { "type": "string" },
-        "actor_id": { "type": "string" },
-        "authz_id": { "type": "string" },
-        "approval_id": { "type": "string" },
-        "active_assessment": { "type": "boolean" },
-        "session_allowed_providers": {
-            "type": "array",
-            "items": { "type": "string" }
-        },
         "input_text": { "type": "string" },
         "input_path": { "type": "string" },
+        "input_source": { "type": "string" },
         "trace_path": { "type": "string" },
         "report_path": { "type": "string" },
-        "root": { "type": "string" },
-        "root_path": { "type": "string" },
         "format": { "type": "string" },
         "url": { "type": "string" },
         "method": { "type": "string" },
@@ -271,6 +267,10 @@ fn handle_tools_call(id: Value, params: Option<&Value>) -> Value {
             json!({"side_effect_executed": false}),
         );
     };
+
+    if let Err(message) = validate_no_policy_envelope_arguments(tool_arguments(params), tool_name) {
+        return jsonrpc_error(id, -32602, &message, json!({"side_effect_executed": false}));
+    }
 
     match tool_name {
         "runwarden.agent.bootstrap" => tool_result(
@@ -306,6 +306,7 @@ fn handle_provider_call(id: Value, params: Option<&Value>) -> Value {
     let arguments = params
         .and_then(|params| params.get("arguments"))
         .unwrap_or(&empty_arguments);
+    let sandbox_root = tools::sandbox_root_from();
     if let Err(message) = validate_argument_object(
         arguments,
         PROVIDER_CALL_ALLOWED_ARGUMENT_KEYS,
@@ -323,10 +324,7 @@ fn handle_provider_call(id: Value, params: Option<&Value>) -> Value {
     };
 
     let call = provider_call_from_arguments(provider, arguments);
-    let mut enforcer = KernelEnforcer::new(
-        full_provider_registry(),
-        kernel_policy_from_arguments(provider, arguments),
-    );
+    let mut enforcer = KernelEnforcer::new(full_provider_registry(), mcp_kernel_policy(provider));
     let outcome = enforcer.evaluate_call(&call);
     if outcome.decision != PolicyDecision::Allowed {
         return tool_error_result(id, provider_outcome_payload(&outcome));
@@ -338,8 +336,10 @@ fn handle_provider_call(id: Value, params: Option<&Value>) -> Value {
                 .get("input_text")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
+            let input_source =
+                parse_input_source(arguments.get("input_source").and_then(Value::as_str));
             let inspection = inspect_input(
-                InputSource::ToolInput,
+                input_source,
                 input_text.as_bytes(),
                 InputInspectPolicy::default(),
             );
@@ -355,13 +355,17 @@ fn handle_provider_call(id: Value, params: Option<&Value>) -> Value {
                         &outcome,
                         "provider_completed",
                         "completed",
+                        false,
                         false
                     ),
                     "output": inspection
                 }),
             )
         }
-        other if provider_is_external(other) => tool_result(id, external_provider_result(&outcome)),
+        other if provider_is_external(other) => tool_result(
+            id,
+            external_provider_result(&outcome, arguments, &sandbox_root),
+        ),
         other => tool_error_result(
             id,
             json!({
@@ -374,21 +378,32 @@ fn handle_provider_call(id: Value, params: Option<&Value>) -> Value {
     }
 }
 
+/// Map a caller-supplied `input_source` string to an `InputSource` so the
+/// inspect tool no longer hardcodes `ToolInput` — callers (e.g. the LLM proxy
+/// or a red-team harness) can declare whether the text is a user prompt, an
+/// assistant message, a tool output, etc. Unknown values default to
+/// `ToolInput` to preserve the prior behaviour.
+fn parse_input_source(value: Option<&str>) -> InputSource {
+    match value {
+        Some("system_prompt") => InputSource::SystemPrompt,
+        Some("user_prompt") => InputSource::UserPrompt,
+        Some("assistant_message") => InputSource::AssistantMessage,
+        Some("retrieved_knowledge") => InputSource::RetrievedKnowledge,
+        Some("memory_entry") => InputSource::MemoryEntry,
+        Some("tool_input") => InputSource::ToolInput,
+        Some("tool_output") => InputSource::ToolOutput,
+        _ => InputSource::ToolInput,
+    }
+}
+
 const PROVIDER_CALL_ALLOWED_ARGUMENT_KEYS: &[&str] = &[
     "provider",
     "action",
-    "session_id",
-    "actor_id",
-    "authz_id",
-    "approval_id",
-    "active_assessment",
-    "session_allowed_providers",
     "input_text",
     "input_path",
+    "input_source",
     "trace_path",
     "report_path",
-    "root",
-    "root_path",
     "format",
     "url",
     "method",
@@ -405,8 +420,36 @@ const PROVIDER_CALL_ALLOWED_ARGUMENT_KEYS: &[&str] = &[
     "report",
 ];
 
-const PROVIDER_LIST_ALLOWED_ARGUMENT_KEYS: &[&str] = &["session_allowed_providers"];
-const PROVIDER_STATUS_ALLOWED_ARGUMENT_KEYS: &[&str] = &["provider", "session_allowed_providers"];
+const PROVIDER_LIST_ALLOWED_ARGUMENT_KEYS: &[&str] = &[];
+const PROVIDER_STATUS_ALLOWED_ARGUMENT_KEYS: &[&str] = &["provider"];
+const POLICY_ENVELOPE_ARGUMENT_KEYS: &[&str] = &[
+    "session_id",
+    "actor_id",
+    "authz_id",
+    "approval_id",
+    "active_assessment",
+    "session_allowed_providers",
+    "session_roots",
+    "authz_grants",
+    "budget",
+    "budgets",
+    "root",
+    "root_path",
+    "sandbox_root",
+    "simulated_approval",
+];
+
+fn validate_no_policy_envelope_arguments(arguments: &Value, label: &str) -> Result<(), String> {
+    let Some(object) = arguments.as_object() else {
+        return Ok(());
+    };
+    for key in object.keys() {
+        if POLICY_ENVELOPE_ARGUMENT_KEYS.contains(&key.as_str()) {
+            return Err(format!("{label} argument is not allowed: {key}"));
+        }
+    }
+    Ok(())
+}
 
 fn validate_argument_object(
     arguments: &Value,
@@ -416,23 +459,12 @@ fn validate_argument_object(
     let Some(object) = arguments.as_object() else {
         return Err(format!("{label} arguments must be an object"));
     };
-    for (key, value) in object {
+    for key in object.keys() {
         if !allowed_keys.contains(&key.as_str()) {
             return Err(format!("{label} argument is not allowed: {key}"));
         }
-        if key == "session_allowed_providers" && !is_string_array(value) {
-            return Err(format!(
-                "{label} arguments.session_allowed_providers must be an array of strings"
-            ));
-        }
     }
     Ok(())
-}
-
-fn is_string_array(value: &Value) -> bool {
-    value
-        .as_array()
-        .is_some_and(|items| items.iter().all(Value::is_string))
 }
 
 fn validate_claude_mcp_config(config: &Value, errors: &mut Vec<String>) {
@@ -516,11 +548,7 @@ fn validate_common_runwarden_server_fields(server: &Value, label: &str, errors: 
 
 fn provider_call_from_arguments(provider: &str, arguments: &Value) -> ProviderCall {
     ProviderCall {
-        session_id: arguments
-            .get("session_id")
-            .and_then(Value::as_str)
-            .unwrap_or("mcp-inline")
-            .to_string(),
+        session_id: "mcp-inline".to_string(),
         provider: provider.to_string(),
         action: arguments
             .get("action")
@@ -528,18 +556,9 @@ fn provider_call_from_arguments(provider: &str, arguments: &Value) -> ProviderCa
             .unwrap_or("call")
             .to_string(),
         arguments: arguments.clone(),
-        actor_id: arguments
-            .get("actor_id")
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
-        authz_id: arguments
-            .get("authz_id")
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
-        approval_id: arguments
-            .get("approval_id")
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
+        actor_id: None,
+        authz_id: None,
+        approval_id: None,
     }
 }
 
@@ -558,26 +577,10 @@ fn all_kernel_managed_providers() -> Vec<KernelProvider> {
         .collect()
 }
 
-fn kernel_policy_from_arguments(provider: &str, arguments: &Value) -> KernelPolicy {
+fn mcp_kernel_policy(provider: &str) -> KernelPolicy {
     let mut policy = KernelPolicy::default();
-    policy.active_assessment = arguments
-        .get("active_assessment")
-        .and_then(Value::as_bool)
-        .unwrap_or(true);
-
-    if let Some(allowed) = arguments.get("session_allowed_providers") {
-        for provider_id in allowed
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-        {
-            policy.allow_provider(provider_id);
-        }
-    } else {
-        policy.allow_provider(provider);
-    }
-
+    policy.active_assessment = true;
+    policy.allow_provider(provider);
     policy
 }
 
@@ -614,6 +617,7 @@ fn trace_event_for_outcome(outcome: &ProviderOutcome) -> Value {
             .as_deref()
             .unwrap_or("not_executed"),
         false,
+        outcome.envelope.side_effect_executed,
     )
 }
 
@@ -622,6 +626,7 @@ fn trace_event_for_provider_result(
     event_type: &str,
     execution_status: &str,
     simulated: bool,
+    side_effect_executed: bool,
 ) -> Value {
     let event = TraceEvent::sealed(
         outcome.observation_id.clone(),
@@ -635,7 +640,7 @@ fn trace_event_for_provider_result(
             "gate_id": &outcome.envelope.gate_id,
             "reason": &outcome.envelope.reason,
             "error_kind": &outcome.envelope.error_kind,
-            "side_effect_executed": outcome.envelope.side_effect_executed,
+            "side_effect_executed": side_effect_executed,
             "simulated": simulated
         }),
         None,
@@ -643,25 +648,95 @@ fn trace_event_for_provider_result(
     serde_json::to_value(event).expect("trace event serializes")
 }
 
-fn external_provider_result(outcome: &ProviderOutcome) -> Value {
+fn anomaly_monitors() -> &'static Mutex<HashMap<String, AnomalyMonitor>> {
+    static STORE: OnceLock<Mutex<HashMap<String, AnomalyMonitor>>> = OnceLock::new();
+    STORE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Extract the host part of a URL (best-effort, no external URL crate).
+fn host_of(url: &str) -> Option<String> {
+    let after_scheme = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
+    let host = after_scheme.split(['/', ':']).next()?;
+    if host.is_empty() {
+        None
+    } else {
+        Some(host.to_string())
+    }
+}
+
+/// Run the behavior-anomaly monitor for an allowed external provider call and
+/// return its report as a JSON value. Per-session so the monitor can track the
+/// provider sequence across calls within a session.
+fn analyze_anomaly(outcome: &ProviderOutcome, arguments: &Value) -> Value {
+    let session_id = "mcp-inline".to_string();
+    let provider = &outcome.envelope.provider;
+    let arg_bytes = serde_json::to_vec(arguments).map(|v| v.len()).unwrap_or(0);
+    let egress_host = arguments
+        .get("url")
+        .and_then(Value::as_str)
+        .and_then(host_of);
+    let report = match anomaly_monitors().lock() {
+        Ok(mut store) => {
+            let monitor = store
+                .entry(session_id)
+                .or_insert_with(|| AnomalyMonitor::new(BehaviorProfile::default_benign()));
+            monitor.analyze(provider, arg_bytes, egress_host.as_deref())
+        }
+        Err(_) => runwarden_anomaly::AnomalyReport {
+            score: 0,
+            is_anomalous: false,
+            reasons: vec!["anomaly monitor lock poisoned".to_string()],
+        },
+    };
+    serde_json::to_value(&report)
+        .unwrap_or(json!({"is_anomalous": false, "score": 0, "reasons": []}))
+}
+
+fn external_provider_result(
+    outcome: &ProviderOutcome,
+    arguments: &Value,
+    sandbox_root: &Path,
+) -> Value {
+    let executed = tools::execute_external_tool(
+        &outcome.envelope.provider,
+        &outcome.envelope.action,
+        arguments,
+        sandbox_root,
+    );
+    let execution_status = executed
+        .get("execution_status")
+        .and_then(Value::as_str)
+        .unwrap_or("simulated");
+    let simulated = executed
+        .get("simulated")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let side_effect_executed = executed
+        .get("side_effect_executed")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let event_type = if simulated {
+        "provider_simulated_replay"
+    } else {
+        "provider_completed"
+    };
     json!({
         "provider": &outcome.envelope.provider,
         "action": &outcome.envelope.action,
         "decision": "allowed",
-        "execution_status": "simulated",
-        "simulated": true,
-        "side_effect_executed": false,
+        "execution_status": execution_status,
+        "simulated": simulated,
+        "side_effect_executed": side_effect_executed,
         "obs_ref": &outcome.observation_id,
         "trace_event": trace_event_for_provider_result(
             outcome,
-            "provider_simulated_replay",
-            "simulated",
-            true
+            event_type,
+            execution_status,
+            simulated,
+            side_effect_executed
         ),
-        "output": {
-            "message": "external provider replay is simulated after Rust policy allow",
-            "trusted_side_effect_executed": false
-        }
+        "output": executed.get("output").cloned().unwrap_or(Value::Null),
+        "anomaly": analyze_anomaly(outcome, arguments)
     })
 }
 
@@ -713,7 +788,7 @@ fn handle_trace_export(id: Value, arguments: &Value) -> Value {
     let call = provider_call_from_arguments("runwarden.trace.export", arguments);
     let mut enforcer = KernelEnforcer::new(
         first_party_provider_registry(),
-        kernel_policy_from_arguments("runwarden.trace.export", arguments),
+        mcp_kernel_policy("runwarden.trace.export"),
     );
     let outcome = enforcer.evaluate_call(&call);
     if outcome.decision != PolicyDecision::Allowed {
@@ -814,18 +889,7 @@ fn handle_provider_list(id: Value, params: Option<&Value>) -> Value {
     ) {
         return jsonrpc_error(id, -32602, &message, json!({"side_effect_executed": false}));
     }
-    let allowed: Vec<_> = arguments
-        .get("session_allowed_providers")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .collect();
-
-    let providers: Vec<_> = all_kernel_managed_providers()
-        .into_iter()
-        .filter(|provider| allowed.is_empty() || allowed.contains(&provider.id.as_str()))
-        .collect();
+    let providers: Vec<_> = all_kernel_managed_providers().into_iter().collect();
 
     tool_result(
         id,
@@ -914,7 +978,7 @@ fn handle_report_render(id: Value, params: Option<&Value>) -> Value {
     let call = provider_call_from_arguments("runwarden.report.render", arguments);
     let mut enforcer = KernelEnforcer::new(
         first_party_provider_registry(),
-        kernel_policy_from_arguments("runwarden.report.render", arguments),
+        mcp_kernel_policy("runwarden.report.render"),
     );
     let outcome = enforcer.evaluate_call(&call);
     if outcome.decision != PolicyDecision::Allowed {
@@ -1040,4 +1104,59 @@ fn jsonrpc_error(id: Value, code: i64, message: &str, data: Value) -> Value {
             "data": data
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn external_provider_result_propagates_real_sandbox_side_effect_to_trace() {
+        let sandbox = std::env::temp_dir().join(format!(
+            "runwarden-mcp-side-effect-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&sandbox).expect("sandbox");
+        let arguments = json!({"path": "notes.txt", "content": "hello"});
+        let call = ProviderCall {
+            session_id: "mcp-inline".to_string(),
+            provider: "external.mcp.filesystem.write_file".to_string(),
+            action: "write_file".to_string(),
+            arguments: arguments.clone(),
+            actor_id: None,
+            authz_id: None,
+            approval_id: None,
+        };
+        let outcome = ProviderOutcome::before_side_effect(
+            PolicyDecision::Allowed,
+            &call,
+            "policy_allowed",
+            "allowed for test",
+            None,
+        );
+
+        let payload = external_provider_result(&outcome, &arguments, &sandbox);
+
+        assert_eq!(payload["execution_status"], "completed");
+        assert_eq!(payload["simulated"], false);
+        assert_eq!(payload["side_effect_executed"], true);
+        assert_eq!(payload["trace_event"]["event_type"], "provider_completed");
+        assert_eq!(
+            payload["trace_event"]["payload"]["side_effect_executed"],
+            true
+        );
+        assert_eq!(payload["trace_event"]["payload"]["simulated"], false);
+        assert_eq!(
+            fs::read_to_string(sandbox.join("notes.txt")).expect("written file"),
+            "hello"
+        );
+
+        let _ = fs::remove_dir_all(&sandbox);
+    }
 }

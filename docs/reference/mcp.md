@@ -23,17 +23,28 @@ Unknown tools, raw tools, and removed tools such as `runwarden.session.create_fr
 - `runwarden.provider.call`, `runwarden.provider.list`, and
   `runwarden.provider.status` declare strict argument schemas for their
   top-level keys.
+- MCP arguments are provider inputs, not a session or approval policy envelope.
+  Callers cannot supply session policy, assessment, authz, budget, roots, or
+  approval-like fields through MCP arguments. Rejected keys include
+  `session_id`, `actor_id`, `authz_id`, `approval_id`, `active_assessment`,
+  `session_allowed_providers`, `session_roots`, `authz_grants`, `budget`,
+  `budgets`, `root`, `root_path`, `sandbox_root`, and self-approval fields.
 - Denials include `side_effect_executed: false`.
 - `runwarden.provider.list` and `runwarden.provider.status` include both
   first-party Runwarden providers and the external provider catalog. External
   tools are never exposed as MCP tools; they remain provider ids behind
   `runwarden.provider.call`.
 - External provider calls are mediated by the Rust kernel. MCP callers cannot
-  provide `simulated_approval` or any other self-approval field. Allowed
-  external outcomes are simulated replay results only and return
-  `event_type=provider_simulated_replay`, `execution_status=simulated`,
-  `simulated=true`, and `side_effect_executed=false`; denied and
-  review-blocked calls also return `side_effect_executed=false`.
+  provide `simulated_approval` or any other self-approval field. The MCP
+  server constructs the conservative inline kernel policy itself; it does not
+  derive provider allowlists, active-assessment state, roots, authz, approvals,
+  or budgets from agent-supplied arguments. Allowed API and browser outcomes
+  are replay-simulated and return `event_type=provider_simulated_replay`,
+  `execution_status=simulated`, `simulated=true`, and
+  `side_effect_executed=false`. Allowed local sandbox filesystem, email,
+  memory, and knowledge providers report truthful local execution status and
+  side-effect flags after kernel policy permits them. Denied and
+  review-blocked calls always return `side_effect_executed=false`.
 - Provider-call results include `obs_ref` plus a sealed `trace_event` payload
   whose `obs_id` starts with `obs_*`.
 

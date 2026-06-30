@@ -24,10 +24,15 @@ Providers are the only callable tool surface. First-party providers are implemen
 
 High-risk, network-active, file-writing, credential, destructive, report-claim, and artifact-writing providers require approval before trusted side effects.
 
-In contest replay, external providers are simulated after Rust policy allows
-the call. The simulation result is still emitted as provider evidence, but
-`event_type=provider_simulated_replay`, `execution_status=simulated`,
+In contest replay, API and browser providers are simulated after Rust policy
+allows the call. The simulation result is still emitted as provider evidence,
+and `event_type=provider_simulated_replay`, `execution_status=simulated`,
 `simulated=true`, and `side_effect_executed=false` mean no trusted external
 effect was performed.
-Review-blocked and denied external providers also report
-`side_effect_executed=false`.
+
+Local sandbox providers for filesystem, email, memory, and knowledge may
+perform bounded local side effects after Rust policy and any required approval
+allow the call. Those outcomes report `simulated=false`,
+`execution_status=completed`, and `side_effect_executed=true` only when the
+local effect actually happened. Review-blocked and denied external providers
+always report `side_effect_executed=false`.

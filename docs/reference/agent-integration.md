@@ -9,6 +9,13 @@ The Rust MCP crate validates the checked-in safe and unsafe examples: empty
 `args: []` is allowed, while non-empty or malformed `args` and any `env`,
 `environment`, `cwd`, `url`, or `transport` override are rejected.
 
+Agent configuration arguments and MCP tool arguments do not carry Runwarden
+session policy. Agents cannot provide provider allowlists, active-assessment
+state, scoped roots, authz grants or ids, budgets, approval ids, or
+self-approval fields through MCP. Rejected MCP argument names include `root`,
+`root_path`, and `sandbox_root`; those values are owned by Runwarden's Rust
+authority/session path and runtime configuration, not agent-controlled JSON.
+
 Checked-in examples:
 
 - `examples/agent-configs/claude.runwarden-only.json`

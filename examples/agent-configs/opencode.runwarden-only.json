@@ -1,5 +1,19 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "runwarden-proxy": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Runwarden Proxied LLM",
+      "options": {
+        "baseURL": "http://127.0.0.1:8787/v1"
+      },
+      "models": {
+        "gpt-4o-mini": {
+          "name": "Runwarden-proxied (set RUNWARDEN_LLM_API_KEY; model is forwarded to --upstream)"
+        }
+      }
+    }
+  },
   "tools": {
     "apply_patch": false,
     "bash": false,

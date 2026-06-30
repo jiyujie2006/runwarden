@@ -167,6 +167,25 @@ fn report_lint_rejects_unknown_obs_ref() {
 }
 
 #[test]
+fn report_lint_rejects_known_refs_without_obs_prefix() {
+    let trace_events = vec![trace("trace_1")];
+    let report = ReportDraft::new(vec![ReportClaim::new(
+        "finding-1",
+        "Provider call completed",
+        ["trace_1"],
+    )]);
+
+    let result = lint_report_against_trace(&report, &trace_events);
+
+    assert!(!result.ok, "{result:#?}");
+    assert_eq!(
+        result.errors[0].kind,
+        ReportLintErrorKind::UnknownObservation
+    );
+    assert_eq!(result.errors[0].obs_ref.as_deref(), Some("trace_1"));
+}
+
+#[test]
 fn report_lint_rejects_tampered_trace_before_trusting_citations() {
     let mut trace_events = trace_events(&["obs_1"]);
     trace_events[0].payload = json!({"ok": false});
@@ -289,6 +308,124 @@ fn report_lint_rejects_structured_support_when_side_effect_state_differs() {
         result.errors[0].kind,
         ReportLintErrorKind::UnsupportedObservation
     );
+}
+
+#[test]
+fn report_lint_rejects_unstructured_denied_claim_when_side_effect_executed() {
+    let trace_events = vec![trace_with_payload(
+        "obs_1",
+        "provider_denied",
+        "external.api.request",
+        json!({
+            "decision": "denied",
+            "execution_status": "not_executed",
+            "side_effect_executed": true
+        }),
+    )];
+    let report = ReportDraft::new(vec![ReportClaim::new(
+        "finding-1",
+        "API request was denied before side effects",
+        ["obs_1"],
+    )]);
+
+    let result = lint_report_against_trace(&report, &trace_events);
+
+    assert!(!result.ok, "{result:#?}");
+    assert_eq!(
+        result.errors[0].kind,
+        ReportLintErrorKind::UnsupportedObservation
+    );
+    assert_eq!(result.errors[0].obs_ref.as_deref(), Some("obs_1"));
+}
+
+#[test]
+fn report_lint_rejects_structured_provider_only_denied_claim_when_side_effect_executed() {
+    let trace_events = vec![trace_with_payload(
+        "obs_1",
+        "provider_denied",
+        "external.api.request",
+        json!({
+            "decision": "denied",
+            "execution_status": "not_executed",
+            "side_effect_executed": true
+        }),
+    )];
+    let report = ReportDraft::new(vec![
+        ReportClaim::new(
+            "finding-1",
+            "API request was denied before side effects",
+            ["obs_1"],
+        )
+        .with_support(ReportClaimSupport {
+            provider: Some("external.api.request".to_string()),
+            event_type: None,
+            decision: None,
+            execution_status: None,
+            side_effect_executed: None,
+            simulated: None,
+        }),
+    ]);
+
+    let result = lint_report_against_trace(&report, &trace_events);
+
+    assert!(!result.ok, "{result:#?}");
+    assert_eq!(
+        result.errors[0].kind,
+        ReportLintErrorKind::UnsupportedObservation
+    );
+    assert_eq!(result.errors[0].obs_ref.as_deref(), Some("obs_1"));
+}
+
+#[test]
+fn report_lint_rejects_mixed_completed_and_blocked_claim_when_side_effect_executed() {
+    let trace_events = vec![trace_with_payload(
+        "obs_1",
+        "provider_completed",
+        "external.api.request",
+        json!({
+            "decision": "completed",
+            "execution_status": "completed",
+            "side_effect_executed": true
+        }),
+    )];
+    let report = ReportDraft::new(vec![ReportClaim::new(
+        "finding-1",
+        "API request completed and was blocked before side effects",
+        ["obs_1"],
+    )]);
+
+    let result = lint_report_against_trace(&report, &trace_events);
+
+    assert!(!result.ok, "{result:#?}");
+    assert_eq!(
+        result.errors[0].kind,
+        ReportLintErrorKind::UnsupportedObservation
+    );
+    assert_eq!(result.errors[0].obs_ref.as_deref(), Some("obs_1"));
+}
+
+#[test]
+fn report_lint_accepts_unstructured_review_blocked_claim_without_side_effects() {
+    let trace_events = vec![trace_with_payload(
+        "obs_1",
+        "provider_requires_review",
+        "external.mcp.browser.open_page",
+        json!({
+            "decision": "requires_review",
+            "execution_status": "not_executed",
+            "side_effect_executed": false
+        }),
+    )];
+    let report = ReportDraft::new(vec![ReportClaim::new(
+        "finding-1",
+        "Browser navigation was review-blocked before side effects",
+        ["obs_1"],
+    )]);
+
+    let result = lint_report_against_trace(&report, &trace_events);
+
+    assert!(result.ok, "{result:#?}");
+    assert!(result.errors.is_empty());
 }
 
 #[test]

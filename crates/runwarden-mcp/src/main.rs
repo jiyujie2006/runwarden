@@ -4,12 +4,24 @@ const MAX_STDIO_FRAME_BYTES: usize = 1_048_576;
 const MAX_STDIO_HEADER_BYTES: usize = 16 * 1024;
 
 fn main() -> anyhow::Result<()> {
+    let debug_path = std::env::var("RUNWARDEN_MCP_DEBUG_FILE").ok();
+    let debug = |msg: &str| {
+        if let Some(path) = &debug_path
+            && let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+        {
+            let _ = writeln!(file, "{msg}");
+        }
+    };
     let stdin = std::io::stdin();
     let mut reader = BufReader::new(stdin.lock());
     let stdout = std::io::stdout();
     let mut stdout = stdout.lock();
 
-    while let Some(body) = read_next_body(&mut reader)? {
+    while let Some((body, framed)) = read_next_body(&mut reader)? {
+        debug(&format!("<< [framed={framed}] {body}"));
         if body.trim().is_empty() {
             continue;
         }
@@ -17,18 +29,27 @@ fn main() -> anyhow::Result<()> {
             continue;
         };
         let response_body = serde_json::to_string(&response)?;
-        write!(
-            stdout,
-            "Content-Length: {}\r\n\r\n{}",
-            response_body.len(),
-            response_body
-        )?;
+        debug(&format!(">> [framed={framed}] {response_body}"));
+        if framed {
+            write!(
+                stdout,
+                "Content-Length: {}\r\n\r\n{}",
+                response_body.len(),
+                response_body
+            )?;
+        } else {
+            // Client used newline-delimited JSON (MCP stdio, e.g. opencode);
+            // respond in kind so NDJSON-only clients can parse the response.
+            stdout.write_all(response_body.as_bytes())?;
+            stdout.write_all(b"\n")?;
+        }
         stdout.flush()?;
     }
+    debug("<< EOF");
     Ok(())
 }
 
-fn read_next_body<R: BufRead>(reader: &mut R) -> anyhow::Result<Option<String>> {
+fn read_next_body<R: BufRead>(reader: &mut R) -> anyhow::Result<Option<(String, bool)>> {
     let Some(mut line) = read_limited_line(
         reader,
         MAX_STDIO_FRAME_BYTES,
@@ -40,9 +61,10 @@ fn read_next_body<R: BufRead>(reader: &mut R) -> anyhow::Result<Option<String>> 
 
     if !line.starts_with("Content-Length:") {
         if serde_json::from_str::<serde_json::Value>(&line).is_ok() {
-            return Ok(Some(line));
+            return Ok(Some((line, false)));
         }
-        return read_remaining_raw_body(reader, line).map(Some);
+        let body = read_remaining_raw_body(reader, line)?;
+        return Ok(Some((body, false)));
     }
 
     let mut header_bytes = line.len();
@@ -82,9 +104,9 @@ fn read_next_body<R: BufRead>(reader: &mut R) -> anyhow::Result<Option<String>> 
     }
     let mut body = vec![0u8; content_length];
     reader.read_exact(&mut body)?;
-    String::from_utf8(body)
-        .map(Some)
-        .map_err(|err| anyhow::anyhow!("MCP frame body is not UTF-8: {err}"))
+    let body = String::from_utf8(body)
+        .map_err(|err| anyhow::anyhow!("MCP frame body is not UTF-8: {err}"))?;
+    Ok(Some((body, true)))
 }
 
 fn read_remaining_raw_body<R: BufRead>(

@@ -1,6 +1,8 @@
 # Evidence and Accountability
 
-Every meaningful Runwarden decision should be traceable to an observation id. Contest reports are accepted only when claims cite `obs_*` references that exist in the verified trace and support the claim semantics.
+Every meaningful Runwarden decision should be traceable to an observation id.
+Contest reports are accepted only when claims cite references that start with
+`obs_`, exist in the verified trace, and support the claim semantics.
 
 ## Claim Support
 
@@ -13,9 +15,14 @@ Report claims may include structured support:
 - `side_effect_executed`
 - `simulated`
 
-When present, lint validates those fields against the cited trace event. Claims without structured support use text semantics only for clearly completed, allowed, denied, blocked, or rejected behavior.
+When present, lint validates those fields against the cited trace event. Claims
+without structured support use text semantics only for clearly completed,
+allowed, denied, blocked, rejected, or review-blocked behavior.
 
-Denied and review-blocked side-effect-capable operations must state `side_effect_executed=false`.
+Denied, blocked, rejected, and review-blocked text claims without structured
+support pass only when the cited trace payload states
+`side_effect_executed=false`. If a claim needs different semantics, it must use
+structured support that explicitly matches the trace fields.
 Simulated replay observations must state `simulated=true` in structured
 support; they do not support plain completed or allowed claims for trusted
 external side effects.

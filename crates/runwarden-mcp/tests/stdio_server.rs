@@ -47,7 +47,11 @@ fn stdio_server_accepts_multiline_raw_payload_until_eof() {
     stdin.write_all(request.as_bytes()).expect("write request");
     drop(stdin);
 
-    let response = read_frame(&mut stdout);
+    // Raw (NDJSON) clients get a newline-delimited JSON response.
+    let mut response = String::new();
+    stdout
+        .read_line(&mut response)
+        .expect("read ndjson response line");
     let status = child.wait().expect("wait");
 
     assert!(status.success());

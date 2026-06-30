@@ -168,6 +168,15 @@ pub mod report {
             }
 
             for obs_ref in &claim.obs_refs {
+                if !obs_ref.starts_with("obs_") {
+                    errors.push(ReportLintError {
+                        kind: ReportLintErrorKind::UnknownObservation,
+                        claim_id: claim.id.clone(),
+                        obs_ref: Some(obs_ref.clone()),
+                        message: "report claim must cite obs_* references".to_string(),
+                    });
+                    continue;
+                }
                 if !known_obs_refs.contains(obs_ref) {
                     errors.push(ReportLintError {
                         kind: ReportLintErrorKind::UnknownObservation,
@@ -203,13 +212,20 @@ pub mod report {
             return false;
         }
 
-        if let Some(support) = &claim.support
-            && support.has_expectations()
-        {
-            return observation_matches_structured_support(support, event);
+        let structured_support_matches = if let Some(support) = &claim.support {
+            !support.has_expectations() || observation_matches_structured_support(support, event)
+        } else {
+            true
+        };
+        if !structured_support_matches {
+            return false;
         }
 
         let text = claim.text.to_ascii_lowercase();
+        if text_contains_denied_blocked_or_rejected_claim(&text) {
+            return payload_bool(&event.payload, "side_effect_executed") == Some(false)
+                && event_supports_denied_blocked_or_rejected_claim(event);
+        }
         if text.contains("completed") || text.contains("allowed") {
             return event.event_type.contains("completed")
                 || event
@@ -218,17 +234,37 @@ pub mod report {
                     .and_then(serde_json::Value::as_str)
                     .is_some_and(|decision| matches!(decision, "allowed" | "completed"));
         }
-        if text.contains("denied") || text.contains("blocked") || text.contains("rejected") {
-            return event.event_type.contains("denied")
-                || event.event_type.contains("blocked")
-                || event.event_type.contains("rejected")
-                || event
-                    .payload
-                    .get("decision")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|decision| matches!(decision, "denied" | "blocked" | "rejected"));
-        }
-        false
+        claim
+            .support
+            .as_ref()
+            .is_some_and(ReportClaimSupport::has_expectations)
+    }
+
+    fn text_contains_denied_blocked_or_rejected_claim(text: &str) -> bool {
+        let text = text
+            .replace("not denied", "")
+            .replace("not blocked", "")
+            .replace("not rejected", "")
+            .replace("not review-blocked", "")
+            .replace("not review blocked", "");
+        text.contains("denied")
+            || text.contains("blocked")
+            || text.contains("rejected")
+            || text.contains("review-blocked")
+            || text.contains("review blocked")
+    }
+
+    fn event_supports_denied_blocked_or_rejected_claim(event: &TraceEvent) -> bool {
+        event.event_type.contains("denied")
+            || event.event_type.contains("blocked")
+            || event.event_type.contains("rejected")
+            || event.event_type.contains("requires_review")
+            || payload_string(&event.payload, "decision").is_some_and(|decision| {
+                matches!(
+                    decision,
+                    "denied" | "blocked" | "rejected" | "requires_review"
+                )
+            })
     }
 
     fn observation_matches_structured_support(

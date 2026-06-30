@@ -6,6 +6,8 @@ members = [
   "crates/runwarden-mcp",
   "crates/runwarden-providers",
   "crates/runwarden-assurance",
+  "crates/runwarden-llm-proxy",
+  "crates/runwarden-anomaly",
 ]
 
 [workspace.package]
@@ -26,3 +28,4 @@ thiserror = "2.0"
 time = { version = "0.3", features = ["serde", "formatting", "parsing"] }
 toml = "0.8"
 uuid = { version = "1.11", features = ["serde", "v7"] }
+ureq = { version = "2.12", default-features = false, features = ["native-tls", "json"] }

@@ -31,6 +31,9 @@
               },
               "side_effect_executed": {
                 "type": "boolean"
+              },
+              "simulated": {
+                "type": "boolean"
               }
             },
             "type": "object"

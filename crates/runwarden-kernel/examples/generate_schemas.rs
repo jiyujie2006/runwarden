@@ -94,7 +94,8 @@ fn write_report_schema(path: impl AsRef<Path>) -> Result<(), Box<dyn std::error:
                                 "event_type": {"type": "string"},
                                 "decision": {"type": "string"},
                                 "execution_status": {"type": "string"},
-                                "side_effect_executed": {"type": "boolean"}
+                                "side_effect_executed": {"type": "boolean"},
+                                "simulated": {"type": "boolean"}
                             }
                         }
                     }

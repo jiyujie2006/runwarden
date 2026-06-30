@@ -16,24 +16,18 @@ fn agent_only_assessment_flow_mediates_report_render_before_execution() {
             .is_some_and(|name| name.starts_with("runwarden."))
     }));
 
-    let provider_list = tool_payload(&call_tool(
-        2,
-        "runwarden.provider.list",
-        json!({
-            "session_allowed_providers": [
-                "runwarden.input.inspect",
-                "runwarden.report.lint",
-                "runwarden.report.render"
-            ]
-        }),
-    ));
-    assert_eq!(
-        provider_list["providers"]
-            .as_array()
-            .expect("providers")
-            .len(),
-        3
-    );
+    let provider_list = tool_payload(&call_tool(2, "runwarden.provider.list", json!({})));
+    let providers = provider_list["providers"].as_array().expect("providers");
+    for expected in [
+        "runwarden.input.inspect",
+        "runwarden.report.lint",
+        "runwarden.report.render",
+    ] {
+        assert!(
+            providers.iter().any(|provider| provider["id"] == expected),
+            "provider list should include {expected}"
+        );
+    }
 
     let inspection = tool_payload(&call_tool(
         3,
