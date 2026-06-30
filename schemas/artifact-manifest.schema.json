@@ -39,7 +39,9 @@
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "minLength": 1,
+          "pattern": "^(?!/)(?![A-Za-z]:[\\\\/])(?!.*(^|[\\\\/])\\.\\.([\\\\/]|$)).+$"
         },
         "redaction_sidecar_sha256": {
           "type": [
@@ -48,7 +50,9 @@
           ]
         },
         "relative_path": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!/)(?![A-Za-z]:[\\\\/])(?!.*(^|[\\\\/])\\.\\.([\\\\/]|$)).+$"
         },
         "sha256": {
           "type": [

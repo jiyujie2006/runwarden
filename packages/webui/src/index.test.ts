@@ -89,6 +89,12 @@ describe("createDemoReviewerConsoleViewModel", () => {
     expect(model.suite.traceState).toBe("missing");
     expect(model.scenarios[0]?.traceState).toBe("missing");
   });
+
+  it("does not mark an empty suite as verified", () => {
+    const model = createDemoReviewerConsoleViewModel([]);
+
+    expect(model.suite.traceState).toBe("missing");
+  });
 });
 
 describe("renderDemoReviewerConsoleHtml", () => {

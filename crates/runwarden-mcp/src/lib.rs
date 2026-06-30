@@ -324,7 +324,7 @@ fn handle_provider_call(id: Value, params: Option<&Value>) -> Value {
     };
 
     let call = provider_call_from_arguments(provider, arguments);
-    let mut enforcer = KernelEnforcer::new(full_provider_registry(), mcp_kernel_policy(provider));
+    let mut enforcer = KernelEnforcer::new(full_provider_registry(), mcp_kernel_policy());
     let outcome = enforcer.evaluate_call(&call);
     if outcome.decision != PolicyDecision::Allowed {
         return tool_error_result(id, provider_outcome_payload(&outcome));
@@ -577,7 +577,16 @@ fn all_kernel_managed_providers() -> Vec<KernelProvider> {
         .collect()
 }
 
-fn mcp_kernel_policy(provider: &str) -> KernelPolicy {
+fn mcp_kernel_policy() -> KernelPolicy {
+    let mut policy = KernelPolicy::default();
+    policy.active_assessment = true;
+    for provider in all_kernel_managed_providers() {
+        policy.allow_provider(provider.id);
+    }
+    policy
+}
+
+fn mcp_single_provider_policy(provider: &str) -> KernelPolicy {
     let mut policy = KernelPolicy::default();
     policy.active_assessment = true;
     policy.allow_provider(provider);
@@ -788,7 +797,7 @@ fn handle_trace_export(id: Value, arguments: &Value) -> Value {
     let call = provider_call_from_arguments("runwarden.trace.export", arguments);
     let mut enforcer = KernelEnforcer::new(
         first_party_provider_registry(),
-        mcp_kernel_policy("runwarden.trace.export"),
+        mcp_single_provider_policy("runwarden.trace.export"),
     );
     let outcome = enforcer.evaluate_call(&call);
     if outcome.decision != PolicyDecision::Allowed {
@@ -978,7 +987,7 @@ fn handle_report_render(id: Value, params: Option<&Value>) -> Value {
     let call = provider_call_from_arguments("runwarden.report.render", arguments);
     let mut enforcer = KernelEnforcer::new(
         first_party_provider_registry(),
-        mcp_kernel_policy("runwarden.report.render"),
+        mcp_single_provider_policy("runwarden.report.render"),
     );
     let outcome = enforcer.evaluate_call(&call);
     if outcome.decision != PolicyDecision::Allowed {

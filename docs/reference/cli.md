@@ -11,7 +11,7 @@ runwarden session create --manifest scenarios/prompt-injection-file-exfil/manife
 runwarden session inspect --session demo --json
 
 runwarden provider list --session demo --json
-runwarden provider call --provider runwarden.input.inspect --input input.txt --json
+runwarden provider call --session demo --provider runwarden.input.inspect --root workspace --input input.txt --json
 
 runwarden approval pending --json
 runwarden approval approve approval-1 --reviewer reviewer_alice --reason "reviewed scope and risk" --json
@@ -35,7 +35,7 @@ runwarden ui serve --live --demo artifacts/demo/prompt-injection-file-exfil --js
 
 ## Provider Calls
 
-Provider calls are evaluated by `KernelEnforcer` before execution. The CLI performs a pre-read policy check before binding file digests so traversal and scoped-root failures are denied before any file read.
+Provider calls require `--session` and are evaluated by `KernelEnforcer` before execution. The CLI performs a pre-read policy check before binding file digests so traversal and scoped-root failures are denied before any file read.
 
 Session-backed calls resolve relative provider paths under the selected session root. High-risk providers require a bound approval record before simulated or real side effects can run.
 

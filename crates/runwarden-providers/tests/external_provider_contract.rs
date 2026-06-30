@@ -1,6 +1,10 @@
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::Path,
+    sync::{Mutex, OnceLock},
+};
 
-use runwarden_kernel::{ProviderKind, ProviderRisk};
+use runwarden_kernel::{ProviderKind, ProviderManifest, ProviderRisk};
 use runwarden_providers::external::{
     ExternalMcpAdapterRequest, certify_external_provider_manifest, execute_external_mcp_adapter,
     load_provider_manifest,
@@ -13,6 +17,19 @@ fn json_string(value: impl AsRef<str>) -> String {
 
 fn json_path(path: &Path) -> String {
     json_string(path.to_string_lossy())
+}
+
+fn execute_adapter(
+    manifest: &ProviderManifest,
+    request: &ExternalMcpAdapterRequest,
+    runtime_root: Option<&Path>,
+) -> serde_json::Value {
+    static ADAPTER_EXECUTION_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    let _guard = ADAPTER_EXECUTION_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("adapter execution lock");
+    execute_external_mcp_adapter(manifest, request, runtime_root)
 }
 
 #[cfg(unix)]
@@ -116,6 +133,80 @@ fn external_mcp_stdio_manifest_requires_command_allowlist_and_working_root() {
     assert!(!report.side_effect_executed);
 }
 
+#[test]
+fn external_mcp_stdio_manifest_rejects_network_egress_requirements() {
+    let manifest = load_provider_manifest(
+        r#"{
+          "schema_version": "1",
+          "provider_id": "external.mcp.browser.open_page",
+          "provider_class": "external",
+          "kind": "mcp",
+          "risk": "network_active",
+          "side_effects": ["network"],
+          "transport": "stdio",
+          "downstream_identity": "browser-mcp",
+          "tool_identity": "open_page",
+          "declared_permissions": ["network"],
+          "allowed_origins": ["https://example.com"],
+          "command_allowlist": ["browser-mcp"],
+          "working_root": ".",
+          "schema_pin": {
+            "algorithm": "sha256",
+            "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+            "schema": {"type": "object"}
+          },
+          "observed_schema": {"type": "object"}
+        }"#,
+    )
+    .expect("manifest parses");
+
+    let report = certify_external_provider_manifest(&manifest);
+
+    assert!(!report.passed);
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|finding| finding == "stdio_egress_controls_unsupported")
+    );
+}
+
+#[test]
+fn external_mcp_https_transport_is_not_certified_without_trusted_adapter() {
+    let manifest = load_provider_manifest(
+        r#"{
+          "schema_version": "1",
+          "provider_id": "external.mcp.browser.open_page",
+          "provider_class": "external",
+          "kind": "mcp",
+          "risk": "network_active",
+          "side_effects": ["network"],
+          "transport": "https",
+          "downstream_identity": "browser-mcp",
+          "tool_identity": "open_page",
+          "declared_permissions": ["network"],
+          "allowed_origins": ["https://example.com"],
+          "schema_pin": {
+            "algorithm": "sha256",
+            "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+            "schema": {"type": "object"}
+          },
+          "observed_schema": {"type": "object"}
+        }"#,
+    )
+    .expect("manifest parses");
+
+    let report = certify_external_provider_manifest(&manifest);
+
+    assert!(!report.passed);
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|finding| finding == "mcp_transport_required")
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn external_mcp_stdio_adapter_executes_framed_downstream_call() {
@@ -159,7 +250,7 @@ fn external_mcp_stdio_adapter_executes_framed_downstream_call() {
         ..ExternalMcpAdapterRequest::default()
     };
 
-    let result = execute_external_mcp_adapter(&manifest, &request, Some(dir.path()));
+    let result = execute_adapter(&manifest, &request, Some(dir.path()));
 
     assert_eq!(result["decision"], "allowed");
     assert_eq!(result["execution_status"], "completed");
@@ -211,7 +302,7 @@ fn external_mcp_request_transport_must_match_manifest() {
         ..ExternalMcpAdapterRequest::default()
     };
 
-    let result = execute_external_mcp_adapter(&manifest, &request, Some(dir.path()));
+    let result = execute_adapter(&manifest, &request, Some(dir.path()));
 
     assert_eq!(result["decision"], "denied");
     assert_eq!(result["execution_status"], "not_executed");
@@ -254,7 +345,7 @@ fn external_mcp_manifest_transport_required_for_execution() {
         ..ExternalMcpAdapterRequest::default()
     };
 
-    let result = execute_external_mcp_adapter(&manifest, &request, Some(dir.path()));
+    let result = execute_adapter(&manifest, &request, Some(dir.path()));
 
     assert_eq!(result["decision"], "denied");
     assert_eq!(result["execution_status"], "not_executed");
@@ -303,7 +394,7 @@ fn external_mcp_stdio_rejects_request_args_before_spawn() {
         ..ExternalMcpAdapterRequest::default()
     };
 
-    let result = execute_external_mcp_adapter(&manifest, &request, Some(&runtime_root));
+    let result = execute_adapter(&manifest, &request, Some(&runtime_root));
 
     assert_eq!(result["decision"], "denied");
     assert_eq!(result["execution_status"], "not_executed");
@@ -373,7 +464,7 @@ fn external_mcp_stdio_rejects_symlink_escape_args() {
         ..ExternalMcpAdapterRequest::default()
     };
 
-    let result = execute_external_mcp_adapter(&manifest, &request, Some(&runtime_root));
+    let result = execute_adapter(&manifest, &request, Some(&runtime_root));
 
     assert_eq!(result["decision"], "denied");
     assert_eq!(result["execution_status"], "not_executed");
@@ -416,7 +507,7 @@ fn external_mcp_stdio_adapter_requires_trusted_runtime_root() {
         ..ExternalMcpAdapterRequest::default()
     };
 
-    let result = execute_external_mcp_adapter(&manifest, &request, None);
+    let result = execute_adapter(&manifest, &request, None);
 
     assert_eq!(result["decision"], "denied");
     assert_eq!(result["execution_status"], "not_executed");
@@ -465,7 +556,7 @@ fn external_mcp_stdio_adapter_rejects_shell_capable_command() {
         ..ExternalMcpAdapterRequest::default()
     };
 
-    let result = execute_external_mcp_adapter(&manifest, &request, Some(dir.path()));
+    let result = execute_adapter(&manifest, &request, Some(dir.path()));
 
     assert_eq!(result["decision"], "denied");
     assert_eq!(result["execution_status"], "not_executed");
@@ -520,7 +611,7 @@ fn external_mcp_http_adapter_rejects_literal_private_or_local_ip_hosts_before_co
             ..ExternalMcpAdapterRequest::default()
         };
 
-        let result = execute_external_mcp_adapter(&manifest, &request, None);
+        let result = execute_adapter(&manifest, &request, None);
 
         assert_eq!(result["decision"], "denied", "{url}: {result:?}");
         assert_eq!(
@@ -571,7 +662,7 @@ fn external_mcp_http_adapter_rejects_dns_resolution_to_private_host() {
         ..ExternalMcpAdapterRequest::default()
     };
 
-    let result = execute_external_mcp_adapter(&manifest, &request, None);
+    let result = execute_adapter(&manifest, &request, None);
 
     assert_eq!(result["decision"], "denied");
     assert_eq!(result["execution_status"], "not_executed");
@@ -610,7 +701,7 @@ fn external_mcp_sse_adapter_rejects_literal_private_ip_host_before_connecting() 
         ..ExternalMcpAdapterRequest::default()
     };
 
-    let result = execute_external_mcp_adapter(&manifest, &request, None);
+    let result = execute_adapter(&manifest, &request, None);
 
     assert_eq!(result["decision"], "denied");
     assert_eq!(result["execution_status"], "not_executed");
@@ -650,7 +741,7 @@ fn external_mcp_http_adapter_rejects_timeout_above_runtime_policy_before_connect
         ..ExternalMcpAdapterRequest::default()
     };
 
-    let result = execute_external_mcp_adapter(&manifest, &request, None);
+    let result = execute_adapter(&manifest, &request, None);
 
     assert_eq!(result["decision"], "denied");
     assert_eq!(result["error_kind"], "budget_exceeded");
@@ -687,7 +778,7 @@ fn external_mcp_adapter_rejects_schema_rug_pull_before_execution() {
         ..ExternalMcpAdapterRequest::default()
     };
 
-    let result = execute_external_mcp_adapter(&manifest, &request, None);
+    let result = execute_adapter(&manifest, &request, None);
 
     assert_eq!(result["decision"], "denied");
     assert_eq!(result["error_kind"], "schema_rug_pull");
@@ -725,7 +816,7 @@ fn external_mcp_http_adapter_rejects_control_characters_in_path() {
         ..ExternalMcpAdapterRequest::default()
     };
 
-    let result = execute_external_mcp_adapter(&manifest, &request, None);
+    let result = execute_adapter(&manifest, &request, None);
 
     assert_eq!(result["decision"], "denied");
     assert_eq!(result["error_kind"], "egress_denied");
@@ -769,7 +860,7 @@ fn external_mcp_stdio_requires_exact_allowlisted_command() {
         ..ExternalMcpAdapterRequest::default()
     };
 
-    let result = execute_external_mcp_adapter(&manifest, &request, Some(dir.path()));
+    let result = execute_adapter(&manifest, &request, Some(dir.path()));
 
     assert_eq!(result["decision"], "denied");
     assert_eq!(result["error_kind"], "provider_not_allowed");
@@ -813,7 +904,7 @@ fn external_mcp_stdio_rejects_network_capable_manifest_before_spawn() {
         ..ExternalMcpAdapterRequest::default()
     };
 
-    let result = execute_external_mcp_adapter(&manifest, &request, Some(dir.path()));
+    let result = execute_adapter(&manifest, &request, Some(dir.path()));
 
     assert_eq!(result["decision"], "denied");
     assert_eq!(result["error_kind"], "egress_denied");
@@ -861,7 +952,7 @@ fn external_mcp_stdio_enforces_timeout_while_waiting() {
         ..ExternalMcpAdapterRequest::default()
     };
 
-    let result = execute_external_mcp_adapter(&manifest, &request, Some(dir.path()));
+    let result = execute_adapter(&manifest, &request, Some(dir.path()));
 
     assert_eq!(result["execution_status"], "failed");
     assert!(
@@ -915,7 +1006,7 @@ fn external_mcp_stdio_enforces_output_limit_while_reading() {
         ..ExternalMcpAdapterRequest::default()
     };
 
-    let result = execute_external_mcp_adapter(&manifest, &request, Some(dir.path()));
+    let result = execute_adapter(&manifest, &request, Some(dir.path()));
 
     assert_eq!(result["execution_status"], "failed");
     assert!(
@@ -973,7 +1064,7 @@ fn external_mcp_stdio_cleans_process_group_after_success() {
         ..ExternalMcpAdapterRequest::default()
     };
 
-    let result = execute_external_mcp_adapter(&manifest, &request, Some(dir.path()));
+    let result = execute_adapter(&manifest, &request, Some(dir.path()));
 
     assert_eq!(result["decision"], "allowed");
     assert_eq!(result["execution_status"], "completed");

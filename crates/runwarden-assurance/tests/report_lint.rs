@@ -132,6 +132,29 @@ fn report_lint_accepts_allowed_claim_with_allowed_decision() {
 }
 
 #[test]
+fn report_lint_rejects_completed_claim_when_event_only_says_policy_allowed() {
+    let trace_events = vec![trace_with_payload(
+        "obs_1",
+        "provider_policy_evaluated",
+        "runwarden.input.inspect",
+        json!({"decision": "allowed", "execution_status": "not_executed"}),
+    )];
+    let report = ReportDraft::new(vec![ReportClaim::new(
+        "finding-1",
+        "Provider call completed",
+        ["obs_1"],
+    )]);
+
+    let result = lint_report_against_trace(&report, &trace_events);
+
+    assert!(!result.ok);
+    assert_eq!(
+        result.errors[0].kind,
+        ReportLintErrorKind::UnsupportedObservation
+    );
+}
+
+#[test]
 fn report_lint_rejects_uncited_claim() {
     let trace_events = vec![trace("obs_1")];
     let report = ReportDraft::new(vec![ReportClaim::new(

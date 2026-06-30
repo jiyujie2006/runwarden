@@ -97,11 +97,11 @@ fn checked_in_schema_artifacts_match_rust_contracts() {
                             "text": {"type": "string"},
                             "obs_refs": {
                                 "type": "array",
+                                "minItems": 1,
                                 "items": {"type": "string", "pattern": "^obs_"}
                             },
                             "support": {
                                 "type": "object",
-                                "minProperties": 1,
                                 "properties": {
                                     "provider": {"type": "string"},
                                     "event_type": {"type": "string"},
@@ -130,6 +130,50 @@ fn active_typescript_surface_is_static_webui_only() {
         .map(|entry| entry.trim_matches('"'))
         .collect();
     assert_eq!(package_entries, ["packages/webui"]);
+}
+
+#[test]
+fn artifact_paths_are_schema_restricted_to_relative_workspace_paths() {
+    let root = workspace_root();
+    let artifact = read_schema(&root, "artifact-manifest.schema.json");
+    let entry = artifact["definitions"]["ArtifactManifestEntry"]["properties"]
+        .as_object()
+        .expect("artifact entry properties");
+
+    for field in ["relative_path", "redaction_sidecar_path"] {
+        assert_string_or_nullable_string(&entry[field]["type"], field);
+        assert_eq!(entry[field]["minLength"], 1, "{field}");
+        assert!(
+            entry[field]["pattern"]
+                .as_str()
+                .is_some_and(|pattern| pattern.contains(r"\.\.")),
+            "{field} must reject parent traversal"
+        );
+    }
+
+    let provider_outcome = read_schema(&root, "provider-outcome.schema.json");
+    let artifact_ref = provider_outcome["definitions"]["ArtifactRef"]["properties"]
+        .as_object()
+        .expect("artifact ref properties");
+    assert_string_or_nullable_string(&artifact_ref["path"]["type"], "path");
+    assert_eq!(artifact_ref["path"]["minLength"], 1);
+    assert!(
+        artifact_ref["path"]["pattern"]
+            .as_str()
+            .is_some_and(|pattern| pattern.contains(r"\.\."))
+    );
+}
+
+fn assert_string_or_nullable_string(value: &Value, field: &str) {
+    if value == "string" {
+        return;
+    }
+    assert!(
+        value
+            .as_array()
+            .is_some_and(|types| types.iter().any(|kind| kind == "string")),
+        "{field} must include string type"
+    );
 }
 
 fn assert_schema_title(schema: schemars::schema::RootSchema, expected: &str) {

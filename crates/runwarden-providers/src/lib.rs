@@ -1607,8 +1607,11 @@ pub mod external {
                 if manifest.working_root.is_none() {
                     findings.push("stdio_working_root_required".to_string());
                 }
+                if stdio_requires_unsupported_egress_controls(manifest) {
+                    findings.push("stdio_egress_controls_unsupported".to_string());
+                }
             }
-            Some("http" | "sse" | "https") => {}
+            Some("http" | "sse") => {}
             _ => findings.push("mcp_transport_required".to_string()),
         }
         if manifest.downstream_identity.is_none() {
@@ -1742,7 +1745,6 @@ pub mod external {
             thread::sleep(Duration::from_millis(10));
         };
         terminate_child(child, kill_process_tree);
-
         let stdout = stdout_handle
             .join()
             .map_err(|_| "failed to join stdout reader".to_string())?;

@@ -28,6 +28,7 @@ import http.server
 import json
 import os
 import shlex
+import shutil
 import socket
 import subprocess
 import threading
@@ -37,7 +38,7 @@ import urllib.request
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROXY_BIN = os.path.join(REPO, "target", "debug", "runwarden-llm-proxy")
-OPENCODE_BIN = "/home/jiyujie/.opencode/bin/opencode"
+OPENCODE_BIN = os.environ.get("OPENCODE_BIN") or shutil.which("opencode") or "opencode"
 
 CANNED_COMPLETION = json.dumps(
     {

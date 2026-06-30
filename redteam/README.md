@@ -27,9 +27,9 @@ python3 redteam/run.py proxy-probe \
   --corpora redteam/corpora/prompt_injection.jsonl redteam/corpora/jailbreak.jsonl
 ```
 
-Result on the hand-authored set: **5/16 blocked** (31%). The 11 forwarded are
-paraphrases/synonyms the rule-based substring filter misses — the empirical
-justification for the L2 semantic filter.
+Historical L1 substring result on the hand-authored set: **5/16 blocked**
+(31%). With the current L2 semantic filter enabled, the same set is **16/16
+blocked**.
 
 ### `agent-drive` — real LLM tool-call supervision
 

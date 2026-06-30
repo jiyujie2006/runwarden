@@ -105,7 +105,37 @@ fn trace_export_command_outputs_only_after_verification() {
 #[test]
 fn provider_call_trace_export_rejects_tampered_events_without_returning_events() {
     let dir = tempdir().expect("tempdir");
+    let manifest_path = dir.path().join("assessment.toml");
     let trace_path = dir.path().join("trace.json");
+    fs::write(
+        &manifest_path,
+        r#"
+version = "0.1"
+name = "trace-export-session"
+mode = "offline"
+provider_allowlist = ["runwarden.trace.export"]
+
+[[roots]]
+name = "workspace"
+path = "."
+
+[active_assessment]
+enabled = true
+"#,
+    )
+    .expect("write manifest");
+    let session = Command::new(env!("CARGO_BIN_EXE_runwarden"))
+        .current_dir(dir.path())
+        .args(["session", "create", "--manifest"])
+        .arg(&manifest_path)
+        .args(["--session", "contest_ops", "--json"])
+        .output()
+        .expect("create session");
+    assert!(
+        session.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&session.stderr)
+    );
     let mut trace = trace_events();
     trace[1].payload = json!({"status":"rewritten"});
     fs::write(
@@ -128,7 +158,7 @@ fn provider_call_trace_export_rejects_tampered_events_without_returning_events()
             "--approval",
             "approval-trace-export",
             "--session",
-            "cli-provider-call",
+            "contest_ops",
             "--provider",
             "runwarden.trace.export",
             "--action",
@@ -169,6 +199,8 @@ fn provider_call_trace_export_rejects_tampered_events_without_returning_events()
         .args([
             "provider",
             "call",
+            "--session",
+            "contest_ops",
             "--provider",
             "runwarden.trace.export",
             "--trace",

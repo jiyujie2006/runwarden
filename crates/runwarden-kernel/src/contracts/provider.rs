@@ -90,6 +90,10 @@ pub enum ExecutionMode {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ArtifactRef {
     pub id: String,
+    #[schemars(
+        length(min = 1),
+        regex(pattern = r"^(?!/)(?![A-Za-z]:[\\/])(?!.*(^|[\\/])\.\.([\\/]|$)).+$")
+    )]
     pub path: String,
     pub sha256: Option<String>,
 }

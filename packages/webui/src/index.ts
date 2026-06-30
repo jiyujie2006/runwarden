@@ -195,6 +195,9 @@ function traceStateFromVerification(
 }
 
 function suiteTraceState(scenarios: DemoScenarioSummary[]): DemoTraceState {
+  if (scenarios.length === 0) {
+    return "missing";
+  }
   if (scenarios.every((scenario) => scenario.traceState === "verified")) {
     return "verified";
   }

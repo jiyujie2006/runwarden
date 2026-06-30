@@ -10,7 +10,7 @@ bash scripts/release_gate_local.sh
 
 - `runwarden`
 - `runwarden-mcp`
-- `runwarden-kernel`
+- `runwarden-llm-proxy`
 
 ## Generated Review Outputs
 

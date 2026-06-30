@@ -12,10 +12,10 @@
               "pattern": "^obs_",
               "type": "string"
             },
+            "minItems": 1,
             "type": "array"
           },
           "support": {
-            "minProperties": 1,
             "properties": {
               "decision": {
                 "type": "string"

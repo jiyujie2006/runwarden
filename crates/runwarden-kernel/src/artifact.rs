@@ -19,8 +19,16 @@ impl ArtifactManifest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ArtifactManifestEntry {
     pub artifact_id: String,
+    #[schemars(
+        length(min = 1),
+        regex(pattern = r"^(?!/)(?![A-Za-z]:[\\/])(?!.*(^|[\\/])\.\.([\\/]|$)).+$")
+    )]
     pub relative_path: String,
     pub sha256: Option<String>,
+    #[schemars(
+        length(min = 1),
+        regex(pattern = r"^(?!/)(?![A-Za-z]:[\\/])(?!.*(^|[\\/])\.\.([\\/]|$)).+$")
+    )]
     pub redaction_sidecar_path: Option<String>,
     pub redaction_sidecar_sha256: Option<String>,
     pub obs_refs: Vec<String>,

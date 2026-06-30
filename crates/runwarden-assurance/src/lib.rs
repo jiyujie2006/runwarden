@@ -226,13 +226,17 @@ pub mod report {
             return payload_bool(&event.payload, "side_effect_executed") == Some(false)
                 && event_supports_denied_blocked_or_rejected_claim(event);
         }
-        if text.contains("completed") || text.contains("allowed") {
+        if text.contains("completed") {
             return event.event_type.contains("completed")
-                || event
-                    .payload
-                    .get("decision")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|decision| matches!(decision, "allowed" | "completed"));
+                || payload_string(&event.payload, "execution_status")
+                    .is_some_and(|status| status == "completed");
+        }
+        if text.contains("allowed") {
+            return event
+                .payload
+                .get("decision")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|decision| matches!(decision, "allowed" | "completed"));
         }
         claim
             .support

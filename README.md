@@ -20,6 +20,8 @@ Agents see only `runwarden-mcp`. Filesystem, browser, email, API, memory, knowle
 | `crates/runwarden-mcp` | Only MCP server exposed to agents. |
 | `crates/runwarden-cli` | Contest workflow: sessions, providers, trace, reports, scenarios, demo runner, and static UI. |
 | `crates/runwarden-assurance` | Report lint/render and trace-backed scenario metrics. |
+| `crates/runwarden-llm-proxy` | Local proxy for model-call filtering and red-team probes. |
+| `crates/runwarden-anomaly` | Lightweight behavior anomaly scoring used by MCP/provider evidence. |
 | `packages/webui` | Static demo reviewer console. |
 
 ## Demo

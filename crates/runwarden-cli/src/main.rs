@@ -14,7 +14,7 @@ use runwarden_assurance::report::{
 use runwarden_kernel::authority::{ApprovalBinding, ApprovalRecord, ApprovalState};
 use runwarden_kernel::contracts::{PolicyDecision, ProviderCall, ProviderClass, ProviderOutcome};
 use runwarden_kernel::evidence::{InMemoryTraceStore, TraceEvent, TraceQuery, hex_sha256};
-use runwarden_kernel::kernel::{KernelEnforcer, KernelPolicy, ScopedRoot};
+use runwarden_kernel::kernel::KernelEnforcer;
 use runwarden_kernel::manifest::{AssessmentManifest, SessionManifest};
 use runwarden_providers::catalog::{
     EXTERNAL_PROVIDER_IDS, FIRST_PARTY_PROVIDER_IDS, full_provider_registry,
@@ -389,22 +389,18 @@ fn run_provider_command(command: ProviderCommand) -> anyhow::Result<()> {
             format,
             json,
         } => {
-            let session_manifest = session.as_deref().map(read_session).transpose()?;
+            let Some(session_id) = session.as_deref() else {
+                anyhow::bail!("provider call requires --session");
+            };
+            let session_manifest = read_session(session_id)?;
             let mut execution_input = input.clone();
             let mut execution_trace = trace.clone();
             let mut execution_report = report.clone();
             let mut call = provider_call_from_cli(CliProviderCallInput {
-                session_id: session_manifest
-                    .as_ref()
-                    .map(|session| session.session_id.as_str())
-                    .unwrap_or("cli-provider-call"),
-                actor_id: session_manifest
-                    .as_ref()
-                    .and_then(|session| session.actor_id.clone()),
-                authz_id: session_manifest
-                    .as_ref()
-                    .and_then(|session| session.authz_id.clone()),
-                session_manifest: session_manifest.as_ref(),
+                session_id: session_manifest.session_id.as_str(),
+                actor_id: session_manifest.actor_id.clone(),
+                authz_id: session_manifest.authz_id.clone(),
+                session_manifest: Some(&session_manifest),
                 provider: &provider,
                 input: input.as_ref(),
                 root: root.as_ref(),
@@ -413,30 +409,21 @@ fn run_provider_command(command: ProviderCommand) -> anyhow::Result<()> {
                 format: format.as_deref(),
             });
 
-            if let Some(session_manifest) = session_manifest.as_ref() {
-                let resolved_paths =
-                    resolve_session_provider_argument_paths(session_manifest, &mut call)?;
-                if let Some(path) = resolved_paths.input {
-                    execution_input = Some(path);
-                }
-                if let Some(path) = resolved_paths.trace {
-                    execution_trace = Some(path);
-                }
-                if let Some(path) = resolved_paths.report {
-                    execution_report = Some(path);
-                }
+            let resolved_paths =
+                resolve_session_provider_argument_paths(&session_manifest, &mut call)?;
+            if let Some(path) = resolved_paths.input {
+                execution_input = Some(path);
+            }
+            if let Some(path) = resolved_paths.trace {
+                execution_trace = Some(path);
+            }
+            if let Some(path) = resolved_paths.report {
+                execution_report = Some(path);
             }
 
             let mut pre_read_enforcer = KernelEnforcer::new(
                 full_provider_registry(),
-                cli_provider_policy(
-                    session_manifest.as_ref(),
-                    &provider,
-                    input.as_ref(),
-                    root.as_ref(),
-                    trace.as_ref(),
-                    report.as_ref(),
-                ),
+                session_manifest.to_kernel_policy(),
             );
             let pre_read_outcome = pre_read_enforcer.evaluate_call(&call);
             if pre_read_outcome.decision == PolicyDecision::Denied {
@@ -448,14 +435,7 @@ fn run_provider_command(command: ProviderCommand) -> anyhow::Result<()> {
             attach_matching_approval(&mut call)?;
             let mut enforcer = KernelEnforcer::new(
                 full_provider_registry(),
-                cli_provider_policy(
-                    session_manifest.as_ref(),
-                    &provider,
-                    input.as_ref(),
-                    root.as_ref(),
-                    trace.as_ref(),
-                    report.as_ref(),
-                ),
+                session_manifest.to_kernel_policy(),
             );
             for approval in read_all_approvals()? {
                 enforcer.add_approval(approval);
@@ -488,7 +468,10 @@ fn run_provider_command(command: ProviderCommand) -> anyhow::Result<()> {
                 )?
             };
             if json {
-                println!("{}", serde_json::to_string_pretty(&result)?);
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&provider_execution_payload(&outcome, result))?
+                );
             } else {
                 println!("provider call completed: {provider}");
             }
@@ -943,6 +926,54 @@ fn emit_provider_policy_outcome(outcome: &ProviderOutcome, json: bool) -> anyhow
     Ok(())
 }
 
+fn provider_execution_payload(outcome: &ProviderOutcome, mut payload: Value) -> Value {
+    let execution_status = payload
+        .get("execution_status")
+        .and_then(Value::as_str)
+        .unwrap_or("completed")
+        .to_string();
+    let side_effect_executed = payload
+        .get("side_effect_executed")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let simulated = payload
+        .get("simulated")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let decision = payload
+        .get("decision")
+        .and_then(Value::as_str)
+        .unwrap_or("allowed")
+        .to_string();
+    let event_type = if simulated {
+        "provider_simulated_replay"
+    } else {
+        "provider_completed"
+    };
+
+    if let Some(object) = payload.as_object_mut() {
+        object.insert("obs_ref".to_string(), json!(&outcome.observation_id));
+        object.insert(
+            "trace_event".to_string(),
+            json!(TraceEvent::sealed(
+                outcome.observation_id.clone(),
+                event_type.to_string(),
+                Some(outcome.envelope.provider.clone()),
+                json!({
+                    "provider": &outcome.envelope.provider,
+                    "action": &outcome.envelope.action,
+                    "decision": decision,
+                    "execution_status": execution_status,
+                    "side_effect_executed": side_effect_executed,
+                    "simulated": simulated
+                }),
+                None,
+            )),
+        );
+    }
+    payload
+}
+
 #[derive(Debug, Default)]
 struct ResolvedProviderArgumentPaths {
     input: Option<PathBuf>,
@@ -1060,51 +1091,6 @@ fn provider_path_digest_fields() -> &'static [&'static str] {
 fn digest_file(path: &Path) -> anyhow::Result<String> {
     let bytes = fs::read(path)?;
     Ok(hex_sha256(&bytes))
-}
-
-fn cli_provider_policy(
-    session_manifest: Option<&SessionManifest>,
-    provider: &str,
-    input: Option<&PathBuf>,
-    root: Option<&PathBuf>,
-    trace: Option<&PathBuf>,
-    report: Option<&PathBuf>,
-) -> KernelPolicy {
-    session_manifest
-        .map(SessionManifest::to_kernel_policy)
-        .unwrap_or_else(|| default_cli_provider_policy(provider, input, root, trace, report))
-}
-
-fn default_cli_provider_policy(
-    provider: &str,
-    input: Option<&PathBuf>,
-    root: Option<&PathBuf>,
-    trace: Option<&PathBuf>,
-    report: Option<&PathBuf>,
-) -> KernelPolicy {
-    let mut policy = KernelPolicy::default();
-    policy.allow_provider(provider);
-    policy.active_assessment = true;
-    for (name, path) in [
-        ("input", input),
-        ("root", root),
-        ("trace", trace),
-        ("report", report),
-    ] {
-        if let Some(root) = default_cli_scoped_root(path) {
-            policy.add_scoped_root(ScopedRoot::new(format!("cli-{name}"), root));
-        }
-    }
-    policy
-}
-
-fn default_cli_scoped_root(path: Option<&PathBuf>) -> Option<PathBuf> {
-    let path = path?;
-    if path.is_dir() {
-        Some(path.clone())
-    } else {
-        path.parent().map(Path::to_path_buf)
-    }
 }
 
 fn provider_action(provider: &str) -> &str {
@@ -1564,6 +1550,9 @@ fn render_scenario_suite_report(
         root.join(suite)
     };
     let eval = evaluate_scenario_corpora(root, suite)?;
+    if eval["passed"].as_bool() != Some(true) {
+        anyhow::bail!("scenario suite eval did not pass");
+    }
     let mut markdown = String::from("# Runwarden Contest Report\n\n");
     markdown.push_str("## Scenario Metrics\n\n");
     markdown.push_str("| Scenario | Denials | Reviews | Provider Calls | Passed |\n");

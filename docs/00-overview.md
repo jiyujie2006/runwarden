@@ -28,6 +28,9 @@ Runwarden makes those answers reproducible from checked-in scenarios.
 - `runwarden-cli`: contest control plane for sessions, providers, traces,
   reports, scenarios, deterministic demos, and static UI output.
 - `runwarden-mcp`: the only MCP boundary exposed to agents.
+- `runwarden-llm-proxy`: local model-call filtering proxy for red-team probes.
+- `runwarden-anomaly`: lightweight behavior anomaly scoring for provider
+  evidence.
 - `packages/webui`: presentation-only static reviewer console renderer.
 
 ## Proof Loop

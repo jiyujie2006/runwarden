@@ -7,7 +7,7 @@ reproducible from the checked-out repository.
 
 | Evidence | Command or path | Purpose |
 | --- | --- | --- |
-| Fast gate | `bash scripts/pr_fast_gate.sh` | Runs fmt, clippy, cargo-deny when installed, Rust tests, WebUI tests, and WebUI build. |
+| Fast gate | `bash scripts/pr_fast_gate.sh` | Runs fmt, clippy, required cargo-deny, Rust tests, WebUI tests, and WebUI build. |
 | Local contest gate | `bash scripts/release_gate_local.sh` | Adds strict check, scenario eval, deterministic demos, suite report rendering, and static console build. |
 | Strict repository check | `target/debug/runwarden check --strict` | Verifies required contest docs, scenarios, providers, and gate scripts. |
 | Scenario eval | `target/debug/runwarden eval scenarios --json` | Validates the four checked-in golden corpora. |

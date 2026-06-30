@@ -67,7 +67,9 @@
           "type": "string"
         },
         "path": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!/)(?![A-Za-z]:[\\\\/])(?!.*(^|[\\\\/])\\.\\.([\\\\/]|$)).+$"
         },
         "sha256": {
           "type": [

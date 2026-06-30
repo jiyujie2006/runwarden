@@ -107,6 +107,39 @@ fn report_render_scenario_suite_outputs_contest_report() {
 }
 
 #[test]
+fn report_render_scenario_suite_fails_when_eval_fails() {
+    let workspace = workspace_root();
+    let suite = PathBuf::from("target/runwarden-contest-test/failing-scenario-suite");
+    let absolute_suite = workspace.join(&suite);
+    let _ = fs::remove_dir_all(&absolute_suite);
+    copy_dir(&workspace.join("scenarios"), &absolute_suite);
+    fs::write(
+        absolute_suite.join("prompt-injection-file-exfil/expected/eval-baseline.json"),
+        r#"{
+  "expected_pass": true,
+  "expected_denials": 99,
+  "expected_requires_review": 1,
+  "min_trace_completeness": 1.0,
+  "min_report_citation_accuracy": 1.0
+}
+"#,
+    )
+    .expect("write failing baseline");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_runwarden"))
+        .current_dir(&workspace)
+        .args(["report", "render", "--scenario-suite"])
+        .arg(&suite)
+        .args(["--format", "markdown", "--json"])
+        .output()
+        .expect("render scenario suite report");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
+    assert!(stderr.contains("scenario suite eval did not pass"));
+}
+
+#[test]
 fn ui_build_creates_static_console_without_local_api() {
     let workspace = workspace_root();
     let input_dir = PathBuf::from("target/runwarden-contest-test/ui-build-static-console");
@@ -153,6 +186,20 @@ fn ui_build_creates_static_console_without_local_api() {
     let html = fs::read_to_string(workspace.join(output_file)).expect("html");
     assert!(html.contains("Runwarden Reviewer Console"));
     assert!(html.contains("prompt-injection-file-exfil"));
+}
+
+fn copy_dir(from: &std::path::Path, to: &std::path::Path) {
+    fs::create_dir_all(to).expect("create destination dir");
+    for entry in fs::read_dir(from).expect("read source dir") {
+        let entry = entry.expect("source entry");
+        let destination = to.join(entry.file_name());
+        let file_type = entry.file_type().expect("source entry type");
+        if file_type.is_dir() {
+            copy_dir(&entry.path(), &destination);
+        } else if file_type.is_file() {
+            fs::copy(entry.path(), destination).expect("copy file");
+        }
+    }
 }
 
 #[test]

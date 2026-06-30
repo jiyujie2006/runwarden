@@ -9,7 +9,7 @@ the local full gate exercises the contest demo workflow end to end.
 
 - `cargo fmt --check`
 - `cargo clippy --workspace -- -D warnings`
-- `cargo deny check` when `cargo-deny` is installed
+- `cargo deny check` (requires `cargo-deny`; scripts fail with an install hint)
 - `cargo test --workspace`
 - `pnpm test`
 - `pnpm build`
