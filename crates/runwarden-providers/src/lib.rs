@@ -1992,7 +1992,10 @@ pub mod external {
         let bytes = value.as_bytes();
         let mut index = 0;
         while index + 2 < bytes.len() {
-            if bytes[index] == b'%' {
+            if bytes[index] == b'%'
+                && bytes[index + 1].is_ascii_hexdigit()
+                && bytes[index + 2].is_ascii_hexdigit()
+            {
                 let hex = std::str::from_utf8(&bytes[index + 1..index + 3]).unwrap_or("");
                 if let Ok(decoded) = u8::from_str_radix(hex, 16) {
                     if decoded < 0x20 || decoded == 0x7f {

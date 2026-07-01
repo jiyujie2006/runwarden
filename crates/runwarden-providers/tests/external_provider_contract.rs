@@ -683,6 +683,51 @@ fn external_mcp_http_adapter_rejects_control_characters_in_path() {
     assert_eq!(result["side_effect_executed"], false);
 }
 
+#[test]
+fn external_mcp_http_adapter_does_not_treat_signed_percent_triplets_as_control_characters() {
+    let origin = "http://127.0.0.1:9";
+    let manifest = load_provider_manifest(&format!(
+        r#"{{
+          "schema_version": "1",
+          "provider_id": "external.mcp.browser.open_page",
+          "provider_class": "external",
+          "kind": "mcp",
+          "risk": "network_active",
+          "side_effects": ["network"],
+          "transport": "http",
+          "downstream_identity": "browser-mcp",
+          "tool_identity": "open_page",
+          "declared_permissions": ["network"],
+          "allowed_origins": ["{origin}"],
+          "schema_pin": {{
+            "algorithm": "sha256",
+            "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+            "schema": {{"type": "object"}}
+          }},
+          "observed_schema": {{"type": "object"}}
+        }}"#
+    ))
+    .expect("manifest parses");
+
+    for path in ["/mcp%+A", "/mcp%+1"] {
+        let request = ExternalMcpAdapterRequest {
+            transport: Some("http".to_string()),
+            url: Some(format!("{origin}{path}")),
+            ..ExternalMcpAdapterRequest::default()
+        };
+
+        let result = execute_adapter(&manifest, &request, None);
+
+        assert_eq!(result["decision"], "denied", "{path}: {result}");
+        assert_eq!(result["error_kind"], "egress_denied", "{path}: {result}");
+        assert_eq!(
+            result["reason"], "MCP adapter URL resolved to a private or local address",
+            "{path}: {result}"
+        );
+        assert_eq!(result["side_effect_executed"], false, "{path}: {result}");
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn external_mcp_stdio_requires_exact_allowlisted_command() {
