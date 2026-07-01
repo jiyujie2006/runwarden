@@ -154,14 +154,6 @@ impl InMemoryTraceStore {
         })
     }
 
-    pub fn len(&self) -> usize {
-        self.events.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.events.is_empty()
-    }
-
     pub fn verify_hash_chain(&self) -> Result<(), TraceVerificationError> {
         let mut previous_hash = None;
         for (offset, event) in self.events.iter().enumerate() {

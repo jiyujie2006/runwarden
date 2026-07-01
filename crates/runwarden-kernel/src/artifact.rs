@@ -7,15 +7,6 @@ pub struct ArtifactManifest {
     pub artifacts: Vec<ArtifactManifestEntry>,
 }
 
-impl ArtifactManifest {
-    pub fn single(entry: ArtifactManifestEntry) -> Self {
-        Self {
-            schema_version: "0.1".to_string(),
-            artifacts: vec![entry],
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ArtifactManifestEntry {
     pub artifact_id: String,
@@ -41,11 +32,4 @@ pub struct RedactionSidecar {
     pub redacted_patterns: Vec<String>,
     pub original_sha256: String,
     pub redacted_sha256: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ArtifactVerificationStatus {
-    Verified,
-    Failed,
 }
