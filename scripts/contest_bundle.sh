@@ -48,25 +48,15 @@ bundle = pathlib.Path("artifacts/contest-bundle")
 scenario_count = sum(1 for p in (bundle / "scenarios").iterdir() if p.is_dir())
 
 summary_path = pathlib.Path("artifacts/redteam/proxy-probe-summary.json")
-if summary_path.exists():
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    redteam = {
-        "summary": "redteam-results/proxy-probe-summary.json",
-        "results": "redteam-results/proxy-probe-results.jsonl",
-        "total": summary.get("total"),
-        "pass": summary.get("pass"),
-        "fail": summary.get("fail"),
-        "skip": summary.get("skip"),
-    }
-else:
-    redteam = {
-        "summary": "redteam-results/proxy-probe-summary.json",
-        "results": "redteam-results/proxy-probe-results.jsonl",
-        "total": None,
-        "pass": None,
-        "fail": None,
-        "skip": None,
-    }
+summary = json.loads(summary_path.read_text(encoding="utf-8")) if summary_path.exists() else {}
+redteam = {
+    "summary": "redteam-results/proxy-probe-summary.json",
+    "results": "redteam-results/proxy-probe-results.jsonl",
+    "total": summary.get("total"),
+    "pass": summary.get("pass"),
+    "fail": summary.get("fail"),
+    "skip": summary.get("skip"),
+}
 
 manifest = {
     "project": "runwarden",
