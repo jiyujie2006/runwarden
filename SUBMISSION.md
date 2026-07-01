@@ -1,38 +1,45 @@
 # Runwarden: 面向大模型及其应用的安全性研究提交说明
 
+## Quickstart
+
+1. `bash scripts/release_gate_local.sh` — 5 个 scenario deterministic replay + report + console。
+2. `bash scripts/contest_bundle.sh` — 自动运行完整 proxy-probe + 生成最终提交包。
+3. 打开 `artifacts/reviewer-console.html` — 查看 timeline / review queue / denied / obs_ref。
+4. 阅读 `artifacts/reports/contest-report.md` — trace-backed 报告，每个结论引用 `obs_*`。
+5. 检查 `artifacts/redteam/proxy-probe-summary.json` — deterministic 红队测试结果。
+
 ## 1. 项目一句话
 
 Runwarden 是一个 Rust-owned agent security kernel, 把智能体工具调用统一收敛到 MCP 边界后执行策略审计、审批、阻断、异常评分和证据化报告。
 
 ## 2. 赛题预期成果覆盖
 
-| 赛题要求 | Runwarden 实现 | 证据路径 |
-| --- | --- | --- |
-| 3+ 攻击场景 | 5 个 deterministic scenarios | `scenarios/*` |
-| 对抗样本与越狱测试集 | 84 条 JSONL corpora | `redteam/corpora/*.jsonl` |
-| 智能体攻击脚本 | proxy-probe + agent-drive | `redteam/run.py` |
-| 工具调用拦截 | MCP -> KernelEnforcer | `crates/runwarden-mcp`, `crates/runwarden-kernel` |
-| 允许/拒绝/询问 | `PolicyDecision::{Allowed,Denied,RequiresReview}` | `crates/runwarden-kernel/src/contracts/provider.rs` |
-| 邮件/文件/API 模拟工具 | external providers | `crates/runwarden-providers` |
-| 模型链路监控插件 | OpenAI-compatible proxy + sealed trace | `crates/runwarden-llm-proxy` |
-| 基座过滤原型 | `inspect_input` + 词形相似 L2 | `crates/runwarden-providers::input` |
-| 异常检测模型 | allowed-call 事后评分 | `crates/runwarden-anomaly` |
-| 实时展示告警/阻断 | WebUI static + live SSE | `packages/webui`, `runwarden ui serve --live` |
-| trace-backed report | report lint/render | `crates/runwarden-assurance` |
-| 开源智能化应用载体 | OpenCode (runwarden-only config) | `examples/agent-configs/opencode.runwarden-only.json` |
-| 最终提交包 | contest bundle | `scripts/contest_bundle.sh` -> `artifacts/contest-bundle/` |
+### 成果一: 安全风险分析报告
+
+- 至少 3 类攻击场景: 5 个 scenario, 见 `scenarios/`。
+- 对抗样本与越狱用例集: 80+ JSONL, 见 `redteam/corpora/`。
+- 智能体攻击脚本: proxy-probe + agent-drive, 见 `redteam/run.py`。
+
+### 成果二: 行为监督原型系统
+
+- 拦截智能体与外部工具交互: `KernelEnforcer` + `runwarden-mcp`。
+- 允许/拒绝/询问策略: `PolicyDecision` 三态。
+- 异常检测: `runwarden-anomaly`, 对 allowed call 做事后评分。
+- 模拟业务工具: file/email/api/memory/knowledge/browser providers。
+- 模型调用链路监控: `runwarden-llm-proxy` sealed hash-chain trace。
+- 基座模型过滤: `inspect_input` 规则 + 词形相似原型。
+- 监督端展示: reviewer console static + live SSE。
+- 开源智能化应用载体: OpenCode, 使用 runwarden-only config。
 
 ## 3. 场景清单
 
-| Scenario | 攻击面 | 期望决策 (provider-call) | 拒绝原因 |
-| --- | --- | --- | --- |
-| `prompt-injection-file-exfil` | 提示注入 / 文件外泄 | `requires_review` + `denied` | - |
-| `tool-hijack-email-api` | 工具劫持 | `requires_review` + `denied` | - |
-| `memory-knowledge-poisoning` | 记忆/知识投毒 | `requires_review` | - |
-| `environment-local-web-risk` | SSRF / 环境污染 | `denied` | `egress_denied` |
-| `path-escape-file-boundary` | 文件越界 | `denied` | `root_escape` |
-
-> 说明：模型调用面的 prompt injection / jailbreak 由 `runwarden-llm-proxy` 在 `redteam/run.py proxy-probe` 中阻断为 `input_blocked`；scenario replay 侧展示的是攻击从 prompt 进入工具链后，文件读取被 review gate 拦截、外泄 API 被 deny 的证据链。"期望决策"列只含 `PolicyDecision` 枚举值（`allowed` / `denied` / `requires_review`）；"拒绝原因"列是 `error_kind`。
+| Scenario | 攻击面 | 期望决策 |
+| --- | --- | --- |
+| `prompt-injection-file-exfil` | 提示注入 | `input_blocked` |
+| `tool-hijack-email-api` | 工具劫持 | `requires_review` + `denied` |
+| `memory-knowledge-poisoning` | 记忆/知识投毒 | `requires_review` |
+| `environment-local-web-risk` | SSRF/环境污染 | `egress_denied` |
+| `path-escape-file-boundary` | 文件越界 | `denied root_escape` |
 
 ## 4. 快速复现
 
@@ -67,4 +74,4 @@ bash scripts/contest_bundle.sh
 - L2 semantic filter 是轻量词形相似原型, 不是 embedding 模型。
 - 真实 LLM `agent-drive` 受模型工具调用稳定性影响; 核心演示以 deterministic demo 为准。
 - 异常检测是 allowed-call 事后评分, 不阻断, 不作为 red-team corpus `expected`。
-- Runwarden 为私有原型，不要求开源；赛题要求的"开源智能化应用"由 OpenCode 满足（MIT license，配置见 `examples/agent-configs/opencode.runwarden-only.json`）。如需公开评审源代码，可提供仓库访问权限。
+- Runwarden 当前为比赛原型仓库；赛题中"开源智能化应用"要求由 OpenCode（MIT license）作为被监督对象满足。评审需要源码时，可提供仓库访问权限或公开评审快照。

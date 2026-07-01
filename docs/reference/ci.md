@@ -14,7 +14,8 @@ the local full gate exercises the contest demo workflow end to end.
 - `pnpm test`
 - `pnpm build`
 
-`scripts/dev_gate.sh` currently runs the same checks.
+`scripts/dev_gate.sh` runs the same checks and also validates red-team corpora
+and the Python harness unit tests before Rust workspace tests.
 
 ## Contest Gate
 

@@ -33,16 +33,13 @@ blocking, and `model_call` trace JSONL. Reproducible + offline.
 ```bash
 python3 redteam/run.py proxy-probe \
   --corpora redteam/corpora/prompt_injection.jsonl redteam/corpora/jailbreak.jsonl \
-            redteam/corpora/indirect_prompt_injection.jsonl redteam/corpora/encoded_bypass.jsonl \
-            redteam/corpora/schema_poisoning.jsonl redteam/corpora/report_fabrication.jsonl \
-            redteam/corpora/benign_control.jsonl \
-  --summary-out artifacts/redteam/proxy-probe-summary.json
+            redteam/corpora/encoded_bypass.jsonl redteam/corpora/benign_control.jsonl \
+  --summary-out artifacts/redteam/proxy-probe-summary.json \
+  --fail-on-fail
 ```
 
-The deterministic proxy-probe writes the current pass/fail totals to
-`artifacts/redteam/proxy-probe-summary.json`. Tool-call expectations inside a
-mixed corpus are reported as `SKIP` in proxy-probe and are covered by
-`agent-drive` or deterministic scenario replay.
+Use `--fail-on-fail` for deterministic gates. Samples whose expected outcome
+belongs to agent or scenario replay are marked `SKIP` with a coverage reason.
 
 ### `agent-drive` — real LLM tool-call supervision
 

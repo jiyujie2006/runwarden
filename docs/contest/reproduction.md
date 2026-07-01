@@ -24,10 +24,8 @@ bash scripts/contest_bundle.sh
 ```bash
 python3 redteam/run.py proxy-probe \
   --corpora redteam/corpora/prompt_injection.jsonl redteam/corpora/jailbreak.jsonl \
-            redteam/corpora/indirect_prompt_injection.jsonl redteam/corpora/encoded_bypass.jsonl \
-            redteam/corpora/schema_poisoning.jsonl redteam/corpora/report_fabrication.jsonl \
-            redteam/corpora/benign_control.jsonl \
-  --summary-out artifacts/redteam/proxy-probe-summary.json
+  --summary-out artifacts/redteam/proxy-probe-summary.json \
+  --fail-on-fail
 ```
 
 ## Red-Team Agent Drive
@@ -43,7 +41,7 @@ python3 redteam/run.py agent-drive \
 ```bash
 ./target/debug/runwarden ui serve --live \
   --demo artifacts/demo/tool-hijack-email-api \
-  --llm-trace artifacts/redteam/proxy-trace.jsonl \
+  --llm-trace artifacts/llm-proxy/trace.jsonl \
   --port 8088
 ```
 

@@ -12,10 +12,9 @@ Providers are the only callable tool surface. First-party providers are implemen
 
 `runwarden.input.inspect` normalizes prompt/tool text, extracts structured
 strings, and recursively decodes percent/base64 content, including base64-like
-tokens embedded inside role-prefixed prompt text. Its contest rule set covers
-direct and indirect prompt injection, jailbreaks, approval bypass attempts,
-schema/manifest poisoning, tool misuse, credential exfiltration instructions,
-audit tampering, and report fabrication attempts.
+tokens embedded inside role-prefixed prompt text. It flags prompt injection,
+approval bypass, credential exfiltration instructions, schema/manifest
+poisoning, report fabrication, audit tampering, and false compliance claims.
 
 ## Demo And External Catalog
 
