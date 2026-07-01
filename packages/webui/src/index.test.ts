@@ -91,7 +91,13 @@ describe("createDemoReviewerConsoleViewModel", () => {
 
   it("does not infer verified trace state from trace presence or lint success", () => {
     const { trace_verification: _traceVerification, ...inputWithoutVerification } = demoInput;
-    const model = createDemoReviewerConsoleViewModel([inputWithoutVerification]);
+    const model = createDemoReviewerConsoleViewModel([
+      {
+        ...inputWithoutVerification,
+        trace: [{ obs_id: "obs_prompt_file_exfil_denied" }],
+        lint: { ok: true }
+      }
+    ]);
 
     expect(model.suite.traceState).toBe("missing");
     expect(model.scenarios[0]?.traceState).toBe("missing");
