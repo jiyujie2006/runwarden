@@ -9,6 +9,7 @@ This index is the canonical map for the contest edition.
 - [Submission Map](02-xa-202620-submission-map.md): reviewer package map.
 - [Evaluation Results](03-evaluation-results.md): scenario metrics and evidence.
 - [Contest Submission](contest/README.md): scorecard, reproduction, demo script, artifacts, and limitations.
+- [Red-Team Results](contest/redteam-results.md): deterministic proxy-probe coverage and result artifacts.
 
 ## Operate The Demo
 

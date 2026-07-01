@@ -28,10 +28,11 @@ the local full gate exercises the contest demo workflow end to end.
 
 ## Contest Bundle
 
-`scripts/contest_bundle.sh` runs the local contest gate, then copies only the
-submission whitelist into `artifacts/contest-bundle`: README, SUBMISSION,
-docs, scenarios, red-team corpora and harness, schemas, generated report, demo
-outputs, reviewer console, manifest, and SHA256SUMS.
+`scripts/contest_bundle.sh` runs the local contest gate, runs deterministic
+`proxy-probe`, then copies only the submission whitelist into
+`artifacts/contest-bundle`: README, SUBMISSION, docs, scenarios, red-team
+corpora and harness, schemas, generated red-team results, generated report,
+demo outputs, reviewer console, manifest, and SHA256SUMS.
 
 `scripts/contest_clean.sh` removes generated contest artifacts under
 `artifacts/`.

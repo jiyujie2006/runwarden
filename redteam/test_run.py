@@ -24,5 +24,25 @@ class AgentDriveCommandTest(unittest.TestCase):
         self.assertNotIn(" -m opencode/big-pickle; touch ", cmd)
 
 
+class ProxyProbeScoringTest(unittest.TestCase):
+    def test_proxy_probe_scores_model_filter_expectations(self):
+        harness = load_harness()
+
+        blocked = harness.score_proxy_probe_result({"expected": "input_blocked"}, "input_blocked", 403)
+        benign = harness.score_proxy_probe_result({"expected": "allowed_benign"}, "forwarded", 200)
+
+        self.assertEqual("PASS", blocked["verdict"])
+        self.assertEqual("PASS", benign["verdict"])
+
+    def test_proxy_probe_skips_tool_call_expectations(self):
+        harness = load_harness()
+
+        denied = harness.score_proxy_probe_result({"expected": "tool_denied"}, "forwarded", 200)
+        review = harness.score_proxy_probe_result({"expected": "requires_review"}, "forwarded", 200)
+
+        self.assertEqual("SKIP", denied["verdict"])
+        self.assertEqual("SKIP", review["verdict"])
+
+
 if __name__ == "__main__":
     unittest.main()

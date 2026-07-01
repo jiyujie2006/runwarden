@@ -32,7 +32,7 @@ runwarden demo run --scenario prompt-injection-file-exfil --output artifacts/dem
 runwarden ui build --input artifacts/demo --output artifacts/reviewer-console.html --json
 runwarden ui serve --file artifacts/reviewer-console.html --json
 runwarden ui serve --live --demo artifacts/demo/prompt-injection-file-exfil --json
-runwarden ui serve --live --demo artifacts/demo/prompt-injection-file-exfil --llm-trace artifacts/llm-proxy/trace.jsonl --json
+runwarden ui serve --live --demo artifacts/demo/prompt-injection-file-exfil --llm-trace artifacts/redteam/proxy-trace.jsonl --json
 ```
 
 ## Provider Calls
@@ -69,6 +69,10 @@ Server-Sent Events at `/events`. `provider_call` events come from
 `webui.json`; when `--llm-trace` is supplied, `model_call` events from the
 LLM-proxy sealed JSONL trace are appended. The server does not submit
 approvals or execute providers.
+
+Startup JSON and the final `replay_complete` event include
+`provider_call_count`, `model_call_count`, and `event_count`. Provider count is
+only demo provider calls; event count is provider plus model events.
 
 ## Output Paths
 

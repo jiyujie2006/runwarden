@@ -6,6 +6,19 @@ cd "$ROOT"
 
 bash scripts/release_gate_local.sh
 
+mkdir -p artifacts/redteam
+python3 redteam/run.py proxy-probe \
+  --corpora \
+    redteam/corpora/prompt_injection.jsonl \
+    redteam/corpora/jailbreak.jsonl \
+    redteam/corpora/indirect_prompt_injection.jsonl \
+    redteam/corpora/encoded_bypass.jsonl \
+    redteam/corpora/schema_poisoning.jsonl \
+    redteam/corpora/report_fabrication.jsonl \
+    redteam/corpora/benign_control.jsonl \
+  --out artifacts/redteam/proxy-probe-results.jsonl \
+  --summary-out artifacts/redteam/proxy-probe-summary.json
+
 BUNDLE="artifacts/contest-bundle"
 rm -rf "$BUNDLE"
 mkdir -p "$BUNDLE"

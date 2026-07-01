@@ -632,11 +632,10 @@ fn write_trace_event(
 }
 
 fn last_trace_hash(trace_path: &str) -> Option<String> {
-    // ponytail: read-then-write, not concurrency-safe. Two concurrent proxy
-    // requests can read the same last hash and append events with identical
-    // previous_hash, silently breaking the chain. Fine for the contest demo
-    // (single-threaded). Upgrade to a Mutex guarding write_trace_event if the
-    // proxy serves real concurrent load.
+    // Note: this read-then-write hash-chain append is intentionally
+    // single-process and single-writer for the contest demo. A production
+    // proxy should guard write_trace_event with a mutex or append through a
+    // dedicated trace writer.
     let contents = std::fs::read_to_string(trace_path).ok()?;
     contents
         .lines()

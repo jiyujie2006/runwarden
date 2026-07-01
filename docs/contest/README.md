@@ -7,6 +7,7 @@ Runwarden 的比赛交付入口:
 - [Demo Script](demo-script.md)
 - [Artifact Index](artifact-index.md)
 - [Limitations](limitations.md)
+- [Red-Team Results](redteam-results.md)
 
 ## OpenCode Integration
 

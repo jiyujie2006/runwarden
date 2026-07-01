@@ -12,3 +12,6 @@
 | `artifacts/reports/contest-report.md` | trace-backed contest report。 |
 | `artifacts/reviewer-console.html` | 静态 reviewer console。 |
 | `artifacts/contest-bundle/` | 最终提交包。 |
+| `artifacts/redteam/proxy-probe-summary.json` | deterministic proxy-probe 结果汇总。 |
+| `artifacts/redteam/proxy-probe-results.jsonl` | 每条攻击的详细决策。 |
+| `docs/contest/redteam-results.md` | 红队测试覆盖说明。 |

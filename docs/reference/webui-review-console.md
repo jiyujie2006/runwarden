@@ -41,6 +41,11 @@ it appends LLM-proxy `model_call` events from JSONL. The stream is replay-only:
 events are Rust-produced demo/model-filter state, and the WebUI does not make
 approval, egress, provider, report, or artifact decisions.
 
+The live startup JSON and final `replay_complete` SSE event report separate
+counts: `provider_call_count` covers only demo provider-call records,
+`model_call_count` covers appended LLM trace events, and `event_count` is the
+combined stream length.
+
 Live replay event fields, including provider, decision, and model names, are
 rendered with DOM text APIs (`textContent`/text nodes), not as HTML. The live
 console must not insert SSE JSON fields through HTML parsing APIs.

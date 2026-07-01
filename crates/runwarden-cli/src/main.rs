@@ -1756,12 +1756,14 @@ fn run_live_demo_server(
     json: bool,
 ) -> anyhow::Result<()> {
     let mut replay_events = load_live_replay_events(demo_path)?;
+    let provider_call_count = replay_events.len();
     let mut model_call_count = 0;
     if let Some(trace) = llm_trace {
         let model_events = load_llm_trace_events(trace)?;
         model_call_count = model_events.len();
         replay_events.extend(model_events);
     }
+    let event_count = replay_events.len();
     let base_html = render_static_demo_console(demo_path)?;
     let html = format!("{base_html}{LIVE_ALERTS_HTML}");
     let listener = TcpListener::bind((bind, port))?;
@@ -1771,8 +1773,9 @@ fn run_live_demo_server(
         "listen_addr": listen_addr.to_string(),
         "events_url": format!("http://{listen_addr}/events"),
         "demo": demo_path.to_string_lossy(),
-        "provider_call_count": replay_events.len(),
+        "provider_call_count": provider_call_count,
         "model_call_count": model_call_count,
+        "event_count": event_count,
         "local_api_url": Value::Null,
         "side_effect_executed": false
     });
@@ -1785,7 +1788,13 @@ fn run_live_demo_server(
 
     for stream in listener.incoming() {
         match stream {
-            Ok(stream) => serve_live_replay_request(stream, &html, &replay_events)?,
+            Ok(stream) => serve_live_replay_request(
+                stream,
+                &html,
+                &replay_events,
+                provider_call_count,
+                model_call_count,
+            )?,
             Err(err) => eprintln!("live replay connection failed: {err}"),
         }
     }
@@ -1859,6 +1868,8 @@ fn serve_live_replay_request(
     mut stream: TcpStream,
     html: &str,
     replay_events: &[Value],
+    provider_call_count: usize,
+    model_call_count: usize,
 ) -> anyhow::Result<()> {
     let mut buffer = [0u8; 8192];
     let bytes_read = stream.read(&mut buffer)?;
@@ -1878,7 +1889,7 @@ fn serve_live_replay_request(
             &[],
         )?,
         "/events" => {
-            let body = sse_replay_body(replay_events)?;
+            let body = sse_replay_body(replay_events, provider_call_count, model_call_count)?;
             write_http_response(
                 &mut stream,
                 "200 OK",
@@ -1905,7 +1916,11 @@ fn serve_live_replay_request(
     Ok(())
 }
 
-fn sse_replay_body(replay_events: &[Value]) -> anyhow::Result<String> {
+fn sse_replay_body(
+    replay_events: &[Value],
+    provider_call_count: usize,
+    model_call_count: usize,
+) -> anyhow::Result<String> {
     let mut body = String::new();
     for (index, event) in replay_events.iter().enumerate() {
         let event_id = event
@@ -1929,7 +1944,9 @@ fn sse_replay_body(replay_events: &[Value]) -> anyhow::Result<String> {
     body.push_str("data: ");
     body.push_str(&serde_json::to_string(&json!({
         "kind": "replay_complete",
-        "provider_call_count": replay_events.len()
+        "event_count": replay_events.len(),
+        "provider_call_count": provider_call_count,
+        "model_call_count": model_call_count
     }))?);
     body.push_str("\n\n");
     Ok(body)
@@ -2381,7 +2398,7 @@ mod tests {
             "decision": "denied"
         })];
 
-        let body = sse_replay_body(&events).expect("sse body");
+        let body = sse_replay_body(&events, 1, 0).expect("sse body");
 
         assert!(body.contains("id: obs_1event: injected\n"));
         assert!(body.contains("event: provider_call\n"));
