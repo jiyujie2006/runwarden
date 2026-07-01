@@ -7,7 +7,7 @@ A scenario is a reproducible golden-corpus fixture for one attack chain.
 - `README.md`
 - `manifests/assessment.toml`
 - `benign/request.md`
-- `attacks/prompt-injection.md`
+- `attacks/<scenario-name>.md` (e.g. `attacks/path-escape.md`)
 - `agent/script.json`
 - `expected/provider-calls.json`
 - `expected/denials.json`

@@ -1,0 +1,12 @@
+[
+  {
+    "provider": "external.mcp.filesystem.read_file",
+    "action": "read_file",
+    "decision": "denied",
+    "execution_status": "not_executed",
+    "side_effect_executed": false,
+    "obs_ref": "obs_path_escape_denied",
+    "error_kind": "root_escape",
+    "reason": "requested path escapes the configured root"
+  }
+]

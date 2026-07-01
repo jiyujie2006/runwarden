@@ -25,11 +25,18 @@ Checked-in examples:
 - `examples/agent-configs/claude.runwarden-only.json`
 - `examples/agent-configs/opencode.runwarden-only.json`
 - `examples/agent-configs/opencode.tools-list-transcript.json`
+- `examples/agent-configs/opencode.provider-call-denied-transcript.json`
 
 The OpenCode transcript fixture records the `tools/list` response from
 `runwarden-mcp` and is validated by the MCP tests. It must contain only
 `runwarden.*` tools and must not list raw shell, filesystem, browser, HTTP, or
 downstream MCP tools.
+
+The denied provider-call transcript records OpenCode asking
+`runwarden.provider.call` to invoke `external.mcp.filesystem.read_file` on a
+path traversal target. The expected Runwarden result is `denied` with
+`error_kind=root_escape`, `execution_status=not_executed`, and
+`side_effect_executed=false`.
 
 Validation coverage:
 

@@ -33,3 +33,7 @@ external side effects.
 Scenario replay trace payloads include the provider call arguments that led to
 the cited decision so judges can inspect the attempted target without executing
 the provider.
+
+LLM proxy model-call traces are written as sealed JSONL `TraceEvent` records.
+Each line includes `previous_hash` and `event_hash`; CLI trace verification
+accepts this JSONL form and rejects malformed or unsigned legacy lines.

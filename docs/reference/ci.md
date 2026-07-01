@@ -26,6 +26,16 @@ the local full gate exercises the contest demo workflow end to end.
 - `target/debug/runwarden report render --scenario-suite scenarios --format markdown --output artifacts/reports/contest-report.md --json`
 - `target/debug/runwarden ui build --input artifacts/demo --output artifacts/reviewer-console.html --json`
 
+## Contest Bundle
+
+`scripts/contest_bundle.sh` runs the local contest gate, then copies only the
+submission whitelist into `artifacts/contest-bundle`: README, SUBMISSION,
+docs, scenarios, red-team corpora and harness, schemas, generated report, demo
+outputs, reviewer console, manifest, and SHA256SUMS.
+
+`scripts/contest_clean.sh` removes generated contest artifacts under
+`artifacts/`.
+
 ## Tooling
 
 Local gate scripts require `cargo-deny` and fail with an installation hint when

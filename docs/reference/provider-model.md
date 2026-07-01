@@ -10,6 +10,10 @@ Providers are the only callable tool surface. First-party providers are implemen
 - `runwarden.report.lint`
 - `runwarden.report.render`
 
+`runwarden.input.inspect` normalizes prompt/tool text, extracts structured
+strings, and recursively decodes percent/base64 content, including base64-like
+tokens embedded inside role-prefixed prompt text.
+
 ## Demo And External Catalog
 
 - `external.mcp.browser.open_page`

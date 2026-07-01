@@ -50,6 +50,73 @@ fn trace_verify_command_accepts_valid_hash_chain() {
 }
 
 #[test]
+fn trace_verify_command_accepts_jsonl_hash_chain() {
+    let dir = tempdir().expect("tempdir");
+    let trace_path = dir.path().join("trace.jsonl");
+    fs::write(
+        &trace_path,
+        trace_events()
+            .into_iter()
+            .map(|event| serde_json::to_string(&event).expect("trace event json"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+    .expect("write trace");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_runwarden"))
+        .args(["trace", "verify", "--trace"])
+        .arg(&trace_path)
+        .arg("--json")
+        .output()
+        .expect("run trace verify");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    assert!(stdout.contains(r#""verified": true"#));
+    assert!(stdout.contains(r#""event_count": 2"#));
+}
+
+#[test]
+fn trace_verify_command_rejects_malformed_jsonl() {
+    let dir = tempdir().expect("tempdir");
+    let trace_path = dir.path().join("trace.jsonl");
+    fs::write(&trace_path, "{not json}\n").expect("write trace");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_runwarden"))
+        .args(["trace", "verify", "--trace"])
+        .arg(&trace_path)
+        .arg("--json")
+        .output()
+        .expect("run trace verify");
+
+    assert!(!output.status.success());
+}
+
+#[test]
+fn trace_verify_command_rejects_jsonl_missing_event_hash() {
+    let dir = tempdir().expect("tempdir");
+    let trace_path = dir.path().join("trace.jsonl");
+    fs::write(
+        &trace_path,
+        r#"{"obs_id":"obs_1","event_type":"model_call","provider":"mock","payload":{"decision":"allowed"},"previous_hash":null}"#,
+    )
+    .expect("write trace");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_runwarden"))
+        .args(["trace", "verify", "--trace"])
+        .arg(&trace_path)
+        .arg("--json")
+        .output()
+        .expect("run trace verify");
+
+    assert!(!output.status.success());
+}
+
+#[test]
 fn trace_verify_command_rejects_tampered_hash_chain() {
     let dir = tempdir().expect("tempdir");
     let trace_path = dir.path().join("trace.json");

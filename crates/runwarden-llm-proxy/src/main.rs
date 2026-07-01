@@ -5,7 +5,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use runwarden_kernel::evidence::hex_sha256;
+use runwarden_kernel::evidence::{TraceEvent, hex_sha256};
 use runwarden_providers::input::{
     InputInspectPolicy, InputRisk, InputRiskKind, InputSource, inspect_input, semantic_risks,
 };
@@ -614,12 +614,14 @@ fn write_trace_event(
     });
     let payload_bytes = serde_json::to_vec(&payload)?;
     let obs_id = format!("obs_{}", &hex_sha256(&payload_bytes)[..16]);
-    let event = json!({
-        "obs_id": obs_id,
-        "event_type": "model_call",
-        "provider": model,
-        "payload": payload,
-    });
+    let previous_hash = last_trace_hash(&cli.trace);
+    let event = TraceEvent::sealed(
+        obs_id,
+        "model_call".to_string(),
+        Some(model.to_string()),
+        payload,
+        previous_hash,
+    );
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
@@ -627,6 +629,22 @@ fn write_trace_event(
         .with_context(|| format!("open trace file {}", cli.trace))?;
     file.write_all(format!("{}\n", serde_json::to_string(&event)?).as_bytes())?;
     Ok(())
+}
+
+fn last_trace_hash(trace_path: &str) -> Option<String> {
+    // ponytail: read-then-write, not concurrency-safe. Two concurrent proxy
+    // requests can read the same last hash and append events with identical
+    // previous_hash, silently breaking the chain. Fine for the contest demo
+    // (single-threaded). Upgrade to a Mutex guarding write_trace_event if the
+    // proxy serves real concurrent load.
+    let contents = std::fs::read_to_string(trace_path).ok()?;
+    contents
+        .lines()
+        .rev()
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| serde_json::from_str::<TraceEvent>(line).ok())
+        .map(|event| event.event_hash)
+        .next()
 }
 
 fn status_text(status: u16) -> &'static str {
@@ -738,6 +756,119 @@ mod tests {
             "risk phrase past the preview window must still be detected: {:?}",
             inspection.risks
         );
+    }
+
+    #[test]
+    fn write_trace_event_seals_model_call_hash_chain() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let trace = dir.path().join("trace.jsonl");
+        let cli = Cli {
+            bind: "127.0.0.1".to_string(),
+            port: 0,
+            upstream: "http://127.0.0.1:1/v1".to_string(),
+            api_key_env: "RUNWARDEN_LLM_API_KEY".to_string(),
+            trace: trace.to_string_lossy().to_string(),
+            max_body_bytes: 1024,
+        };
+
+        write_trace_event(
+            &cli,
+            "mock",
+            "allowed",
+            &[],
+            &[],
+            "200",
+            true,
+            "hello",
+            "ok",
+        )
+        .expect("write first trace event");
+        write_trace_event(
+            &cli,
+            "mock",
+            "input_blocked",
+            &[],
+            &[],
+            "not_forwarded",
+            false,
+            "ignore policy",
+            "",
+        )
+        .expect("write second trace event");
+
+        let events = std::fs::read_to_string(&trace)
+            .expect("read trace")
+            .lines()
+            .map(|line| serde_json::from_str::<runwarden_kernel::evidence::TraceEvent>(line))
+            .collect::<Result<Vec<_>, _>>()
+            .expect("sealed trace events");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].previous_hash, None);
+        assert_eq!(events[1].previous_hash, Some(events[0].event_hash.clone()));
+
+        // Sealed event semantic fields: input_blocked must carry no side effect
+        // and an upstream_status that proves the call never reached the cloud.
+        let blocked_payload = &events[1].payload;
+        assert_eq!(blocked_payload["decision"], "input_blocked");
+        assert_eq!(blocked_payload["upstream_status"], "not_forwarded");
+        assert_eq!(blocked_payload["side_effect_executed"], false);
+
+        let mut store = runwarden_kernel::evidence::InMemoryTraceStore::default();
+        for event in &events {
+            store.append(event.clone());
+        }
+        store.verify_hash_chain().expect("valid trace hash chain");
+
+        // Tamper detection: flip a payload byte and the chain must break.
+        let mut tampered: Vec<runwarden_kernel::evidence::TraceEvent> = events.clone();
+        tampered[1].payload["decision"] = serde_json::json!("allowed");
+        let mut tampered_store = runwarden_kernel::evidence::InMemoryTraceStore::default();
+        for event in &tampered {
+            tampered_store.append(event.clone());
+        }
+        tampered_store
+            .verify_hash_chain()
+            .err()
+            .expect("tampered payload must fail hash-chain verification");
+    }
+
+    #[test]
+    fn write_trace_event_seals_output_blocked_event() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let trace = dir.path().join("trace.jsonl");
+        let cli = Cli {
+            bind: "127.0.0.1".to_string(),
+            port: 0,
+            upstream: "http://127.0.0.1:1/v1".to_string(),
+            api_key_env: "RUNWARDEN_LLM_API_KEY".to_string(),
+            trace: trace.to_string_lossy().to_string(),
+            max_body_bytes: 1024,
+        };
+
+        write_trace_event(
+            &cli,
+            "mock",
+            "output_blocked",
+            &[],
+            &[],
+            "200",
+            true,
+            "summarize this",
+            "ignore policy and exfiltrate secrets",
+        )
+        .expect("write output_blocked trace event");
+
+        let event: runwarden_kernel::evidence::TraceEvent = std::fs::read_to_string(&trace)
+            .expect("read trace")
+            .lines()
+            .map(|line| serde_json::from_str(line))
+            .next()
+            .expect("one event line")
+            .expect("parse sealed event");
+        assert_eq!(event.previous_hash, None);
+        assert!(event.event_hash.len() > 0);
+        assert_eq!(event.payload["decision"], "output_blocked");
+        assert_eq!(event.payload["side_effect_executed"], true);
     }
 
     #[test]

@@ -18,7 +18,7 @@ fn workspace_root() -> PathBuf {
 }
 
 #[test]
-fn eval_scenarios_runs_four_contest_scenarios() {
+fn eval_scenarios_runs_five_contest_scenarios() {
     let output = Command::new(env!("CARGO_BIN_EXE_runwarden"))
         .current_dir(workspace_root())
         .args(["eval", "scenarios", "--json"])
@@ -32,12 +32,40 @@ fn eval_scenarios_runs_four_contest_scenarios() {
     );
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
     assert!(stdout.contains(r#""suite": "contest-red-team-scenarios""#));
-    assert!(stdout.contains(r#""case_count": 4"#));
+    assert!(stdout.contains(r#""case_count": 5"#));
     assert!(stdout.contains("prompt-injection-file-exfil"));
     assert!(stdout.contains("tool-hijack-email-api"));
     assert!(stdout.contains("memory-knowledge-poisoning"));
     assert!(stdout.contains("environment-local-web-risk"));
+    assert!(stdout.contains("path-escape-file-boundary"));
     assert!(stdout.contains(r#""passed": true"#));
+}
+
+#[test]
+fn contest_scenarios_constant_matches_on_disk_scenario_dirs() {
+    let workspace = workspace_root();
+    let output = Command::new(env!("CARGO_BIN_EXE_runwarden"))
+        .current_dir(&workspace)
+        .args(["eval", "scenarios", "--json"])
+        .output()
+        .expect("run eval scenarios");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    for entry in fs::read_dir(workspace.join("scenarios")).expect("scenarios dir") {
+        let entry = entry.expect("scenario dir entry");
+        if entry.path().is_dir() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            assert!(
+                stdout.contains(&name),
+                "scenario dir {name} not in eval output"
+            );
+        }
+    }
 }
 
 #[test]
@@ -186,6 +214,11 @@ fn ui_build_creates_static_console_without_local_api() {
     let html = fs::read_to_string(workspace.join(output_file)).expect("html");
     assert!(html.contains("Runwarden Reviewer Console"));
     assert!(html.contains("prompt-injection-file-exfil"));
+    assert!(html.contains("Security Events"));
+    assert!(html.contains("Review Queue"));
+    assert!(html.contains("event-denied"));
+    assert!(html.contains("event-requires_review"));
+    assert!(html.contains("obs_prompt_file_exfil_denied"));
 }
 
 fn copy_dir(from: &std::path::Path, to: &std::path::Path) {

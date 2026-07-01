@@ -72,6 +72,15 @@ describe("createDemoReviewerConsoleViewModel", () => {
       blockedSideEffectCount: 2,
       traceState: "verified"
     });
+    expect(model.timeline).toHaveLength(3);
+    expect(model.timeline[1]).toMatchObject({
+      kind: "provider_call",
+      provider: "external.mcp.filesystem.read_file",
+      decision: "requires_review",
+      obs_ref: "obs_prompt_file_read_review"
+    });
+    expect(model.reviewQueue).toHaveLength(1);
+    expect(model.reviewQueue[0]?.decision).toBe("requires_review");
     expect(model.scenarios[0]).toMatchObject({
       scenario: "prompt-injection-file-exfil",
       providerCallCount: 3,
@@ -106,6 +115,10 @@ describe("renderDemoReviewerConsoleHtml", () => {
     expect(html).toContain("Denials");
     expect(html).toContain("Requires review");
     expect(html).toContain("obs_prompt_file_exfil_denied");
+    expect(html).toContain('aria-label="Security event timeline"');
+    expect(html).toContain('aria-label="Pending review queue"');
+    expect(html).toContain("event-denied");
+    expect(html).toContain("event-requires_review");
     expect(html).toContain('role="status" aria-label="Demo suite status"');
     expect(html).toContain('aria-label="Runwarden demo scenarios"');
     expect(html).toContain("@media (max-width: 900px)");
@@ -113,5 +126,30 @@ describe("renderDemoReviewerConsoleHtml", () => {
     expect(html).not.toContain("<script");
     expect(html).not.toContain("local_api");
     expect(html).not.toContain("approval-decision-form");
+  });
+
+  it("escapes malicious provider name to prevent HTML injection", () => {
+    const input: DemoScenarioInput = {
+      scenario: "xss-test",
+      provider_calls: [
+        {
+          provider: "<img src=x onerror=alert(1)>",
+          action: "test",
+          decision: "denied",
+          execution_status: "not_executed",
+          side_effect_executed: false,
+          obs_ref: "obs_xss"
+        }
+      ],
+      denials: [],
+      metrics: { trace_completeness: 1, report_citation_accuracy: 1 },
+      report: { claims: [] },
+      trace_verification: { verified: true }
+    };
+
+    const html = renderDemoReviewerConsoleHtml([input]);
+
+    expect(html).not.toContain("<img");
+    expect(html).toContain("&lt;img");
   });
 });

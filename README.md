@@ -1,6 +1,6 @@
 # Runwarden Contest Red-Team Range
 
-Runwarden is a Rust-owned security kernel for demonstrating how agent tool use can be mediated, traced, and reported under adversarial prompts. The contest edition focuses on four reproducible attack chains and a trace-backed reviewer workflow.
+Runwarden is a Rust-owned security kernel for demonstrating how agent tool use can be mediated, traced, and reported under adversarial prompts. The contest edition focuses on five reproducible attack chains and a trace-backed reviewer workflow.
 
 Agents see only `runwarden-mcp`. Filesystem, browser, email, API, memory, knowledge, and downstream MCP capabilities are represented as Runwarden providers and evaluated by Rust policy before any trusted side effect.
 
@@ -54,6 +54,7 @@ target/debug/runwarden ui build \
 - `tool-hijack-email-api`
 - `memory-knowledge-poisoning`
 - `environment-local-web-risk`
+- `path-escape-file-boundary`
 
 Each scenario contains a benign request, attack prompt, deterministic demo-agent script, expected provider calls, expected denials, obs refs, report claims, and metric baselines.
 
@@ -68,3 +69,4 @@ pnpm build
 ```
 
 Reference documentation starts at [docs/README.md](docs/README.md).
+Contest submission entry starts at [SUBMISSION.md](SUBMISSION.md).

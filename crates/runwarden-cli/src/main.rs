@@ -30,6 +30,7 @@ const CONTEST_SCENARIOS: &[&str] = &[
     "tool-hijack-email-api",
     "memory-knowledge-poisoning",
     "environment-local-web-risk",
+    "path-escape-file-boundary",
 ];
 
 #[derive(Debug, Parser)]
@@ -1616,6 +1617,8 @@ fn render_static_demo_console(input: &Path) -> anyhow::Result<String> {
     if scenario_files.is_empty() {
         html.push_str("<p>No demo JSON loaded.</p>");
     }
+    let mut timeline = Vec::new();
+    let mut review_queue = Vec::new();
     for file in scenario_files {
         let value = read_json_value(&file)?;
         let scenario = value["scenario"].as_str().unwrap_or("unknown");
@@ -1637,9 +1640,72 @@ fn render_static_demo_console(input: &Path) -> anyhow::Result<String> {
             denial_count,
             trace_status
         ));
+        for call in value["provider_calls"].as_array().into_iter().flatten() {
+            let event = render_static_provider_event(scenario, call);
+            if call["decision"].as_str() == Some("requires_review") {
+                review_queue.push(event.clone());
+            }
+            timeline.push(event);
+        }
     }
+    html.push_str("<section aria-label=\"Security event timeline\"><h2>Security Events</h2>");
+    if timeline.is_empty() {
+        html.push_str("<p>No security events.</p>");
+    } else {
+        html.push_str(&timeline.join(""));
+    }
+    html.push_str("</section>");
+    html.push_str("<section aria-label=\"Pending review queue\"><h2>Review Queue</h2>");
+    if review_queue.is_empty() {
+        html.push_str("<p>No pending reviews.</p>");
+    } else {
+        html.push_str(&review_queue.join(""));
+    }
+    html.push_str("</section>");
     html.push_str("</main>");
     Ok(html)
+}
+
+fn render_static_provider_event(scenario: &str, call: &Value) -> String {
+    let decision = call["decision"].as_str().unwrap_or("unknown");
+    let mut html = format!(
+        "<article class=\"event event-{}\"><h3>{}</h3><dl>{}{}{}{}{}{}{}{}</dl>",
+        html_escape(decision),
+        html_escape(decision),
+        static_fact("Scenario", scenario),
+        static_fact("Provider", call["provider"].as_str().unwrap_or("unknown")),
+        static_fact("Action", call["action"].as_str().unwrap_or("unknown")),
+        static_fact(
+            "Status",
+            call["execution_status"].as_str().unwrap_or("unknown")
+        ),
+        call["error_kind"]
+            .as_str()
+            .map(|value| static_fact("Error", value))
+            .unwrap_or_default(),
+        call["obs_ref"]
+            .as_str()
+            .map(|value| static_fact("Obs", value))
+            .unwrap_or_default(),
+        call["side_effect_executed"]
+            .as_bool()
+            .map(|value| static_fact("Side effect", &value.to_string()))
+            .unwrap_or_default(),
+        ""
+    );
+    if let Some(reason) = call["reason"].as_str() {
+        html.push_str(&format!("<p>{}</p>", html_escape(reason)));
+    }
+    html.push_str("</article>");
+    html
+}
+
+fn static_fact(label: &str, value: &str) -> String {
+    format!(
+        "<div><dt>{}</dt><dd>{}</dd></div>",
+        html_escape(label),
+        html_escape(value)
+    )
 }
 
 fn collect_demo_webui_files(input: &Path) -> anyhow::Result<Vec<PathBuf>> {
@@ -1915,11 +1981,26 @@ fn ensure_contest_scenario(scenario: &str) -> anyhow::Result<()> {
 }
 
 fn ensure_required_scenario_files(path: &Path) -> anyhow::Result<()> {
+    let static_required = scenario_required_files();
     let mut missing = Vec::new();
-    for relative in scenario_required_files() {
+    for relative in static_required {
         if !path.join(relative).exists() {
             missing.push(*relative);
         }
+    }
+    // The attacks/ directory must contain at least one .md file; the filename
+    // is scenario-specific (e.g. path-escape.md, prompt-injection.md).
+    let attacks_dir = path.join("attacks");
+    let has_attack = attacks_dir.is_dir()
+        && std::fs::read_dir(&attacks_dir)
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .any(|e| e.path().extension().is_some_and(|ext| ext == "md"))
+            })
+            .unwrap_or(false);
+    if !has_attack {
+        missing.push("attacks/*.md");
     }
     if missing.is_empty() {
         Ok(())
@@ -1936,7 +2017,6 @@ fn scenario_required_files() -> &'static [&'static str] {
     &[
         "README.md",
         "manifests/assessment.toml",
-        "attacks/prompt-injection.md",
         "benign/request.md",
         "agent/script.json",
         "expected/denials.json",
@@ -1997,7 +2077,16 @@ fn read_report(path: &Path) -> anyhow::Result<ReportDraft> {
 
 fn read_trace(path: &Path) -> anyhow::Result<Vec<TraceEvent>> {
     let content = fs::read_to_string(path)?;
-    Ok(serde_json::from_str(&content)?)
+    if content.trim_start().starts_with('[') {
+        Ok(serde_json::from_str(&content)?)
+    } else {
+        content
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(serde_json::from_str::<TraceEvent>)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(anyhow::Error::from)
+    }
 }
 
 fn parse_render_format(format: &str) -> anyhow::Result<RenderFormat> {

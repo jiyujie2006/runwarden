@@ -8,6 +8,7 @@ This index is the canonical map for the contest edition.
 - [Agent Security Kernel](01-agent-security-kernel.md): Rust-owned enforcement path.
 - [Submission Map](02-xa-202620-submission-map.md): reviewer package map.
 - [Evaluation Results](03-evaluation-results.md): scenario metrics and evidence.
+- [Contest Submission](contest/README.md): scorecard, reproduction, demo script, artifacts, and limitations.
 
 ## Operate The Demo
 
@@ -59,6 +60,7 @@ This index is the canonical map for the contest edition.
 - [Tool Hijack Email API](../scenarios/tool-hijack-email-api/README.md)
 - [Memory Knowledge Poisoning](../scenarios/memory-knowledge-poisoning/README.md)
 - [Environment Local Web Risk](../scenarios/environment-local-web-risk/README.md)
+- [Path Escape File Boundary](../scenarios/path-escape-file-boundary/README.md)
 
 ## Maintenance Rules
 

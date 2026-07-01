@@ -6,13 +6,14 @@ The contest WebUI is a dependency-free static renderer for Rust-produced demo JS
 
 `runwarden ui build` writes a minimal static console. It displays one section
 per discovered `webui.json` with scenario id, provider-call count, denial
-count, and trace status. If no demo JSON is found, it displays `No demo JSON
-loaded.`
+count, and trace status, then derives a provider-call timeline and pending
+review queue from Rust-produced `provider_calls`. If no demo JSON is found, it
+displays `No demo JSON loaded.`
 
 The `packages/webui` view model supports suite counts, requires-review counts,
 blocked side-effect counts, report claim counts, cited obs refs, trace
-completeness, and citation accuracy; those fields are presentation-only and
-are not currently rendered by the Rust CLI builder.
+completeness, citation accuracy, timeline events, and review queue events.
+Those fields are presentation-only.
 
 ## Policy Boundary
 

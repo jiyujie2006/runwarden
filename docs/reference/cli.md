@@ -41,6 +41,12 @@ Provider calls require `--session` and are evaluated by `KernelEnforcer` before 
 
 Session-backed calls resolve relative provider paths under the selected session root. High-risk providers require a bound approval record before simulated or real side effects can run.
 
+## Trace Commands
+
+`runwarden trace verify` and `runwarden trace export` accept sealed
+`TraceEvent` data as either a JSON array or newline-delimited JSONL. Missing
+`event_hash`, malformed JSONL, or hash-chain tampering fails closed.
+
 ## Demo Runner
 
 `runwarden demo run` loads a scenario, replays its deterministic agent script
@@ -61,8 +67,8 @@ server unless `--live` is passed.
 The server serves the static reviewer console at `/` and emits finite
 Server-Sent Events at `/events`. `provider_call` events come from
 `webui.json`; when `--llm-trace` is supplied, `model_call` events from the
-LLM-proxy JSONL trace are appended. The server does not submit approvals or
-execute providers.
+LLM-proxy sealed JSONL trace are appended. The server does not submit
+approvals or execute providers.
 
 ## Output Paths
 

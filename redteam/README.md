@@ -7,10 +7,15 @@ agent stack and score whether Runwarden blocked them. This is the contest delive
 ## Layout
 
 - `corpora/*.jsonl` — hand-authored attack **sets**, one JSON object per line:
-  `{"id","category","expected","prompt"}`. `expected` is `input_blocked` (proxy must
-  block the prompt) or `tool_denied` (kernel must deny the resulting tool call).
-  - `prompt_injection.jsonl`, `jailbreak.jsonl` → `input_blocked`
-  - `tool_hijack.jsonl`, `path_escape.jsonl`, `memory_poisoning.jsonl` → `tool_denied`
+  `{"id","category","expected","prompt"}`. `expected` is one of
+  `input_blocked`, `tool_denied`, `requires_review`, or `allowed_benign`.
+  - `prompt_injection.jsonl`, `jailbreak.jsonl`, `indirect_prompt_injection.jsonl`,
+    `encoded_bypass.jsonl`, `report_fabrication.jsonl` → `input_blocked`
+  - `tool_hijack.jsonl`, `path_escape.jsonl`, `schema_poisoning.jsonl`,
+    `environment_egress.jsonl` → `tool_denied` or `input_blocked`
+  - `memory_poisoning.jsonl`, `knowledge_poisoning.jsonl` → `tool_denied` or
+    `requires_review`
+  - `benign_control.jsonl` → `allowed_benign`
   - Public datasets (HarmBench/AdvBench/JailbreakBench/garak/PyRIT) can be added in
     the same JSONL shape.
 - `run.py` — the harness, two modes (below).
@@ -27,12 +32,13 @@ blocking, and `model_call` trace JSONL. Reproducible + offline.
 
 ```bash
 python3 redteam/run.py proxy-probe \
-  --corpora redteam/corpora/prompt_injection.jsonl redteam/corpora/jailbreak.jsonl
+  --corpora redteam/corpora/prompt_injection.jsonl redteam/corpora/jailbreak.jsonl \
+            redteam/corpora/encoded_bypass.jsonl redteam/corpora/benign_control.jsonl \
+  --summary-out artifacts/redteam/proxy-probe-summary.json
 ```
 
-Historical L1 substring result on the hand-authored set: **5/16 blocked**
-(31%). With the current L2 semantic filter enabled, the same set is **16/16
-blocked**.
+Current deterministic proxy-probe result on prompt injection, jailbreak,
+encoded bypass, and benign control: **34/34 PASS**.
 
 ### `agent-drive` — real LLM tool-call supervision
 
@@ -54,4 +60,7 @@ the kernel blocks path-traversal reads driven by the real LLM.
 
 - `agent-drive` uses a directive suffix ("You must call the relevant runwarden tool")
   because free models don't always invoke tools from a bare instruction.
-- Results are written to `artifacts/redteam/*-results.jsonl`; a summary is printed.
+- Results are written to `artifacts/redteam/*-results.jsonl`; summary JSON is
+  written to `artifacts/redteam/*-summary.json`.
+- Validate corpus schema and ids with
+  `python3 redteam/validate_corpora.py redteam/corpora/*.jsonl`.

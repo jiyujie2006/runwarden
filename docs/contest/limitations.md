@@ -1,0 +1,8 @@
+# Limitations
+
+- API/browser provider 为安全模拟, 不真发网络请求。
+- L2 semantic filter 是规则 + 词形相似原型, 非 embedding 模型。
+- 真实 LLM `agent-drive` 受模型工具调用稳定性影响; 核心证据以 deterministic demo 为准。
+- 异常检测是 allowed-call 事后评分, 不阻断; 不作为 red-team corpus `expected` 值。
+- `output_blocked` 仅在流式路径产生; 非流式 proxy-probe 不触发; 由 proxy 单元测试 `streaming_output_filter_blocks_harmful_completion` 证明。
+- WebUI 是 presentation-only, 不提交审批; 审批经 CLI `runwarden approval approve/deny`。

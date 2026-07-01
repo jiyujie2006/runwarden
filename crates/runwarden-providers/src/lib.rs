@@ -632,7 +632,43 @@ pub mod input {
             ));
         }
 
+        for token in base64_tokens(text) {
+            if token != compact
+                && let Ok(bytes) =
+                    base64::engine::general_purpose::STANDARD.decode(token.as_bytes())
+                && let Ok(decoded) = String::from_utf8(bytes)
+            {
+                candidates.push(("base64_token_decode".to_string(), decoded));
+            }
+        }
+
         candidates
+    }
+
+    fn base64_tokens(text: &str) -> Vec<String> {
+        let mut tokens = Vec::new();
+        let mut current = String::new();
+        for ch in text.chars() {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '+' | '/' | '=') {
+                current.push(ch);
+            } else if !current.is_empty() {
+                push_base64_token(&mut tokens, &mut current);
+            }
+        }
+        push_base64_token(&mut tokens, &mut current);
+        tokens
+    }
+
+    fn push_base64_token(tokens: &mut Vec<String>, current: &mut String) {
+        // ponytail: >= 16 chars + len % 4 == 0 avoids decoding short noise as
+        // base64. Short base64 payloads (<16 chars) will slip through. Fine for
+        // the contest corpora (enc-002 is 44 chars). Lower the threshold if
+        // shorter encoded attacks appear.
+        if current.len() >= 16 && current.len().is_multiple_of(4) {
+            tokens.push(std::mem::take(current));
+        } else {
+            current.clear();
+        }
     }
 
     fn percent_decode(text: &str) -> Option<String> {

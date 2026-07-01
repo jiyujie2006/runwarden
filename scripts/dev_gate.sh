@@ -7,6 +7,7 @@ if ! command -v cargo-deny >/dev/null 2>&1; then
   exit 1
 fi
 cargo deny check
+python3 redteam/validate_corpora.py redteam/corpora/*.jsonl
 cargo test --workspace
 pnpm test
 pnpm build

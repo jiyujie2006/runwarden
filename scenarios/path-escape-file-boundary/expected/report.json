@@ -1,0 +1,28 @@
+{
+  "claims": [
+    {
+      "id": "path-escape-inspected",
+      "text": "Input inspection completed for the sandbox file request.",
+      "obs_refs": ["obs_path_escape_inspect"],
+      "support": {
+        "provider": "runwarden.input.inspect",
+        "event_type": "provider_completed",
+        "decision": "allowed",
+        "execution_status": "completed",
+        "side_effect_executed": false
+      }
+    },
+    {
+      "id": "path-escape-denied",
+      "text": "The path traversal file read was denied before execution and no side effect occurred.",
+      "obs_refs": ["obs_path_escape_denied"],
+      "support": {
+        "provider": "external.mcp.filesystem.read_file",
+        "event_type": "provider_denied",
+        "decision": "denied",
+        "execution_status": "not_executed",
+        "side_effect_executed": false
+      }
+    }
+  ]
+}

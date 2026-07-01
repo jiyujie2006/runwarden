@@ -1,5 +1,6 @@
 export type DemoDecision = "allowed" | "denied" | "requires_review";
 export type DemoTraceState = "verified" | "tampered" | "missing";
+export type DemoEventKind = "provider_call" | "model_call";
 
 export interface DemoProviderCall {
   provider: string;
@@ -27,12 +28,32 @@ export interface DemoReport {
   claims: DemoReportClaim[];
 }
 
+export interface DemoTimelineEvent {
+  kind: DemoEventKind;
+  scenario?: string;
+  provider?: string;
+  model?: string;
+  action?: string;
+  decision: string;
+  execution_status?: string;
+  side_effect_executed?: boolean;
+  obs_ref?: string;
+  reason?: string;
+  error_kind?: string;
+  anomaly?: {
+    score: number;
+    is_anomalous: boolean;
+    reasons: string[];
+  };
+}
+
 export interface DemoScenarioInput {
   scenario: string;
   provider_calls: DemoProviderCall[];
   denials: DemoProviderCall[];
   metrics: DemoMetrics;
   report: DemoReport;
+  events?: DemoTimelineEvent[];
   trace?: unknown[];
   trace_verification?: { verified?: boolean };
   lint?: { ok: boolean };
@@ -59,6 +80,8 @@ export interface DemoReviewerConsoleViewModel {
     traceState: DemoTraceState;
   };
   scenarios: DemoScenarioSummary[];
+  timeline: DemoTimelineEvent[];
+  reviewQueue: DemoTimelineEvent[];
 }
 
 export function createDemoReviewerConsoleViewModel(
@@ -91,6 +114,7 @@ export function createDemoReviewerConsoleViewModel(
       metrics: input.metrics
     };
   });
+  const timeline = inputs.flatMap(eventsFromScenario);
 
   return {
     suite: {
@@ -103,7 +127,9 @@ export function createDemoReviewerConsoleViewModel(
       ),
       traceState: suiteTraceState(scenarios)
     },
-    scenarios
+    scenarios,
+    timeline,
+    reviewQueue: timeline.filter((event) => event.decision === "requires_review")
   };
 }
 
@@ -134,6 +160,18 @@ export function renderDemoReviewerConsoleHtml(inputs: DemoScenarioInput[]): stri
     "<section class=\"scenario-grid\">",
     model.scenarios.map(renderScenarioCard).join(""),
     "</section>",
+    "<section class=\"timeline\" aria-label=\"Security event timeline\">",
+    "<h2>Security Events</h2>",
+    model.timeline.length
+      ? model.timeline.map(renderTimelineEvent).join("")
+      : "<p>No security events.</p>",
+    "</section>",
+    "<section class=\"review-queue\" aria-label=\"Pending review queue\">",
+    "<h2>Review Queue</h2>",
+    model.reviewQueue.length
+      ? model.reviewQueue.map(renderTimelineEvent).join("")
+      : "<p>No pending reviews.</p>",
+    "</section>",
     "</section>",
     "</main>",
     "</body>",
@@ -162,6 +200,48 @@ function renderScenarioCard(scenario: DemoScenarioSummary): string {
     "Citation accuracy",
     scenario.metrics.report_citation_accuracy.toFixed(2)
   )}</dl><p class="obs">${escapeHtml(scenario.reportObsRefs.join(", "))}</p></article>`;
+}
+
+function renderTimelineEvent(event: DemoTimelineEvent): string {
+  return `<article class="event event-${escapeAttr(event.decision)}"><header><strong>${escapeHtml(
+    event.kind
+  )}</strong><span>${escapeHtml(event.decision)}</span></header><dl>${event.scenario ? fact(
+    "Scenario",
+    event.scenario
+  ) : ""}${event.provider ? fact("Provider", event.provider) : ""}${event.model ? fact(
+    "Model",
+    event.model
+  ) : ""}${event.action ? fact("Action", event.action) : ""}${event.execution_status ? fact(
+    "Status",
+    event.execution_status
+  ) : ""}${event.error_kind ? fact("Error", event.error_kind) : ""}${event.obs_ref ? fact(
+    "Obs",
+    event.obs_ref
+  ) : ""}${typeof event.side_effect_executed === "boolean" ? fact(
+    "Side effect",
+    String(event.side_effect_executed)
+  ) : ""}</dl>${event.reason ? `<p>${escapeHtml(event.reason)}</p>` : ""}</article>`;
+}
+
+function eventsFromScenario(input: DemoScenarioInput): DemoTimelineEvent[] {
+  if (input.events?.length) {
+    return input.events;
+  }
+  return input.provider_calls.map((call) => {
+    const event: DemoTimelineEvent = {
+      kind: "provider_call",
+      scenario: input.scenario,
+      provider: call.provider,
+      action: call.action,
+      decision: call.decision,
+      execution_status: call.execution_status,
+      side_effect_executed: call.side_effect_executed
+    };
+    if (call.obs_ref) event.obs_ref = call.obs_ref;
+    if (call.reason) event.reason = call.reason;
+    if (call.error_kind) event.error_kind = call.error_kind;
+    return event;
+  });
 }
 
 function statusPill(label: string, value: string | number): string {
@@ -269,7 +349,7 @@ function styles(): string {
       margin-bottom: 16px;
     }
     h1 { margin: 0; font-size: 34px; line-height: 1.05; }
-    .status-pill, .scenario-card {
+    .status-pill, .scenario-card, .event {
       background: var(--panel);
       border: 1px solid var(--line);
       border-radius: 8px;
@@ -287,8 +367,10 @@ function styles(): string {
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 14px;
     }
+    .timeline, .review-queue { margin-top: 18px; }
+    .timeline h2, .review-queue h2 { margin: 0 0 10px; }
     .scenario-card { padding: 16px; }
-    .scenario-card header {
+    .scenario-card header, .event header {
       display: flex;
       justify-content: space-between;
       gap: 12px;
@@ -296,6 +378,15 @@ function styles(): string {
       margin-bottom: 12px;
     }
     h2 { margin: 0; font-size: 19px; overflow-wrap: anywhere; }
+    .event {
+      padding: 14px;
+      margin-bottom: 10px;
+      border-left: 5px solid var(--green);
+    }
+    .event-denied { border-left-color: var(--red); }
+    .event-requires_review { border-left-color: var(--amber); }
+    .event-allowed { border-left-color: var(--green); }
+    .event p { margin: 10px 0 0; color: var(--muted); overflow-wrap: anywhere; }
     .trace {
       border-radius: 999px;
       border: 1px solid var(--line);

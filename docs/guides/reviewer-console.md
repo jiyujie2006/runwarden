@@ -36,11 +36,19 @@ and `side_effect_executed: true`.
 ## Review Workflow
 
 1. Open the generated static HTML.
-2. Inspect scenario id, provider-call count, denial count, and trace status in
-   the generated HTML.
-3. Use the adjacent demo JSON files for requires-review counts, blocked
-   side-effect counts, metrics, report claims, and cited `obs_*` refs.
+2. Inspect scenario id, provider-call count, denial count, trace status,
+   timeline events, and pending review queue in the generated HTML.
+3. Use the adjacent demo JSON files for metrics, report claims, and cited
+   `obs_*` refs.
 4. Open the generated report path for the trace-backed narrative.
+
+Approval decisions are not submitted from WebUI. Use the CLI path:
+
+```bash
+target/debug/runwarden approval pending --json
+target/debug/runwarden approval approve <approval_id> \
+  --reviewer reviewer_alice --reason "reviewed scope and risk" --json
+```
 
 ## Security Rules
 

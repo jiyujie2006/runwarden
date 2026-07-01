@@ -21,12 +21,13 @@ an uncited claim, or when a claim cites an unknown or semantically unsupported
 
 ## Scenario Metrics
 
-The contest corpus has exactly four main scenarios:
+The contest corpus has exactly five main scenarios:
 
 - `prompt-injection-file-exfil`
 - `tool-hijack-email-api`
 - `memory-knowledge-poisoning`
 - `environment-local-web-risk`
+- `path-escape-file-boundary`
 
 Each scenario must include benign input, attack prompt, deterministic
 demo-agent script, provider-call expectations, denials or review blocks,
@@ -34,7 +35,7 @@ expected obs refs, report claims, and metric baselines.
 
 | Metric | Meaning | Passing baseline |
 | --- | --- | --- |
-| `scenario_count` | Number of main contest scenarios. | `4` |
+| `scenario_count` | Number of main contest scenarios. | `5` |
 | `expected_denial_cases` | Golden denial fixtures mediated through providers. | Non-zero |
 | `provider_mediation_rate` | Expected external-tool denials mediated through Runwarden providers. | `1.0` |
 | `policy_denial_correctness` | Expected denial fixtures whose decision is `denied`. | `1.0` |
