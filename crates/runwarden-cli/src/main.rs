@@ -1355,11 +1355,7 @@ fn run_demo_scenario(root: &Path, scenario: &str, output: &Path) -> anyhow::Resu
 }
 
 fn evaluate_scenario_corpora(root: &Path, suite: &Path) -> anyhow::Result<Value> {
-    let suite_path = if suite.is_absolute() {
-        suite.to_path_buf()
-    } else {
-        root.join(suite)
-    };
+    let suite_path = root.join(suite);
     let mut cases = Vec::new();
     let mut passed = true;
     for scenario in CONTEST_SCENARIOS {
@@ -1545,11 +1541,7 @@ fn render_scenario_suite_report(
     suite: &Path,
     format: RenderFormat,
 ) -> anyhow::Result<runwarden_assurance::report::RenderedReport> {
-    let suite_path = if suite.is_absolute() {
-        suite.to_path_buf()
-    } else {
-        root.join(suite)
-    };
+    let suite_path = root.join(suite);
     let eval = evaluate_scenario_corpora(root, suite)?;
     if eval["passed"].as_bool() != Some(true) {
         anyhow::bail!("scenario suite eval did not pass");
@@ -1818,14 +1810,9 @@ fn load_live_replay_events(demo_path: &Path) -> anyhow::Result<Vec<Value>> {
             .as_array()
             .ok_or_else(|| anyhow::anyhow!("{} is missing provider_calls array", file.display()))?;
         for (index, call) in provider_calls.iter().enumerate() {
-            let mut event = serde_json::Map::new();
+            let mut event = call.as_object().cloned().unwrap_or_default();
             event.insert("scenario".to_string(), json!(scenario));
             event.insert("sequence".to_string(), json!(index + 1));
-            if let Some(call_object) = call.as_object() {
-                for (key, value) in call_object {
-                    event.insert(key.clone(), value.clone());
-                }
-            }
             event.insert("kind".to_string(), json!("provider_call"));
             events.push(Value::Object(event));
         }

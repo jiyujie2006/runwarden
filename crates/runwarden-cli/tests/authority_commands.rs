@@ -7,21 +7,7 @@ use runwarden_kernel::{
 use tempfile::tempdir;
 
 fn toml_basic_string(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len() + 2);
-    escaped.push('"');
-    for ch in value.chars() {
-        match ch {
-            '\\' => escaped.push_str("\\\\"),
-            '"' => escaped.push_str("\\\""),
-            '\n' => escaped.push_str("\\n"),
-            '\r' => escaped.push_str("\\r"),
-            '\t' => escaped.push_str("\\t"),
-            ch if ch.is_control() => escaped.push_str(&format!("\\u{:04X}", ch as u32)),
-            ch => escaped.push(ch),
-        }
-    }
-    escaped.push('"');
-    escaped
+    serde_json::to_string(value).expect("toml string")
 }
 
 #[test]

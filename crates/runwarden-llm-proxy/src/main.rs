@@ -637,13 +637,11 @@ fn last_trace_hash(trace_path: &str) -> Option<String> {
     // proxy should guard write_trace_event with a mutex or append through a
     // dedicated trace writer.
     let contents = std::fs::read_to_string(trace_path).ok()?;
-    contents
-        .lines()
-        .rev()
-        .filter(|line| !line.trim().is_empty())
-        .filter_map(|line| serde_json::from_str::<TraceEvent>(line).ok())
-        .map(|event| event.event_hash)
-        .next()
+    contents.lines().rev().find_map(|line| {
+        serde_json::from_str::<TraceEvent>(line)
+            .ok()
+            .map(|event| event.event_hash)
+    })
 }
 
 fn status_text(status: u16) -> &'static str {

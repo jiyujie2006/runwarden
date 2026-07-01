@@ -898,7 +898,7 @@ fn handle_provider_list(id: Value, params: Option<&Value>) -> Value {
     ) {
         return jsonrpc_error(id, -32602, &message, json!({"side_effect_executed": false}));
     }
-    let providers: Vec<_> = all_kernel_managed_providers().into_iter().collect();
+    let providers = all_kernel_managed_providers();
 
     tool_result(
         id,
@@ -957,7 +957,7 @@ fn handle_provider_status(id: Value, params: Option<&Value>) -> Value {
 }
 
 fn handle_report_lint(id: Value, params: Option<&Value>) -> Value {
-    let Some((report, trace_events)) = report_and_trace_args(id.clone(), params) else {
+    let Some((report, trace_events)) = report_and_trace_args(params) else {
         return jsonrpc_error(
             id,
             -32602,
@@ -994,7 +994,7 @@ fn handle_report_render(id: Value, params: Option<&Value>) -> Value {
         return tool_error_result(id, provider_outcome_payload(&outcome));
     }
 
-    let Some((report, trace_events)) = report_and_trace_args(id.clone(), params) else {
+    let Some((report, trace_events)) = report_and_trace_args(params) else {
         return jsonrpc_error(
             id,
             -32602,
@@ -1021,10 +1021,7 @@ fn handle_report_render(id: Value, params: Option<&Value>) -> Value {
     }
 }
 
-fn report_and_trace_args(
-    _id: Value,
-    params: Option<&Value>,
-) -> Option<(ReportDraft, Vec<TraceEvent>)> {
+fn report_and_trace_args(params: Option<&Value>) -> Option<(ReportDraft, Vec<TraceEvent>)> {
     let arguments = params
         .and_then(|params| params.get("arguments"))
         .unwrap_or(&Value::Null);
