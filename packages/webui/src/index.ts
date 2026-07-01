@@ -96,9 +96,9 @@ export function createDemoReviewerConsoleViewModel(
         (call.decision === "denied" || call.decision === "requires_review") &&
         call.side_effect_executed === false
     ).length;
-    const reportObsRefs = unique(
-      input.report.claims.flatMap((claim) => claim.obs_refs)
-    );
+    const reportObsRefs = [
+      ...new Set(input.report.claims.flatMap((claim) => claim.obs_refs))
+    ];
 
     const traceState = traceStateFromVerification(input.trace_verification);
 
@@ -254,10 +254,6 @@ function fact(label: string, value: string): string {
   return `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`;
 }
 
-function unique(values: string[]): string[] {
-  return [...new Set(values)];
-}
-
 function sum<T>(items: T[], read: (item: T) => number): number {
   return items.reduce((total, item) => total + read(item), 0);
 }
@@ -306,7 +302,6 @@ function styles(): string {
       font-family: Inter, Aptos, system-ui, sans-serif;
       --ink: #20231f;
       --muted: #667064;
-      --paper: #f7f8f4;
       --panel: #fffffb;
       --line: #cfd8ca;
       --rail: #171b15;
@@ -385,7 +380,6 @@ function styles(): string {
     }
     .event-denied { border-left-color: var(--red); }
     .event-requires_review { border-left-color: var(--amber); }
-    .event-allowed { border-left-color: var(--green); }
     .event p { margin: 10px 0 0; color: var(--muted); overflow-wrap: anywhere; }
     .trace {
       border-radius: 999px;

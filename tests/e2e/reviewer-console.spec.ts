@@ -56,9 +56,7 @@ const demoInputs: DemoScenarioInput[] = [
         }
       ]
     },
-    trace: [{ obs_id: "obs_prompt_file_exfil_denied" }],
-    trace_verification: { verified: true },
-    lint: { ok: true }
+    trace_verification: { verified: true }
   },
   {
     scenario: "environment-local-web-risk",
@@ -103,9 +101,7 @@ const demoInputs: DemoScenarioInput[] = [
         }
       ]
     },
-    trace: [{ obs_id: "obs_local_web_browser_denied" }],
-    trace_verification: { verified: true },
-    lint: { ok: true }
+    trace_verification: { verified: true }
   }
 ];
 

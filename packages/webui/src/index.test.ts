@@ -56,9 +56,7 @@ const demoInput: DemoScenarioInput = {
       }
     ]
   },
-  trace: [{ obs_id: "obs_prompt_file_exfil_denied" }],
-  trace_verification: { verified: true },
-  lint: { ok: true }
+  trace_verification: { verified: true }
 };
 
 describe("createDemoReviewerConsoleViewModel", () => {
@@ -119,8 +117,13 @@ describe("renderDemoReviewerConsoleHtml", () => {
     expect(html).toContain('aria-label="Pending review queue"');
     expect(html).toContain("event-denied");
     expect(html).toContain("event-requires_review");
+    expect(html).toContain('name="viewport"');
     expect(html).toContain('role="status" aria-label="Demo suite status"');
     expect(html).toContain('aria-label="Runwarden demo scenarios"');
+    expect(html).toContain('aria-label="Reviewer workspace"');
+    expect(html).toContain("scenario-card");
+    expect(html).toContain("trace-verified");
+    expect(html).toContain(":focus-visible");
     expect(html).toContain("@media (max-width: 900px)");
     expect(html).toContain("min-height: 44px");
     expect(html).not.toContain("<script");
