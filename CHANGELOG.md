@@ -21,7 +21,7 @@ All notable changes to Runwarden are documented in this file.
 - Added four reproducible attack scenarios:
   `prompt-injection-file-exfil`, `tool-hijack-email-api`,
   `memory-knowledge-poisoning`, and `environment-local-web-risk`.
-- Added deterministic demo generation through `runwarden demo run`.
+- Added deterministic demo generation through `runwarden demo`.
 - Added scenario-suite report rendering through
   `runwarden report render --scenario-suite scenarios`.
 

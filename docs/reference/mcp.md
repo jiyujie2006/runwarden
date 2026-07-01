@@ -42,7 +42,14 @@ Unknown tools, raw tools, and removed tools such as `runwarden.session.create_fr
   provide `simulated_approval` or any other self-approval field. The MCP
   server constructs the conservative inline kernel policy itself; it does not
   derive provider allowlists, active-assessment state, roots, authz, approvals,
-  or budgets from agent-supplied arguments. Allowed API and browser outcomes
+  or budgets from agent-supplied arguments.
+- For review-blocked calls, MCP writes a pending approval record and a
+  provider-call event under `RUNWARDEN_STATE_DIR` when set, otherwise
+  `.runwarden` under the MCP process working directory. On retry, MCP loads
+  matching approved records from `.runwarden/approvals`, attaches the approval
+  id before kernel evaluation, and persists the consumed state after allow.
+  Denied approval records do not allow the call.
+- Allowed API and browser outcomes
   are replay-simulated and return `event_type=provider_simulated_replay`,
   `execution_status=simulated`, `simulated=true`, and
   `side_effect_executed=false`. Allowed local sandbox filesystem, email,
@@ -61,9 +68,7 @@ Unknown tools, raw tools, and removed tools such as `runwarden.session.create_fr
 `runwarden.trace.verify` accepts inline `trace_events` and returns verification
 status without side effects. `runwarden.trace.export` verifies inline trace
 events before policy evaluation and supports `offset`, `limit`, `provider`,
-`event_type`, `obs_prefix`, `max_bytes`, and `compact_refs`; MCP exports are
-review-blocked because trace export is an artifact-write provider and MCP
-callers cannot supply approvals. `runwarden.report.lint` accepts inline
+`event_type`, `obs_prefix`, `max_bytes`, and `compact_refs`. `runwarden.report.lint` accepts inline
 `report` and `trace_events` and enforces citation support.
 `runwarden.report.render` is review-blocked in the MCP inline path before
 rendering; agents should use lint through MCP and a reviewer-approved non-agent

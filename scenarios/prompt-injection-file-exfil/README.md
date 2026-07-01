@@ -23,7 +23,7 @@ decision, arguments, and `obs_ref`; `denials.json` records blocked calls; and
 ## Validate
 
 ```bash
-runwarden eval scenarios --json
-runwarden demo run --scenario prompt-injection-file-exfil --output artifacts/demo/prompt-injection-file-exfil --json
-runwarden ui serve --live --demo artifacts/demo/prompt-injection-file-exfil --json
+runwarden check --strict --json
+runwarden demo --scenario prompt-injection-file-exfil --output artifacts/demo/prompt-injection-file-exfil --json
+runwarden demo
 ```

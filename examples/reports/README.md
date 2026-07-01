@@ -17,7 +17,7 @@ The scenario gate requires all expected observations to appear in the final
 report:
 
 ```bash
-runwarden eval scenarios --json
+runwarden check --strict --json
 ```
 
 Maintained reference: [Evidence and Accountability](../../docs/reference/evidence-and-accountability.md).

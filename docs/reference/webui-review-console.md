@@ -1,51 +1,33 @@
 # WebUI Review Console
 
-The contest WebUI is a dependency-free static renderer for Rust-produced demo JSON. It does not submit approval decisions.
+The contest WebUI is served by `runwarden demo` from Rust (`axum`) and uses a
+single dependency-free `console.html`. It is presentation and approval
+delivery only; policy decisions stay in Rust kernel/MCP/provider code.
 
-## UI Contract
+## Interactive Mode
 
-`runwarden ui build` writes a minimal static console. It displays one section
-per discovered `webui.json` with scenario id, provider-call count, denial
-count, and trace status, then derives a provider-call timeline and pending
-review queue from Rust-produced `provider_calls`. If no demo JSON is found, it
-displays `No demo JSON loaded.`
+`runwarden demo` serves:
 
-The `packages/webui` view model supports suite counts, requires-review counts,
-blocked side-effect counts, report claim counts, cited obs refs, trace
-completeness, citation accuracy, timeline events, and review queue events.
-Those fields are presentation-only.
+- `GET /` console HTML
+- `GET /events` Server-Sent Events for `model_call`, `provider_call`, and approval updates
+- `GET /api/pending` pending approval records from `.runwarden/approvals`
+- `POST /api/approve` and `POST /api/deny` state changes for existing approval records
+- `GET /api/trace/verify` hash-chain verification for the LLM proxy trace
+- `GET /healthz`
+
+MCP writes pending approval records and provider-call events under
+`RUNWARDEN_STATE_DIR` when set, otherwise `.runwarden` under its current
+directory. For the two-terminal demo, export `RUNWARDEN_STATE_DIR` to the repo
+state directory before launching the agent.
+
+## Static Mode
+
+`runwarden demo --all --output artifacts/demo --json` writes
+`artifacts/demo/reviewer-console.html` with scenario events embedded as JSON.
+The static page does not submit approval decisions.
 
 ## Policy Boundary
 
-WebUI code must not decide allow, deny, approval, egress, provider, report,
-trace, or artifact policy. Rust-produced demo JSON is the source of truth;
-TypeScript maps it to labels and layout. Trace status is read from
-`trace_verification.verified`; the WebUI must not infer verification from trace
-presence or report lint success.
-
-Build with:
-
-```bash
-runwarden ui build --input artifacts/demo --output artifacts/reviewer-console.html --json
-```
-
-Run live replay with:
-
-```bash
-runwarden ui serve --live --demo artifacts/demo/prompt-injection-file-exfil --json
-```
-
-Live replay serves the static console at `/` and streams existing `webui.json`
-provider-call records at `/events` as Server-Sent Events. With `--llm-trace`,
-it appends LLM-proxy `model_call` events from JSONL. The stream is replay-only:
-events are Rust-produced demo/model-filter state, and the WebUI does not make
-approval, egress, provider, report, or artifact decisions.
-
-The live startup JSON and final `replay_complete` SSE event report separate
-counts: `provider_call_count` covers only demo provider-call records,
-`model_call_count` covers appended LLM trace events, and `event_count` is the
-combined stream length.
-
-Live replay event fields, including provider, decision, and model names, are
-rendered with DOM text APIs (`textContent`/text nodes), not as HTML. The live
-console must not insert SSE JSON fields through HTML parsing APIs.
+The browser uses DOM text APIs and `fetch`; it must not reimplement allow,
+deny, egress, provider, report, artifact, or trace verification policy.
+Denied and review-blocked state comes from Rust-produced event JSON.

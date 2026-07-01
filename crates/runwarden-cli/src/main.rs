@@ -1,7 +1,5 @@
 use std::{
     env, fs,
-    io::{Read, Write},
-    net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::ExitCode,
 };
@@ -11,19 +9,17 @@ use runwarden_assurance::eval::{EvalThresholds, evaluate_report_assurance};
 use runwarden_assurance::report::{
     RenderFormat, ReportDraft, lint_report_against_trace, render_report,
 };
-use runwarden_kernel::authority::{ApprovalBinding, ApprovalRecord, ApprovalState};
 use runwarden_kernel::contracts::{PolicyDecision, ProviderCall, ProviderClass, ProviderOutcome};
-use runwarden_kernel::evidence::{InMemoryTraceStore, TraceEvent, TraceQuery, hex_sha256};
+use runwarden_kernel::evidence::{InMemoryTraceStore, TraceEvent, TraceQuery};
 use runwarden_kernel::kernel::KernelEnforcer;
 use runwarden_kernel::manifest::{AssessmentManifest, SessionManifest};
-use runwarden_providers::catalog::{
-    EXTERNAL_PROVIDER_IDS, FIRST_PARTY_PROVIDER_IDS, full_provider_registry,
-};
+use runwarden_providers::catalog::full_provider_registry;
 use runwarden_providers::input::{InputInspectPolicy, InputSource, inspect_input};
 use runwarden_providers::tools;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use time::OffsetDateTime;
+
+mod server;
 
 const CONTEST_SCENARIOS: &[&str] = &[
     "prompt-injection-file-exfil",
@@ -43,18 +39,19 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    Init,
-    Check {
+    Demo {
         #[arg(long)]
-        strict: bool,
-    },
-    Session {
-        #[command(subcommand)]
-        command: SessionCommand,
-    },
-    Provider {
-        #[command(subcommand)]
-        command: ProviderCommand,
+        scenario: Option<String>,
+        #[arg(long)]
+        all: bool,
+        #[arg(long)]
+        output: Option<PathBuf>,
+        #[arg(long)]
+        upstream: Option<String>,
+        #[arg(long, default_value_t = 8088)]
+        port: u16,
+        #[arg(long)]
+        json: bool,
     },
     Trace {
         #[command(subcommand)]
@@ -64,69 +61,9 @@ enum Command {
         #[command(subcommand)]
         command: ReportCommand,
     },
-    Eval {
-        #[command(subcommand)]
-        command: EvalCommand,
-    },
-    Demo {
-        #[command(subcommand)]
-        command: DemoCommand,
-    },
-    Ui {
-        #[command(subcommand)]
-        command: UiCommand,
-    },
-    Approval {
-        #[command(subcommand)]
-        command: ApprovalCommand,
-    },
-    Authority {
-        #[command(subcommand)]
-        command: AuthorityCommand,
-    },
-}
-
-#[derive(Debug, Subcommand)]
-enum SessionCommand {
-    Create {
+    Check {
         #[arg(long)]
-        manifest: PathBuf,
-        #[arg(long)]
-        session: String,
-        #[arg(long)]
-        json: bool,
-    },
-    Inspect {
-        #[arg(long)]
-        session: String,
-        #[arg(long)]
-        json: bool,
-    },
-}
-
-#[derive(Debug, Subcommand)]
-enum ProviderCommand {
-    List {
-        #[arg(long)]
-        session: Option<String>,
-        #[arg(long)]
-        json: bool,
-    },
-    Call {
-        #[arg(long)]
-        session: Option<String>,
-        #[arg(long)]
-        provider: String,
-        #[arg(long)]
-        input: Option<PathBuf>,
-        #[arg(long)]
-        root: Option<PathBuf>,
-        #[arg(long)]
-        trace: Option<PathBuf>,
-        #[arg(long)]
-        report: Option<PathBuf>,
-        #[arg(long)]
-        format: Option<String>,
+        strict: bool,
         #[arg(long)]
         json: bool,
     },
@@ -188,111 +125,6 @@ enum ReportCommand {
     },
 }
 
-#[derive(Debug, Subcommand)]
-enum EvalCommand {
-    Scenarios {
-        #[arg(long, default_value = "scenarios")]
-        suite: PathBuf,
-        #[arg(long)]
-        json: bool,
-    },
-}
-
-#[derive(Debug, Subcommand)]
-enum DemoCommand {
-    Run {
-        #[arg(long)]
-        scenario: String,
-        #[arg(long)]
-        output: PathBuf,
-        #[arg(long)]
-        json: bool,
-    },
-}
-
-#[derive(Debug, Subcommand)]
-enum UiCommand {
-    Build {
-        #[arg(long, default_value = "artifacts/demo")]
-        input: PathBuf,
-        #[arg(long, default_value = "artifacts/reviewer-console.html")]
-        output: PathBuf,
-        #[arg(long)]
-        json: bool,
-    },
-    Serve {
-        #[arg(long, default_value = "127.0.0.1")]
-        bind: String,
-        #[arg(long, default_value_t = 8088)]
-        port: u16,
-        #[arg(long, default_value = "artifacts/reviewer-console.html")]
-        file: PathBuf,
-        #[arg(long)]
-        live: bool,
-        #[arg(long)]
-        demo: Option<PathBuf>,
-        #[arg(long)]
-        llm_trace: Option<PathBuf>,
-        #[arg(long)]
-        json: bool,
-    },
-}
-
-#[derive(Debug, Subcommand)]
-enum ApprovalCommand {
-    Pending {
-        #[arg(long)]
-        json: bool,
-    },
-    Approve {
-        approval_id: String,
-        #[arg(long)]
-        reviewer: String,
-        #[arg(long)]
-        reason: String,
-        #[arg(long)]
-        json: bool,
-    },
-    Deny {
-        approval_id: String,
-        #[arg(long)]
-        reviewer: String,
-        #[arg(long)]
-        reason: String,
-        #[arg(long)]
-        json: bool,
-    },
-}
-
-#[derive(Debug, Subcommand)]
-enum AuthorityCommand {
-    Create {
-        #[arg(long)]
-        approval: String,
-        #[arg(long)]
-        session: String,
-        #[arg(long)]
-        provider: String,
-        #[arg(long)]
-        action: String,
-        #[arg(long, default_value = "{}")]
-        arguments: String,
-        #[arg(long = "argument-hash")]
-        argument_hash: Option<String>,
-        #[arg(long)]
-        authz: Option<String>,
-        #[arg(long)]
-        actor: Option<String>,
-        #[arg(long)]
-        json: bool,
-    },
-    Inspect {
-        approval_id: String,
-        #[arg(long)]
-        json: bool,
-    },
-}
-
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
@@ -306,175 +138,31 @@ fn main() -> ExitCode {
 fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Init => println!("runwarden initialized"),
-        Command::Check { strict } => {
-            if strict {
-                run_strict_check()?;
-            } else {
-                println!("runwarden check passed");
-            }
-        }
-        Command::Session { command } => run_session_command(command)?,
-        Command::Provider { command } => run_provider_command(command)?,
+        Command::Demo {
+            scenario,
+            all,
+            output,
+            upstream,
+            port,
+            json,
+        } => run_demo_command(scenario, all, output, upstream, port, json)?,
         Command::Trace { command } => run_trace_command(command)?,
         Command::Report { command } => run_report_command(command)?,
-        Command::Eval { command } => run_eval_command(command)?,
-        Command::Demo { command } => run_demo_command(command)?,
-        Command::Ui { command } => run_ui_command(command)?,
-        Command::Approval { command } => run_approval_command(command)?,
-        Command::Authority { command } => run_authority_command(command)?,
-    }
-    Ok(())
-}
-
-fn run_session_command(command: SessionCommand) -> anyhow::Result<()> {
-    match command {
-        SessionCommand::Create {
-            manifest,
-            session,
-            json,
-        } => {
-            let manifest_body = fs::read_to_string(&manifest)?;
-            let assessment = AssessmentManifest::from_toml_str(&manifest_body)?;
-            let assessment = assessment_with_manifest_relative_roots(&manifest, assessment)?;
-            let session_manifest = SessionManifest::from_assessment(session, &assessment);
-            write_session(&session_manifest)?;
-            if json {
-                println!("{}", serde_json::to_string_pretty(&session_manifest)?);
+        Command::Check { strict, json } => {
+            if strict {
+                run_strict_check(json)?;
             } else {
-                println!("created session {}", session_manifest.session_id);
-            }
-        }
-        SessionCommand::Inspect { session, json } => {
-            let session_manifest = read_session(&session)?;
-            if json {
-                println!("{}", serde_json::to_string_pretty(&session_manifest)?);
-            } else {
-                println!("session {}", session_manifest.session_id);
-            }
-        }
-    }
-    Ok(())
-}
-
-fn run_provider_command(command: ProviderCommand) -> anyhow::Result<()> {
-    match command {
-        ProviderCommand::List { session, json } => {
-            let providers = if let Some(session_id) = session {
-                read_session(&session_id)?.allowed_providers
-            } else {
-                FIRST_PARTY_PROVIDER_IDS
-                    .iter()
-                    .chain(EXTERNAL_PROVIDER_IDS.iter())
-                    .map(|provider| (*provider).to_string())
-                    .collect()
-            };
-            if json {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&json!({ "providers": providers }))?
-                );
-            } else {
-                for provider in providers {
-                    println!("{provider}");
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&json!({
+                            "passed": true,
+                            "side_effect_executed": false
+                        }))?
+                    );
+                } else {
+                    println!("runwarden check passed");
                 }
-            }
-        }
-        ProviderCommand::Call {
-            session,
-            provider,
-            input,
-            root,
-            trace,
-            report,
-            format,
-            json,
-        } => {
-            let Some(session_id) = session.as_deref() else {
-                anyhow::bail!("provider call requires --session");
-            };
-            let session_manifest = read_session(session_id)?;
-            let mut execution_input = input.clone();
-            let mut execution_trace = trace.clone();
-            let mut execution_report = report.clone();
-            let mut call = provider_call_from_cli(CliProviderCallInput {
-                session_id: session_manifest.session_id.as_str(),
-                actor_id: session_manifest.actor_id.clone(),
-                authz_id: session_manifest.authz_id.clone(),
-                session_manifest: Some(&session_manifest),
-                provider: &provider,
-                input: input.as_ref(),
-                root: root.as_ref(),
-                trace: trace.as_ref(),
-                report: report.as_ref(),
-                format: format.as_deref(),
-            });
-
-            let resolved_paths =
-                resolve_session_provider_argument_paths(&session_manifest, &mut call)?;
-            if let Some(path) = resolved_paths.input {
-                execution_input = Some(path);
-            }
-            if let Some(path) = resolved_paths.trace {
-                execution_trace = Some(path);
-            }
-            if let Some(path) = resolved_paths.report {
-                execution_report = Some(path);
-            }
-
-            let mut pre_read_enforcer = KernelEnforcer::new(
-                full_provider_registry(),
-                session_manifest.to_kernel_policy(),
-            );
-            let pre_read_outcome = pre_read_enforcer.evaluate_call(&call);
-            if pre_read_outcome.decision == PolicyDecision::Denied {
-                emit_provider_policy_outcome(&pre_read_outcome, json)?;
-                return Ok(());
-            }
-
-            bind_cli_file_digests(&mut call)?;
-            attach_matching_approval(&mut call)?;
-            let mut enforcer = KernelEnforcer::new(
-                full_provider_registry(),
-                session_manifest.to_kernel_policy(),
-            );
-            for approval in read_all_approvals()? {
-                enforcer.add_approval(approval);
-            }
-            let outcome = enforcer.evaluate_call(&call);
-            if outcome.decision != PolicyDecision::Allowed {
-                emit_provider_policy_outcome(&outcome, json)?;
-                return Ok(());
-            }
-            verify_cli_file_digests(&call)?;
-            if call
-                .approval_id
-                .as_deref()
-                .and_then(|approval_id| enforcer.approval_state(approval_id))
-                == Some(ApprovalState::Consumed)
-            {
-                persist_consumed_cli_approval(&call, &enforcer.approval_binding_for_call(&call))?;
-            }
-
-            let sandbox_root = tools::sandbox_root_from();
-            let result = if provider_is_external(&provider) {
-                call_external_provider(&provider, &call.action, &call.arguments, &sandbox_root)
-            } else {
-                call_first_party_provider(
-                    &provider,
-                    execution_input,
-                    execution_trace,
-                    execution_report,
-                    format,
-                )?
-            };
-            if json {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&provider_execution_payload(&outcome, result))?
-                );
-            } else {
-                println!("provider call completed: {provider}");
             }
         }
     }
@@ -632,514 +320,353 @@ fn run_report_command(command: ReportCommand) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn run_eval_command(command: EvalCommand) -> anyhow::Result<()> {
-    match command {
-        EvalCommand::Scenarios { suite, json } => {
-            let root = find_workspace_root(env::current_dir()?)?;
-            let result = evaluate_scenario_corpora(&root, &suite)?;
-            if json {
-                println!("{}", serde_json::to_string_pretty(&result)?);
-            } else if result["passed"].as_bool() == Some(true) {
-                println!("eval scenarios passed");
-            } else {
-                println!("eval scenarios failed");
-            }
-            if result["passed"].as_bool() != Some(true) {
-                anyhow::bail!("eval scenarios failed");
-            }
-        }
-    }
-    Ok(())
-}
-
-fn run_demo_command(command: DemoCommand) -> anyhow::Result<()> {
-    match command {
-        DemoCommand::Run {
-            scenario,
-            output,
-            json,
-        } => {
-            let root = find_workspace_root(env::current_dir()?)?;
-            let result = run_demo_scenario(&root, &scenario, &output)?;
-            if json {
-                println!("{}", serde_json::to_string_pretty(&result)?);
-            } else {
-                println!(
-                    "wrote demo scenario {} to {}",
-                    scenario,
-                    result["output_dir"].as_str().unwrap_or("<unknown>")
-                );
-            }
-        }
-    }
-    Ok(())
-}
-
-fn run_ui_command(command: UiCommand) -> anyhow::Result<()> {
-    match command {
-        UiCommand::Build {
-            input,
-            output,
-            json,
-        } => {
-            let root = find_workspace_root(env::current_dir()?)?;
-            let input_path = resolve_workspace_output_path(&root, &input, "ui input")?;
-            let output_path = resolve_workspace_output_path(&root, &output, "ui output")?;
-            let html = render_static_demo_console(&input_path)?;
-            if let Some(parent) = output_path.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            fs::write(&output_path, html.as_bytes())?;
-            let result = json!({
-                "html_path": output_path.to_string_lossy(),
-                "launch_url": output_path.to_string_lossy(),
-                "local_api_url": Value::Null,
-                "side_effect_executed": true
-            });
-            if json {
-                println!("{}", serde_json::to_string_pretty(&result)?);
-            } else {
-                println!("wrote reviewer console {}", output_path.display());
-            }
-        }
-        UiCommand::Serve {
-            bind,
-            port,
-            file,
-            live,
-            demo,
-            llm_trace,
-            json,
-        } => {
-            let root = find_workspace_root(env::current_dir()?)?;
-            if live {
-                let demo = demo.ok_or_else(|| anyhow::anyhow!("--demo is required with --live"))?;
-                let demo_path = resolve_workspace_output_path(&root, &demo, "ui demo")?;
-                let llm_trace_path = llm_trace
-                    .as_ref()
-                    .map(|trace| resolve_workspace_output_path(&root, trace, "llm trace"))
-                    .transpose()?;
-                run_live_demo_server(&bind, port, &demo_path, llm_trace_path.as_deref(), json)?;
-            } else {
-                let file = resolve_workspace_output_path(&root, &file, "ui file")?;
-                let result = json!({
-                    "mode": "static_demo_console",
-                    "listen_addr": format!("{bind}:{port}"),
-                    "file": file.to_string_lossy(),
-                    "local_api_url": Value::Null,
-                    "side_effect_executed": false
-                });
-                if json {
-                    println!("{}", serde_json::to_string_pretty(&result)?);
-                } else {
-                    println!("serve static reviewer console {}", file.display());
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-fn run_approval_command(command: ApprovalCommand) -> anyhow::Result<()> {
-    match command {
-        ApprovalCommand::Pending { json } => {
-            let approvals: Vec<_> = read_all_approvals()?
-                .into_iter()
-                .filter(|approval| approval.state == ApprovalState::Pending)
-                .collect();
-            if json {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&json!({ "approvals": approvals }))?
-                );
-            } else {
-                for approval in approvals {
-                    println!(
-                        "{} {} {} {}",
-                        approval.approval_id,
-                        approval.binding.provider,
-                        approval.binding.action,
-                        approval.binding.argument_hash
-                    );
-                }
-            }
-        }
-        ApprovalCommand::Approve {
-            approval_id,
-            reviewer,
-            reason,
-            json,
-        } => {
-            let mut approval = read_approval(&approval_id)?;
-            approval.approve(reviewer, reason)?;
-            write_approval(&approval)?;
-            if json {
-                println!("{}", serde_json::to_string_pretty(&approval)?);
-            } else {
-                println!("approved {}", approval.approval_id);
-            }
-        }
-        ApprovalCommand::Deny {
-            approval_id,
-            reviewer,
-            reason,
-            json,
-        } => {
-            let mut approval = read_approval(&approval_id)?;
-            approval.deny(reviewer, reason)?;
-            write_approval(&approval)?;
-            if json {
-                println!("{}", serde_json::to_string_pretty(&approval)?);
-            } else {
-                println!("denied {}", approval.approval_id);
-            }
-        }
-    }
-    Ok(())
-}
-
-fn run_authority_command(command: AuthorityCommand) -> anyhow::Result<()> {
-    match command {
-        AuthorityCommand::Create {
-            approval,
-            session,
-            provider,
-            action,
-            arguments,
-            argument_hash,
-            authz,
-            actor,
-            json,
-        } => {
-            safe_record_id(&approval)?;
-            let computed_hash = match argument_hash {
-                Some(hash) => hash,
-                None => argument_hash_from_json(&arguments)?,
-            };
-            let approval = ApprovalRecord::new(
-                approval,
-                ApprovalBinding {
-                    session_id: session,
-                    provider,
-                    action,
-                    argument_hash: computed_hash,
-                    authz_id: authz,
-                    actor_id: actor,
-                },
-            );
-            write_approval(&approval)?;
-            if json {
-                println!("{}", serde_json::to_string_pretty(&approval)?);
-            } else {
-                println!("created authority approval {}", approval.approval_id);
-            }
-        }
-        AuthorityCommand::Inspect { approval_id, json } => {
-            let approval = read_approval(&approval_id)?;
-            if json {
-                println!("{}", serde_json::to_string_pretty(&approval)?);
-            } else {
-                println!(
-                    "{} {} {} {}",
-                    approval.approval_id,
-                    approval.binding.provider,
-                    approval.binding.action,
-                    approval.binding.argument_hash
-                );
-            }
-        }
-    }
-    Ok(())
-}
-
-struct CliProviderCallInput<'a> {
-    session_id: &'a str,
-    actor_id: Option<String>,
-    authz_id: Option<String>,
-    session_manifest: Option<&'a SessionManifest>,
-    provider: &'a str,
-    input: Option<&'a PathBuf>,
-    root: Option<&'a PathBuf>,
-    trace: Option<&'a PathBuf>,
-    report: Option<&'a PathBuf>,
-    format: Option<&'a str>,
-}
-
-fn provider_call_from_cli(input: CliProviderCallInput<'_>) -> ProviderCall {
-    let mut arguments = serde_json::Map::new();
-    if let Some(path) = input.input {
-        arguments.insert(
-            "input_path".to_string(),
-            Value::String(path.to_string_lossy().into_owned()),
-        );
-    }
-    if let Some(path) = input.root {
-        let root_value = path.to_string_lossy().into_owned();
-        let key = if input.session_manifest.is_some_and(|session_manifest| {
-            session_manifest
-                .roots
-                .iter()
-                .any(|root| root.name == root_value)
-        }) {
-            "root"
-        } else {
-            "root_path"
-        };
-        arguments.insert(key.to_string(), Value::String(root_value));
-    }
-    if let Some(path) = input.trace {
-        arguments.insert(
-            "trace_path".to_string(),
-            Value::String(path.to_string_lossy().into_owned()),
-        );
-    }
-    if let Some(path) = input.report {
-        arguments.insert(
-            "report_path".to_string(),
-            Value::String(path.to_string_lossy().into_owned()),
-        );
-    }
-    if let Some(format) = input.format {
-        arguments.insert("format".to_string(), Value::String(format.to_string()));
-    }
-
-    ProviderCall {
-        session_id: input.session_id.to_string(),
-        provider: input.provider.to_string(),
-        action: provider_action(input.provider).to_string(),
-        arguments: Value::Object(arguments),
-        actor_id: input.actor_id,
-        authz_id: input.authz_id,
-        approval_id: None,
-    }
-}
-
-fn emit_provider_policy_outcome(outcome: &ProviderOutcome, json: bool) -> anyhow::Result<()> {
-    if json {
-        println!("{}", serde_json::to_string_pretty(outcome)?);
-    } else {
-        println!(
-            "provider call {}: {}",
-            serde_json::to_string(&outcome.decision)?,
-            outcome.envelope.reason
-        );
-    }
-    Ok(())
-}
-
-fn provider_execution_payload(outcome: &ProviderOutcome, mut payload: Value) -> Value {
-    let execution_status = payload
-        .get("execution_status")
-        .and_then(Value::as_str)
-        .unwrap_or("completed")
-        .to_string();
-    let side_effect_executed = payload
-        .get("side_effect_executed")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let simulated = payload
-        .get("simulated")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let decision = payload
-        .get("decision")
-        .and_then(Value::as_str)
-        .unwrap_or("allowed")
-        .to_string();
-    let event_type = if simulated {
-        "provider_simulated_replay"
-    } else {
-        "provider_completed"
-    };
-
-    if let Some(object) = payload.as_object_mut() {
-        object.insert("obs_ref".to_string(), json!(&outcome.observation_id));
-        object.insert(
-            "trace_event".to_string(),
-            json!(TraceEvent::sealed(
-                outcome.observation_id.clone(),
-                event_type.to_string(),
-                Some(outcome.envelope.provider.clone()),
-                json!({
-                    "provider": &outcome.envelope.provider,
-                    "action": &outcome.envelope.action,
-                    "decision": decision,
-                    "execution_status": execution_status,
-                    "side_effect_executed": side_effect_executed,
-                    "simulated": simulated
-                }),
-                None,
-            )),
-        );
-    }
-    payload
-}
-
-#[derive(Debug, Default)]
-struct ResolvedProviderArgumentPaths {
-    input: Option<PathBuf>,
-    trace: Option<PathBuf>,
-    report: Option<PathBuf>,
-}
-
-fn resolve_session_provider_argument_paths(
-    session_manifest: &SessionManifest,
-    call: &mut ProviderCall,
-) -> anyhow::Result<ResolvedProviderArgumentPaths> {
-    let Some(arguments) = call.arguments.as_object_mut() else {
-        return Ok(ResolvedProviderArgumentPaths::default());
-    };
-    let selected_root = arguments
-        .get("root")
-        .and_then(Value::as_str)
-        .and_then(|root_name| {
-            session_manifest
-                .roots
-                .iter()
-                .find(|root| root.name == root_name)
-                .map(|root| root.path.clone())
-        });
-    let implicit_root = if selected_root.is_none() && session_manifest.roots.len() == 1 {
-        Some(session_manifest.roots[0].path.clone())
-    } else {
-        None
-    };
-    let scoped_root = selected_root
-        .or(implicit_root)
-        .map(|root| absolute_cli_path(&root))
-        .transpose()?;
-
-    let input = resolve_session_provider_path_field(arguments, "input_path", scoped_root.as_ref())?;
-    let trace = resolve_session_provider_path_field(arguments, "trace_path", scoped_root.as_ref())?;
-    let report =
-        resolve_session_provider_path_field(arguments, "report_path", scoped_root.as_ref())?;
-
-    Ok(ResolvedProviderArgumentPaths {
-        input,
-        trace,
-        report,
-    })
-}
-
-fn resolve_session_provider_path_field(
-    arguments: &mut serde_json::Map<String, Value>,
-    field: &str,
-    scoped_root: Option<&PathBuf>,
-) -> anyhow::Result<Option<PathBuf>> {
-    let Some(path_text) = arguments
-        .get(field)
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-    else {
-        return Ok(None);
-    };
-    let path = PathBuf::from(path_text);
-    let resolved = if path.is_absolute() {
-        path
-    } else {
-        let Some(scoped_root) = scoped_root else {
-            anyhow::bail!(
-                "session relative provider path {field} requires a scoped --root or exactly one session root"
-            );
-        };
-        scoped_root.join(path)
-    };
-    arguments.insert(
-        field.to_string(),
-        Value::String(resolved.to_string_lossy().into_owned()),
-    );
-    Ok(Some(resolved))
-}
-
-fn bind_cli_file_digests(call: &mut ProviderCall) -> anyhow::Result<()> {
-    let Some(arguments) = call.arguments.as_object_mut() else {
-        return Ok(());
-    };
-    for &field in provider_path_digest_fields() {
-        let Some(path) = arguments.get(field).and_then(Value::as_str) else {
-            continue;
-        };
-        let digest = digest_file(Path::new(path))?;
-        arguments.insert(format!("{field}_sha256"), Value::String(digest));
-    }
-    Ok(())
-}
-
-fn verify_cli_file_digests(call: &ProviderCall) -> anyhow::Result<()> {
-    let Some(arguments) = call.arguments.as_object() else {
-        return Ok(());
-    };
-    for &field in provider_path_digest_fields() {
-        let Some(path) = arguments.get(field).and_then(Value::as_str) else {
-            continue;
-        };
-        let digest_key = format!("{field}_sha256");
-        let Some(expected) = arguments.get(&digest_key).and_then(Value::as_str) else {
-            continue;
-        };
-        let actual = digest_file(Path::new(path))?;
-        if actual != expected {
-            anyhow::bail!("{field} changed after approval binding");
-        }
-    }
-    Ok(())
-}
-
-fn provider_path_digest_fields() -> &'static [&'static str] {
-    &["input_path", "trace_path", "report_path"]
-}
-
-fn digest_file(path: &Path) -> anyhow::Result<String> {
-    let bytes = fs::read(path)?;
-    Ok(hex_sha256(&bytes))
-}
-
-fn provider_action(provider: &str) -> &str {
-    provider.rsplit('.').next().unwrap_or("call")
-}
-
-fn attach_matching_approval(call: &mut ProviderCall) -> anyhow::Result<()> {
-    let binding = cli_approval_binding(call)?;
-    if let Some(approval) = read_all_approvals()?
-        .into_iter()
-        .find(|approval| approval.binding == binding && approval_is_usable_for_cli(approval))
-    {
-        call.approval_id = Some(approval.approval_id);
-    }
-    Ok(())
-}
-
-fn approval_is_usable_for_cli(approval: &ApprovalRecord) -> bool {
-    approval.state == ApprovalState::Approved
-        && approval
-            .expires_at
-            .is_none_or(|expires_at| expires_at > OffsetDateTime::now_utc())
-}
-
-fn persist_consumed_cli_approval(
-    call: &ProviderCall,
-    binding: &ApprovalBinding,
+fn run_demo_command(
+    scenario: Option<String>,
+    all: bool,
+    output: Option<PathBuf>,
+    upstream: Option<String>,
+    port: u16,
+    json_output: bool,
 ) -> anyhow::Result<()> {
-    let Some(approval_id) = call.approval_id.as_deref() else {
-        return Ok(());
-    };
-    let mut approval = read_approval(approval_id)?;
-    if approval.state == ApprovalState::Approved {
-        approval.consume_once(binding)?;
-        write_approval(&approval)?;
+    if scenario.is_some() && all {
+        anyhow::bail!("use either --scenario or --all, not both");
     }
-    Ok(())
+    if let Some(scenario) = scenario {
+        let output =
+            output.ok_or_else(|| anyhow::anyhow!("--output is required with --scenario"))?;
+        let root = find_workspace_root(env::current_dir()?)?;
+        let result = run_demo_scenario_real(&root, &scenario, &output)?;
+        if json_output {
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        } else {
+            println!(
+                "wrote demo scenario {} to {}",
+                scenario,
+                result["output_dir"].as_str().unwrap_or("<unknown>")
+            );
+        }
+        return Ok(());
+    }
+    if all {
+        let output = output.unwrap_or_else(|| PathBuf::from("artifacts/demo"));
+        let root = find_workspace_root(env::current_dir()?)?;
+        let output_path = resolve_workspace_output_path(&root, &output, "demo output")?;
+        fs::create_dir_all(&output_path)?;
+        let mut results = Vec::new();
+        for scenario in CONTEST_SCENARIOS {
+            results.push(run_demo_scenario_real(
+                &root,
+                scenario,
+                &output.join(scenario),
+            )?);
+        }
+        let html = server::render_static_console(&output_path)?;
+        fs::write(output_path.join("reviewer-console.html"), html)?;
+        if json_output {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "scenarios": results,
+                    "reviewer_console": output_path.join("reviewer-console.html").to_string_lossy(),
+                    "side_effect_executed": true
+                }))?
+            );
+        } else {
+            println!("wrote demo suite to {}", output_path.to_string_lossy());
+        }
+        return Ok(());
+    }
+    run_demo_interactive(upstream, port, json_output)
 }
 
-fn cli_approval_binding(call: &ProviderCall) -> anyhow::Result<ApprovalBinding> {
-    Ok(ApprovalBinding {
-        session_id: call.session_id.clone(),
-        provider: call.provider.clone(),
-        action: call.action.clone(),
-        argument_hash: hex_sha256(&serde_json::to_vec(&call.arguments)?),
-        authz_id: call.authz_id.clone(),
-        actor_id: call.actor_id.clone(),
-    })
+fn run_demo_interactive(
+    upstream: Option<String>,
+    port: u16,
+    json_output: bool,
+) -> anyhow::Result<()> {
+    let root = find_workspace_root(env::current_dir()?)?;
+    let state_dir = root.join(".runwarden");
+    fs::create_dir_all(&state_dir)?;
+    let trace_path = root.join("artifacts/llm-proxy/trace.jsonl");
+    if let Some(parent) = trace_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::remove_file(&trace_path).ok();
+    fs::remove_file(state_dir.join("events.jsonl")).ok();
+
+    spawn_llm_proxy_thread(upstream, trace_path.clone());
+
+    let (tx, _rx) = tokio::sync::broadcast::channel::<server::DemoEvent>(256);
+    server::watch_jsonl_events(trace_path.clone(), "model_call", tx.clone());
+    server::watch_jsonl_events(state_dir.join("events.jsonl"), "provider_call", tx.clone());
+
+    let state = server::AppState {
+        event_tx: tx,
+        state_dir,
+        trace_path,
+    };
+    server::run_console_server("127.0.0.1", port, state, json_output)
+}
+
+fn spawn_llm_proxy_thread(upstream: Option<String>, trace_path: PathBuf) {
+    // Note: proxy port 8787 is fixed to match opencode.runwarden-only.json
+    // baseURL. If port 8787 is in use, add a --proxy-port flag.
+    let cli = runwarden_llm_proxy::Cli {
+        bind: "127.0.0.1".to_string(),
+        port: 8787,
+        upstream: upstream.unwrap_or_else(|| "https://api.opencode.ai/v1".to_string()),
+        api_key_env: "RUNWARDEN_LLM_API_KEY".to_string(),
+        trace: trace_path.to_string_lossy().to_string(),
+        max_body_bytes: 8 * 1024 * 1024,
+    };
+    std::thread::spawn(move || {
+        if let Err(err) = runwarden_llm_proxy::serve(cli) {
+            eprintln!("llm proxy error: {err}");
+        }
+    });
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ProviderCallResult {
+    provider: String,
+    action: String,
+    decision: String,
+    execution_status: String,
+    side_effect_executed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    obs_ref: Option<String>,
+    arguments: Value,
+    output: Value,
+    trace_event: Value,
+}
+
+fn run_demo_scenario_real(root: &Path, scenario: &str, output: &Path) -> anyhow::Result<Value> {
+    ensure_contest_scenario(scenario)?;
+    let scenario_path = root.join("scenarios").join(scenario);
+    ensure_required_scenario_files(&scenario_path)?;
+    let output_path = resolve_workspace_output_path(root, output, "demo output")?;
+    fs::create_dir_all(&output_path)?;
+
+    let manifest_path = scenario_path.join("manifests/assessment.toml");
+    let manifest_body = fs::read_to_string(&manifest_path)?;
+    let assessment = AssessmentManifest::from_toml_str(&manifest_body)?;
+    let assessment = assessment_with_manifest_relative_roots(&manifest_path, assessment)?;
+    let session = SessionManifest::from_assessment(scenario.to_string(), &assessment);
+    let inputs = read_demo_provider_calls(&scenario_path.join("expected/provider-calls.json"))?;
+    let sandbox_root = tools::sandbox_root_from();
+    let mut previous_hash = None;
+    let mut trace_events = Vec::new();
+    let mut results = Vec::new();
+
+    for input in &inputs {
+        let mut result =
+            execute_provider_call_real(&session, input, &scenario_path, &sandbox_root)?;
+        let event_type = match result.decision.as_str() {
+            "allowed" if result.execution_status == "simulated" => "provider_simulated_replay",
+            "allowed" => "provider_completed",
+            "denied" => "provider_denied",
+            "requires_review" => "provider_approval_pending",
+            _ => "provider_failed",
+        };
+        let obs_id = input.obs_ref.clone().unwrap_or_else(|| {
+            result
+                .obs_ref
+                .clone()
+                .unwrap_or_else(|| "obs_demo".to_string())
+        });
+        result.obs_ref = Some(obs_id.clone());
+        let trace_event = TraceEvent::sealed(
+            obs_id,
+            event_type.to_string(),
+            Some(result.provider.clone()),
+            json!({
+                "scenario": scenario,
+                "provider": &result.provider,
+                "action": &result.action,
+                "decision": &result.decision,
+                "execution_status": &result.execution_status,
+                "reason": &result.reason,
+                "error_kind": &result.error_kind,
+                "arguments": &result.arguments,
+                "side_effect_executed": result.side_effect_executed,
+                "simulated": result.execution_status == "simulated"
+            }),
+            previous_hash,
+        );
+        previous_hash = Some(trace_event.event_hash.clone());
+        result.trace_event = serde_json::to_value(&trace_event)?;
+        trace_events.push(trace_event);
+        results.push(result);
+    }
+
+    let expected_denials = read_json_value(&scenario_path.join("expected/denials.json"))?;
+    validate_denials(&results, &expected_denials)?;
+    let report = read_report(&scenario_path.join("expected/report.json"))?;
+    let baseline = read_json_value(&scenario_path.join("expected/eval-baseline.json"))?;
+    let trace_verification = verify_trace_events(trace_events.clone());
+    let lint = lint_report_against_trace(&report, &trace_events);
+    if !lint.ok {
+        anyhow::bail!("scenario report does not lint against generated trace");
+    }
+    let metrics = evaluate_report_assurance(
+        &report,
+        &trace_events,
+        trace_events.iter().map(|event| event.obs_id.clone()),
+        EvalThresholds::strict(),
+    );
+    let provider_calls_value = serde_json::to_value(&results)?;
+    let webui = json!({
+        "scenario": scenario,
+        "trace": trace_events,
+        "provider_calls": provider_calls_value,
+        "denials": expected_denials,
+        "report": report,
+        "metrics": metrics.metrics,
+        "trace_verification": trace_verification,
+        "lint": lint,
+        "expected": baseline,
+        "side_effect_executed": results.iter().any(|result| result.side_effect_executed)
+    });
+
+    write_json_file(&output_path.join("trace.json"), &webui["trace"])?;
+    write_json_file(
+        &output_path.join("provider-calls.json"),
+        &webui["provider_calls"],
+    )?;
+    write_json_file(&output_path.join("denials.json"), &webui["denials"])?;
+    write_json_file(&output_path.join("report.json"), &webui["report"])?;
+    write_json_file(&output_path.join("metrics.json"), &webui["metrics"])?;
+    write_json_file(&output_path.join("webui.json"), &webui)?;
+
+    Ok(json!({
+        "scenario": scenario,
+        "output_dir": output_path.to_string_lossy(),
+        "provider_call_count": results.len(),
+        "denial_count": results.iter().filter(|result| result.decision == "denied").count(),
+        "requires_review_count": results.iter().filter(|result| result.decision == "requires_review").count(),
+        "side_effect_executed": webui["side_effect_executed"],
+    }))
+}
+
+fn execute_provider_call_real(
+    session: &SessionManifest,
+    input: &DemoProviderCall,
+    scenario_path: &Path,
+    sandbox_root: &Path,
+) -> anyhow::Result<ProviderCallResult> {
+    let call = ProviderCall {
+        session_id: session.session_id.clone(),
+        provider: input.provider.clone(),
+        action: input.action.clone(),
+        arguments: input.arguments.clone(),
+        actor_id: session.actor_id.clone(),
+        authz_id: session.authz_id.clone(),
+        approval_id: None,
+    };
+    let mut enforcer = KernelEnforcer::new(full_provider_registry(), session.to_kernel_policy());
+    let outcome = enforcer.evaluate_call(&call);
+    let obs_ref = Some(outcome.observation_id.clone());
+    match outcome.decision {
+        PolicyDecision::Denied => Ok(blocked_provider_result(input, &outcome, "denied", obs_ref)),
+        PolicyDecision::RequiresReview => Ok(blocked_provider_result(
+            input,
+            &outcome,
+            "requires_review",
+            obs_ref,
+        )),
+        PolicyDecision::Allowed => {
+            let executed = if provider_is_external(&input.provider) {
+                call_external_provider(
+                    &input.provider,
+                    &input.action,
+                    &input.arguments,
+                    sandbox_root,
+                )
+            } else {
+                let input_path = input
+                    .arguments
+                    .get("input_path")
+                    .and_then(Value::as_str)
+                    .map(|path| scenario_path.join(path));
+                call_first_party_provider(&input.provider, input_path, None, None, None)?
+            };
+            Ok(ProviderCallResult {
+                provider: input.provider.clone(),
+                action: input.action.clone(),
+                decision: "allowed".to_string(),
+                execution_status: executed
+                    .get("execution_status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("completed")
+                    .to_string(),
+                side_effect_executed: executed
+                    .get("side_effect_executed")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                error_kind: None,
+                reason: Some(outcome.envelope.reason.clone()),
+                obs_ref,
+                arguments: input.arguments.clone(),
+                output: executed.get("output").cloned().unwrap_or(Value::Null),
+                trace_event: Value::Null,
+            })
+        }
+    }
+}
+
+fn blocked_provider_result(
+    input: &DemoProviderCall,
+    outcome: &ProviderOutcome,
+    decision: &str,
+    obs_ref: Option<String>,
+) -> ProviderCallResult {
+    ProviderCallResult {
+        provider: input.provider.clone(),
+        action: input.action.clone(),
+        decision: decision.to_string(),
+        execution_status: "not_executed".to_string(),
+        side_effect_executed: false,
+        error_kind: outcome
+            .envelope
+            .error_kind
+            .as_ref()
+            .and_then(|kind| serde_json::to_value(kind).ok())
+            .and_then(|value| value.as_str().map(ToString::to_string)),
+        reason: Some(outcome.envelope.reason.clone()),
+        obs_ref,
+        arguments: input.arguments.clone(),
+        output: Value::Null,
+        trace_event: Value::Null,
+    }
+}
+
+fn validate_denials(results: &[ProviderCallResult], expected: &Value) -> anyhow::Result<()> {
+    let expected_arr = expected
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("expected denials must be array"))?;
+    for expected_denial in expected_arr {
+        let provider = expected_denial
+            .get("provider")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("expected denial missing provider"))?;
+        let error_kind = expected_denial
+            .get("error_kind")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("expected denial missing error_kind"))?;
+        let found = results.iter().any(|result| {
+            result.provider == provider
+                && result.decision == "denied"
+                && result.error_kind.as_deref() == Some(error_kind)
+        });
+        if !found {
+            anyhow::bail!("denial assertion failed: {provider} / {error_kind} not found");
+        }
+    }
+    Ok(())
 }
 
 fn provider_is_external(provider: &str) -> bool {
@@ -1278,6 +805,9 @@ fn call_external_provider(
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+// Note: execution path only reads provider/action/arguments; the remaining
+// fields are used by validate_scenario_expectations to assert results match
+// expected/*.json fixtures. serde ignores extras on the execution path.
 struct DemoProviderCall {
     provider: String,
     action: String,
@@ -1293,65 +823,6 @@ struct DemoProviderCall {
     obs_ref: Option<String>,
     #[serde(default)]
     arguments: Value,
-}
-
-fn run_demo_scenario(root: &Path, scenario: &str, output: &Path) -> anyhow::Result<Value> {
-    ensure_contest_scenario(scenario)?;
-    let scenario_path = root.join("scenarios").join(scenario);
-    ensure_required_scenario_files(&scenario_path)?;
-    let output_path = resolve_workspace_output_path(root, output, "demo output")?;
-    fs::create_dir_all(&output_path)?;
-
-    let provider_calls =
-        read_demo_provider_calls(&scenario_path.join("expected/provider-calls.json"))?;
-    let denials = read_json_value(&scenario_path.join("expected/denials.json"))?;
-    let report = read_report(&scenario_path.join("expected/report.json"))?;
-    let baseline = read_json_value(&scenario_path.join("expected/eval-baseline.json"))?;
-    let trace_events = trace_events_for_scenario(scenario, &scenario_path, &provider_calls)?;
-    let trace_verification = verify_trace_events(trace_events.clone());
-    let lint = lint_report_against_trace(&report, &trace_events);
-    if !lint.ok {
-        anyhow::bail!("scenario report does not lint against generated trace");
-    }
-
-    let metrics = evaluate_report_assurance(
-        &report,
-        &trace_events,
-        trace_events.iter().map(|event| event.obs_id.clone()),
-        EvalThresholds::strict(),
-    );
-    let webui = json!({
-        "scenario": scenario,
-        "trace": trace_events,
-        "provider_calls": provider_calls,
-        "denials": denials,
-        "report": report,
-        "metrics": metrics.metrics,
-        "trace_verification": trace_verification,
-        "lint": lint,
-        "expected": baseline,
-        "side_effect_executed": false
-    });
-
-    write_json_file(&output_path.join("trace.json"), &webui["trace"])?;
-    write_json_file(
-        &output_path.join("provider-calls.json"),
-        &webui["provider_calls"],
-    )?;
-    write_json_file(&output_path.join("denials.json"), &webui["denials"])?;
-    write_json_file(&output_path.join("report.json"), &webui["report"])?;
-    write_json_file(&output_path.join("metrics.json"), &webui["metrics"])?;
-    write_json_file(&output_path.join("webui.json"), &webui)?;
-
-    Ok(json!({
-        "scenario": scenario,
-        "output_dir": output_path.to_string_lossy(),
-        "trace_path": output_path.join("trace.json").to_string_lossy(),
-        "report_path": output_path.join("report.json").to_string_lossy(),
-        "provider_call_count": provider_calls.len(),
-        "denial_count": denials.as_array().map_or(0, Vec::len),
-        "side_effect_executed": false
-    }))
 }
 
 fn evaluate_scenario_corpora(root: &Path, suite: &Path) -> anyhow::Result<Value> {
@@ -1600,382 +1071,6 @@ fn render_scenario_suite_report(
     }
 }
 
-fn render_static_demo_console(input: &Path) -> anyhow::Result<String> {
-    let scenario_files = collect_demo_webui_files(input)?;
-
-    let mut html = String::from(
-        "<!doctype html><meta charset=\"utf-8\"><title>Runwarden Reviewer Console</title><main><h1>Runwarden Reviewer Console</h1>",
-    );
-    if scenario_files.is_empty() {
-        html.push_str("<p>No demo JSON loaded.</p>");
-    }
-    let mut timeline = Vec::new();
-    let mut review_queue = Vec::new();
-    for file in scenario_files {
-        let value = read_json_value(&file)?;
-        let scenario = value["scenario"].as_str().unwrap_or("unknown");
-        let provider_count = value["provider_calls"].as_array().map_or(0, Vec::len);
-        let denial_count = value["denials"].as_array().map_or(0, Vec::len);
-        let trace_status = match value
-            .get("trace_verification")
-            .and_then(|verification| verification.get("verified"))
-            .and_then(Value::as_bool)
-        {
-            Some(true) => "verified",
-            Some(false) => "tampered",
-            None => "missing",
-        };
-        html.push_str(&format!(
-            "<section><h2>{}</h2><p>Provider calls: {}</p><p>Denials: {}</p><p>Trace: {}</p></section>",
-            html_escape(scenario),
-            provider_count,
-            denial_count,
-            trace_status
-        ));
-        for call in value["provider_calls"].as_array().into_iter().flatten() {
-            let event = render_static_provider_event(scenario, call);
-            if call["decision"].as_str() == Some("requires_review") {
-                review_queue.push(event.clone());
-            }
-            timeline.push(event);
-        }
-    }
-    html.push_str("<section aria-label=\"Security event timeline\"><h2>Security Events</h2>");
-    if timeline.is_empty() {
-        html.push_str("<p>No security events.</p>");
-    } else {
-        html.push_str(&timeline.join(""));
-    }
-    html.push_str("</section>");
-    html.push_str("<section aria-label=\"Pending review queue\"><h2>Review Queue</h2>");
-    if review_queue.is_empty() {
-        html.push_str("<p>No pending reviews.</p>");
-    } else {
-        html.push_str(&review_queue.join(""));
-    }
-    html.push_str("</section>");
-    html.push_str("</main>");
-    Ok(html)
-}
-
-fn render_static_provider_event(scenario: &str, call: &Value) -> String {
-    let decision = call["decision"].as_str().unwrap_or("unknown");
-    let mut html = format!(
-        "<article class=\"event event-{}\"><h3>{}</h3><dl>{}{}{}{}{}{}{}{}</dl>",
-        html_escape(decision),
-        html_escape(decision),
-        static_fact("Scenario", scenario),
-        static_fact("Provider", call["provider"].as_str().unwrap_or("unknown")),
-        static_fact("Action", call["action"].as_str().unwrap_or("unknown")),
-        static_fact(
-            "Status",
-            call["execution_status"].as_str().unwrap_or("unknown")
-        ),
-        call["error_kind"]
-            .as_str()
-            .map(|value| static_fact("Error", value))
-            .unwrap_or_default(),
-        call["obs_ref"]
-            .as_str()
-            .map(|value| static_fact("Obs", value))
-            .unwrap_or_default(),
-        call["side_effect_executed"]
-            .as_bool()
-            .map(|value| static_fact("Side effect", &value.to_string()))
-            .unwrap_or_default(),
-        ""
-    );
-    if let Some(reason) = call["reason"].as_str() {
-        html.push_str(&format!("<p>{}</p>", html_escape(reason)));
-    }
-    html.push_str("</article>");
-    html
-}
-
-fn static_fact(label: &str, value: &str) -> String {
-    format!(
-        "<div><dt>{}</dt><dd>{}</dd></div>",
-        html_escape(label),
-        html_escape(value)
-    )
-}
-
-fn collect_demo_webui_files(input: &Path) -> anyhow::Result<Vec<PathBuf>> {
-    let mut scenario_files = Vec::new();
-    if input.is_file() {
-        scenario_files.push(input.to_path_buf());
-    } else if input.exists() {
-        let direct = input.join("webui.json");
-        if direct.exists() {
-            scenario_files.push(direct);
-        }
-        for entry in fs::read_dir(input)? {
-            let entry = entry?;
-            let candidate = entry.path().join("webui.json");
-            if candidate.exists() {
-                scenario_files.push(candidate);
-            }
-        }
-    }
-    scenario_files.sort();
-    scenario_files.dedup();
-    Ok(scenario_files)
-}
-
-/// Inline HTML+JS injected into the live reviewer console so the browser
-/// consumes the `/events` SSE stream and renders tool decisions + model-filter
-/// alerts in real time. Presentation only (no policy logic).
-const LIVE_ALERTS_HTML: &str = r#"<section id="live-alerts"><h3>Live alerts (tool + model)</h3><ul id="live-events"></ul></section>
-<script>
-const es = new EventSource('/events');
-const list = document.getElementById('live-events');
-function appendLiveEvent(text) {
-  const item = document.createElement('li');
-  item.textContent = text;
-  list.appendChild(item);
-}
-es.addEventListener('provider_call', e => { const d = JSON.parse(e.data); appendLiveEvent(`tool ${d.provider} -> ${d.decision}`); });
-es.addEventListener('model_call', e => { const d = JSON.parse(e.data); const p = d.payload || d; appendLiveEvent(`model ${p.model} -> ${p.decision}`); });
-es.addEventListener('replay_complete', () => appendLiveEvent('(replay complete)'));
-</script>
-"#;
-
-fn run_live_demo_server(
-    bind: &str,
-    port: u16,
-    demo_path: &Path,
-    llm_trace: Option<&Path>,
-    json: bool,
-) -> anyhow::Result<()> {
-    let mut replay_events = load_live_replay_events(demo_path)?;
-    let provider_call_count = replay_events.len();
-    let mut model_call_count = 0;
-    if let Some(trace) = llm_trace {
-        let model_events = load_llm_trace_events(trace)?;
-        model_call_count = model_events.len();
-        replay_events.extend(model_events);
-    }
-    let event_count = replay_events.len();
-    let base_html = render_static_demo_console(demo_path)?;
-    let html = format!("{base_html}{LIVE_ALERTS_HTML}");
-    let listener = TcpListener::bind((bind, port))?;
-    let listen_addr = listener.local_addr()?;
-    let result = json!({
-        "mode": "live_demo_replay",
-        "listen_addr": listen_addr.to_string(),
-        "events_url": format!("http://{listen_addr}/events"),
-        "demo": demo_path.to_string_lossy(),
-        "provider_call_count": provider_call_count,
-        "model_call_count": model_call_count,
-        "event_count": event_count,
-        "local_api_url": Value::Null,
-        "side_effect_executed": false
-    });
-    if json {
-        println!("{}", serde_json::to_string(&result)?);
-    } else {
-        println!("serve live demo replay http://{listen_addr}/events");
-    }
-    std::io::stdout().flush()?;
-
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => serve_live_replay_request(
-                stream,
-                &html,
-                &replay_events,
-                provider_call_count,
-                model_call_count,
-            )?,
-            Err(err) => eprintln!("live replay connection failed: {err}"),
-        }
-    }
-    Ok(())
-}
-
-fn load_live_replay_events(demo_path: &Path) -> anyhow::Result<Vec<Value>> {
-    let files = collect_demo_webui_files(demo_path)?;
-    if files.is_empty() {
-        anyhow::bail!(
-            "live demo data is missing: expected webui.json under {}",
-            demo_path.display()
-        );
-    }
-
-    let mut events = Vec::new();
-    for file in files {
-        let value = read_json_value(&file)?;
-        let scenario = value["scenario"].as_str().unwrap_or("unknown");
-        let provider_calls = value["provider_calls"]
-            .as_array()
-            .ok_or_else(|| anyhow::anyhow!("{} is missing provider_calls array", file.display()))?;
-        for (index, call) in provider_calls.iter().enumerate() {
-            let mut event = call.as_object().cloned().unwrap_or_default();
-            event.insert("scenario".to_string(), json!(scenario));
-            event.insert("sequence".to_string(), json!(index + 1));
-            event.insert("kind".to_string(), json!("provider_call"));
-            events.push(Value::Object(event));
-        }
-    }
-
-    if events.is_empty() {
-        anyhow::bail!(
-            "live demo data is missing provider-call events under {}",
-            demo_path.display()
-        );
-    }
-    Ok(events)
-}
-
-/// Load model-call events from an LLM-proxy trace JSONL (one `model_call`
-/// event per line) so the live dashboard can stream model-filter alerts
-/// alongside tool decisions.
-fn load_llm_trace_events(trace_path: &Path) -> anyhow::Result<Vec<Value>> {
-    let contents = fs::read_to_string(trace_path).map_err(|err| {
-        anyhow::anyhow!("failed to read llm trace {}: {err}", trace_path.display())
-    })?;
-    let mut events = Vec::new();
-    for (index, line) in contents.lines().enumerate() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let mut event: serde_json::Map<String, Value> = match serde_json::from_str(line) {
-            Ok(Value::Object(map)) => map,
-            _ => continue,
-        };
-        event.insert("kind".to_string(), json!("model_call"));
-        event.insert("sequence".to_string(), json!(index + 1));
-        events.push(Value::Object(event));
-    }
-    Ok(events)
-}
-
-fn serve_live_replay_request(
-    mut stream: TcpStream,
-    html: &str,
-    replay_events: &[Value],
-    provider_call_count: usize,
-    model_call_count: usize,
-) -> anyhow::Result<()> {
-    let mut buffer = [0u8; 8192];
-    let bytes_read = stream.read(&mut buffer)?;
-    let request = String::from_utf8_lossy(&buffer[..bytes_read]);
-    let path = request
-        .lines()
-        .next()
-        .and_then(|line| line.split_whitespace().nth(1))
-        .unwrap_or("/");
-
-    match path {
-        "/" | "/index.html" => write_http_response(
-            &mut stream,
-            "200 OK",
-            "text/html; charset=utf-8",
-            html.as_bytes(),
-            &[],
-        )?,
-        "/events" => {
-            let body = sse_replay_body(replay_events, provider_call_count, model_call_count)?;
-            write_http_response(
-                &mut stream,
-                "200 OK",
-                "text/event-stream; charset=utf-8",
-                body.as_bytes(),
-                &[("Cache-Control", "no-cache")],
-            )?;
-        }
-        "/healthz" => write_http_response(
-            &mut stream,
-            "200 OK",
-            "application/json",
-            br#"{"ok":true}"#,
-            &[],
-        )?,
-        _ => write_http_response(
-            &mut stream,
-            "404 Not Found",
-            "text/plain; charset=utf-8",
-            b"not found",
-            &[],
-        )?,
-    }
-    Ok(())
-}
-
-fn sse_replay_body(
-    replay_events: &[Value],
-    provider_call_count: usize,
-    model_call_count: usize,
-) -> anyhow::Result<String> {
-    let mut body = String::new();
-    for (index, event) in replay_events.iter().enumerate() {
-        let event_id = event
-            .get("obs_ref")
-            .or_else(|| event.get("obs_id"))
-            .and_then(Value::as_str)
-            .map(sse_single_line)
-            .unwrap_or_else(|| format!("event-{}", index + 1));
-        let kind = event
-            .get("kind")
-            .and_then(Value::as_str)
-            .and_then(sse_event_kind)
-            .unwrap_or("provider_call");
-        body.push_str(&format!("id: {event_id}\n"));
-        body.push_str(&format!("event: {kind}\n"));
-        body.push_str("data: ");
-        body.push_str(&serde_json::to_string(event)?);
-        body.push_str("\n\n");
-    }
-    body.push_str("event: replay_complete\n");
-    body.push_str("data: ");
-    body.push_str(&serde_json::to_string(&json!({
-        "kind": "replay_complete",
-        "event_count": replay_events.len(),
-        "provider_call_count": provider_call_count,
-        "model_call_count": model_call_count
-    }))?);
-    body.push_str("\n\n");
-    Ok(body)
-}
-
-fn sse_single_line(value: &str) -> String {
-    value
-        .chars()
-        .filter(|ch| !matches!(ch, '\r' | '\n'))
-        .collect()
-}
-
-fn sse_event_kind(value: &str) -> Option<&'static str> {
-    match value {
-        "provider_call" => Some("provider_call"),
-        "model_call" => Some("model_call"),
-        "replay_complete" => Some("replay_complete"),
-        _ => None,
-    }
-}
-
-fn write_http_response(
-    stream: &mut TcpStream,
-    status: &str,
-    content_type: &str,
-    body: &[u8],
-    headers: &[(&str, &str)],
-) -> anyhow::Result<()> {
-    write!(
-        stream,
-        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n",
-        body.len()
-    )?;
-    for (name, value) in headers {
-        write!(stream, "{name}: {value}\r\n")?;
-    }
-    stream.write_all(b"\r\n")?;
-    stream.write_all(body)?;
-    stream.flush()?;
-    Ok(())
-}
-
 fn ensure_contest_scenario(scenario: &str) -> anyhow::Result<()> {
     if CONTEST_SCENARIOS.contains(&scenario) {
         Ok(())
@@ -2125,93 +1220,6 @@ fn absolute_cli_path(path: &Path) -> anyhow::Result<PathBuf> {
     }
 }
 
-fn write_session(session: &SessionManifest) -> anyhow::Result<()> {
-    let dir = PathBuf::from(".runwarden").join("sessions");
-    fs::create_dir_all(&dir)?;
-    let path = dir.join(format!("{}.json", safe_session_id(&session.session_id)?));
-    fs::write(path, serde_json::to_string_pretty(session)?)?;
-    Ok(())
-}
-
-fn read_session(session_id: &str) -> anyhow::Result<SessionManifest> {
-    let path = PathBuf::from(".runwarden")
-        .join("sessions")
-        .join(format!("{}.json", safe_session_id(session_id)?));
-    let body = fs::read_to_string(&path)?;
-    Ok(serde_json::from_str(&body)?)
-}
-
-fn safe_session_id(session_id: &str) -> anyhow::Result<&str> {
-    if session_id.is_empty()
-        || !session_id
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
-    {
-        anyhow::bail!("invalid session id: {session_id}");
-    }
-    Ok(session_id)
-}
-
-fn approvals_dir() -> PathBuf {
-    PathBuf::from(".runwarden").join("approvals")
-}
-
-fn approval_path(approval_id: &str) -> anyhow::Result<PathBuf> {
-    Ok(approvals_dir().join(format!("{}.json", safe_record_id(approval_id)?)))
-}
-
-fn read_all_approvals() -> anyhow::Result<Vec<ApprovalRecord>> {
-    let dir = approvals_dir();
-    if !dir.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut approvals = Vec::new();
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        if entry.path().extension().and_then(|ext| ext.to_str()) != Some("json") {
-            continue;
-        }
-        let body = fs::read_to_string(entry.path())?;
-        approvals.push(serde_json::from_str(&body)?);
-    }
-    approvals.sort_by(|left: &ApprovalRecord, right: &ApprovalRecord| {
-        left.approval_id.cmp(&right.approval_id)
-    });
-    Ok(approvals)
-}
-
-fn read_approval(approval_id: &str) -> anyhow::Result<ApprovalRecord> {
-    let body = fs::read_to_string(approval_path(approval_id)?)?;
-    Ok(serde_json::from_str(&body)?)
-}
-
-fn write_approval(approval: &ApprovalRecord) -> anyhow::Result<()> {
-    let dir = approvals_dir();
-    fs::create_dir_all(&dir)?;
-    fs::write(
-        dir.join(format!("{}.json", safe_record_id(&approval.approval_id)?)),
-        serde_json::to_string_pretty(approval)?,
-    )?;
-    Ok(())
-}
-
-fn argument_hash_from_json(arguments: &str) -> anyhow::Result<String> {
-    let value: Value = serde_json::from_str(arguments)?;
-    Ok(hex_sha256(&serde_json::to_vec(&value)?))
-}
-
-fn safe_record_id(record_id: &str) -> anyhow::Result<&str> {
-    if record_id.is_empty()
-        || !record_id
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
-    {
-        anyhow::bail!("invalid record id: {record_id}");
-    }
-    Ok(record_id)
-}
-
 fn resolve_workspace_output_path(
     root: &Path,
     requested: &Path,
@@ -2303,12 +1311,10 @@ fn verify_trace_events(events: Vec<TraceEvent>) -> Value {
     }
 }
 
-fn run_strict_check() -> anyhow::Result<()> {
+fn run_strict_check(json_output: bool) -> anyhow::Result<()> {
     let root = find_workspace_root(env::current_dir()?)?;
     for path in [
         "Cargo.toml",
-        "package.json",
-        "pnpm-workspace.yaml",
         "README.md",
         "docs/README.md",
         "docs/reference/cli.md",
@@ -2317,7 +1323,6 @@ fn run_strict_check() -> anyhow::Result<()> {
         "docs/reference/provider-integration.md",
         "docs/reference/evidence-and-accountability.md",
         "docs/reference/webui-review-console.md",
-        "packages/webui/src/index.ts",
         "scripts/pr_fast_gate.sh",
         "scripts/release_gate_local.sh",
     ] {
@@ -2332,8 +1337,8 @@ fn run_strict_check() -> anyhow::Result<()> {
 
     let local_gate = fs::read_to_string(root.join("scripts/release_gate_local.sh"))?;
     for command in [
-        "runwarden eval scenarios --json",
-        "runwarden demo run --scenario prompt-injection-file-exfil",
+        "runwarden check --strict",
+        "runwarden demo --all",
         "runwarden report render --scenario-suite scenarios",
     ] {
         if !local_gate.contains(command) {
@@ -2346,21 +1351,24 @@ fn run_strict_check() -> anyhow::Result<()> {
         anyhow::bail!("strict check failed: scenario eval did not pass");
     }
 
-    println!("runwarden strict check passed");
-    println!("- contest scenario corpus present");
-    println!("- lean MCP/CLI reference docs present");
-    println!("- static WebUI package present");
-    println!("- contest gate scripts present");
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&scenario_eval)?);
+    } else {
+        println!("runwarden strict check passed");
+    }
     Ok(())
 }
 
 fn find_workspace_root(mut current: PathBuf) -> anyhow::Result<PathBuf> {
     loop {
-        if current.join("Cargo.toml").exists() && current.join("package.json").exists() {
+        if current.join("Cargo.toml").exists()
+            && current.join("docs/README.md").exists()
+            && current.join("scenarios").is_dir()
+        {
             return Ok(current);
         }
         if !current.pop() {
-            anyhow::bail!("could not find Runwarden workspace root");
+            anyhow::bail!("could not find workspace root (no Cargo.toml)");
         }
     }
 }
@@ -2370,26 +1378,4 @@ fn html_escape(text: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sse_replay_body_sanitizes_event_id_and_kind_control_lines() {
-        let events = vec![json!({
-            "kind": "model_call\nid: injected",
-            "obs_ref": "obs_1\nevent: injected",
-            "provider": "external.api.request",
-            "decision": "denied"
-        })];
-
-        let body = sse_replay_body(&events, 1, 0).expect("sse body");
-
-        assert!(body.contains("id: obs_1event: injected\n"));
-        assert!(body.contains("event: provider_call\n"));
-        assert!(!body.contains("\nevent: injected\n"));
-        assert!(!body.contains("\nid: injected\n"));
-    }
 }

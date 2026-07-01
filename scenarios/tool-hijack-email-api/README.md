@@ -22,7 +22,7 @@ events.
 ## Validate
 
 ```bash
-runwarden eval scenarios --json
-runwarden demo run --scenario tool-hijack-email-api --output artifacts/demo/tool-hijack-email-api --json
-runwarden ui serve --live --demo artifacts/demo/tool-hijack-email-api --json
+runwarden check --strict --json
+runwarden demo --scenario tool-hijack-email-api --output artifacts/demo/tool-hijack-email-api --json
+runwarden demo
 ```

@@ -57,5 +57,5 @@ tests, and scenario/demo execution:
 
 ```bash
 cargo test --workspace
-target/debug/runwarden eval scenarios --json
+target/debug/runwarden check --strict --json
 ```

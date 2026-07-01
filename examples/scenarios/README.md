@@ -21,7 +21,7 @@ Each scenario includes:
 Validate all scenario golden corpora:
 
 ```bash
-runwarden eval scenarios --json
+runwarden check --strict --json
 ```
 
 Maintained reference: [First Scenario](../../docs/reference/first-scenario.md).

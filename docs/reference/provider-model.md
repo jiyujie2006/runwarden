@@ -30,11 +30,12 @@ poisoning, report fabrication, audit tampering, and false compliance claims.
 
 High-risk, network-active, file-writing, credential, destructive, report-claim, and artifact-writing providers require approval before trusted side effects.
 
-In contest replay, API and browser providers are simulated after Rust policy
-allows the call. The simulation result is still emitted as provider evidence,
-and `event_type=provider_simulated_replay`, `execution_status=simulated`,
-`simulated=true`, and `side_effect_executed=false` mean no trusted external
-effect was performed.
+In contest demo runs, provider calls from scenario fixtures are evaluated by
+the Rust kernel and then executed only when allowed. API and browser providers
+remain simulated after Rust policy allows the call. The simulation result is
+still emitted as provider evidence, and `event_type=provider_simulated_replay`,
+`execution_status=simulated`, `simulated=true`, and
+`side_effect_executed=false` mean no trusted external effect was performed.
 
 Local sandbox providers for filesystem, email, memory, and knowledge may
 perform bounded local side effects after Rust policy and any required approval

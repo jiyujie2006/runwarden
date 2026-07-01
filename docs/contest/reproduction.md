@@ -4,7 +4,6 @@
 
 ```bash
 cargo build --workspace
-pnpm install
 ```
 
 ## Contest Gate
@@ -39,16 +38,11 @@ python3 redteam/run.py agent-drive \
 ## Live Reviewer Console
 
 ```bash
-./target/debug/runwarden ui serve --live \
-  --demo artifacts/demo/tool-hijack-email-api \
-  --llm-trace artifacts/llm-proxy/trace.jsonl \
-  --port 8088
+./target/debug/runwarden demo
 ```
 
 ## Approve A Pending Review
 
 ```bash
-target/debug/runwarden approval pending --json
-target/debug/runwarden approval approve <approval_id> \
-  --reviewer reviewer_alice --reason "reviewed scope and risk" --json
+Open `http://127.0.0.1:8088` and click Approve on a pending review.
 ```

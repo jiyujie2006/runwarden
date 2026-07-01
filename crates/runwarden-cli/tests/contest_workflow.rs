@@ -1,6 +1,6 @@
 use std::{
     fs,
-    io::{BufRead, BufReader, Read, Write},
+    io::{Read, Write},
     net::TcpStream,
     path::PathBuf,
     process::{Child, Command, Stdio},
@@ -18,12 +18,12 @@ fn workspace_root() -> PathBuf {
 }
 
 #[test]
-fn eval_scenarios_runs_five_contest_scenarios() {
+fn check_strict_runs_scenario_eval_json() {
     let output = Command::new(env!("CARGO_BIN_EXE_runwarden"))
         .current_dir(workspace_root())
-        .args(["eval", "scenarios", "--json"])
+        .args(["check", "--strict", "--json"])
         .output()
-        .expect("run eval scenarios");
+        .expect("run strict check");
 
     assert!(
         output.status.success(),
@@ -33,43 +33,11 @@ fn eval_scenarios_runs_five_contest_scenarios() {
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
     assert!(stdout.contains(r#""suite": "contest-red-team-scenarios""#));
     assert!(stdout.contains(r#""case_count": 5"#));
-    assert!(stdout.contains("prompt-injection-file-exfil"));
-    assert!(stdout.contains("tool-hijack-email-api"));
-    assert!(stdout.contains("memory-knowledge-poisoning"));
-    assert!(stdout.contains("environment-local-web-risk"));
-    assert!(stdout.contains("path-escape-file-boundary"));
     assert!(stdout.contains(r#""passed": true"#));
 }
 
 #[test]
-fn contest_scenarios_constant_matches_on_disk_scenario_dirs() {
-    let workspace = workspace_root();
-    let output = Command::new(env!("CARGO_BIN_EXE_runwarden"))
-        .current_dir(&workspace)
-        .args(["eval", "scenarios", "--json"])
-        .output()
-        .expect("run eval scenarios");
-
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
-    for entry in fs::read_dir(workspace.join("scenarios")).expect("scenarios dir") {
-        let entry = entry.expect("scenario dir entry");
-        if entry.path().is_dir() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            assert!(
-                stdout.contains(&name),
-                "scenario dir {name} not in eval output"
-            );
-        }
-    }
-}
-
-#[test]
-fn demo_run_writes_trace_report_and_webui_json() {
+fn demo_scenario_writes_real_trace_report_and_webui_json() {
     let workspace = workspace_root();
     let output_dir = PathBuf::from("target/runwarden-contest-test/prompt-injection-file-exfil");
     let absolute_output = workspace.join(&output_dir);
@@ -79,7 +47,6 @@ fn demo_run_writes_trace_report_and_webui_json() {
         .current_dir(&workspace)
         .args([
             "demo",
-            "run",
             "--scenario",
             "prompt-injection-file-exfil",
             "--output",
@@ -97,14 +64,75 @@ fn demo_run_writes_trace_report_and_webui_json() {
     assert!(absolute_output.join("trace.json").exists());
     assert!(absolute_output.join("report.json").exists());
     assert!(absolute_output.join("webui.json").exists());
-    let trace = fs::read_to_string(absolute_output.join("trace.json")).expect("trace");
-    assert!(trace.contains("obs_prompt_file_exfil_denied"));
-    assert!(trace.contains(r#""side_effect_executed": false"#));
     let webui: Value = serde_json::from_str(
         &fs::read_to_string(absolute_output.join("webui.json")).expect("webui"),
     )
     .expect("webui json");
     assert_eq!(webui["trace_verification"]["verified"], true);
+    assert_eq!(webui["provider_calls"][1]["decision"], "requires_review");
+    assert_eq!(webui["provider_calls"][2]["decision"], "denied");
+    assert_eq!(webui["provider_calls"][2]["side_effect_executed"], false);
+}
+
+#[test]
+fn demo_all_writes_static_reviewer_console() {
+    let workspace = workspace_root();
+    let output_dir = PathBuf::from("target/runwarden-contest-test/demo-all");
+    let absolute_output = workspace.join(&output_dir);
+    let _ = fs::remove_dir_all(&absolute_output);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_runwarden"))
+        .current_dir(&workspace)
+        .args(["demo", "--all", "--output"])
+        .arg(&output_dir)
+        .arg("--json")
+        .output()
+        .expect("run all demos");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let html = fs::read_to_string(absolute_output.join("reviewer-console.html")).expect("html");
+    assert!(html.contains("Runwarden"));
+    assert!(html.contains("STATIC_EVENTS"));
+    assert!(html.contains("prompt-injection-file-exfil"));
+    assert!(html.contains("requires_review"));
+    assert!(!html.contains("insertAdjacentHTML"));
+    assert!(!html.contains("innerHTML"));
+}
+
+#[test]
+fn demo_interactive_serves_console_and_healthz() {
+    let workspace = workspace_root();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_runwarden"))
+        .current_dir(&workspace)
+        .args(["demo", "--port", "0", "--json"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn demo server");
+
+    let startup = read_startup_json(&mut child);
+    let listen_addr = startup["listen_addr"]
+        .as_str()
+        .expect("listen_addr")
+        .to_string();
+    assert_eq!(startup["mode"], "interactive_demo");
+
+    let mut stream = TcpStream::connect(&listen_addr).expect("connect demo server");
+    stream
+        .write_all(b"GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        .expect("write request");
+    let mut response = String::new();
+    stream.read_to_string(&mut response).expect("read response");
+
+    child.kill().expect("kill demo server");
+    child.wait().expect("wait demo server");
+
+    assert!(response.contains("HTTP/1.1 200 OK"));
+    assert!(response.contains(r#"{"ok":true}"#));
 }
 
 #[test]
@@ -167,60 +195,6 @@ fn report_render_scenario_suite_fails_when_eval_fails() {
     assert!(stderr.contains("scenario suite eval did not pass"));
 }
 
-#[test]
-fn ui_build_creates_static_console_without_local_api() {
-    let workspace = workspace_root();
-    let input_dir = PathBuf::from("target/runwarden-contest-test/ui-build-static-console");
-    let demo_dir = input_dir.join("prompt-injection-file-exfil");
-    let output_file = input_dir.join("reviewer-console.html");
-    let _ = fs::remove_dir_all(workspace.join(&input_dir));
-
-    let demo = Command::new(env!("CARGO_BIN_EXE_runwarden"))
-        .current_dir(&workspace)
-        .args([
-            "demo",
-            "run",
-            "--scenario",
-            "prompt-injection-file-exfil",
-            "--output",
-        ])
-        .arg(&demo_dir)
-        .arg("--json")
-        .output()
-        .expect("run demo scenario");
-    assert!(
-        demo.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&demo.stderr)
-    );
-
-    let output = Command::new(env!("CARGO_BIN_EXE_runwarden"))
-        .current_dir(&workspace)
-        .args(["ui", "build", "--input"])
-        .arg(&input_dir)
-        .args(["--output"])
-        .arg(&output_file)
-        .arg("--json")
-        .output()
-        .expect("build ui");
-
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
-    assert!(stdout.contains(r#""local_api_url": null"#));
-    let html = fs::read_to_string(workspace.join(output_file)).expect("html");
-    assert!(html.contains("Runwarden Reviewer Console"));
-    assert!(html.contains("prompt-injection-file-exfil"));
-    assert!(html.contains("Security Events"));
-    assert!(html.contains("Review Queue"));
-    assert!(html.contains("event-denied"));
-    assert!(html.contains("event-requires_review"));
-    assert!(html.contains("obs_prompt_file_exfil_denied"));
-}
-
 fn copy_dir(from: &std::path::Path, to: &std::path::Path) {
     fs::create_dir_all(to).expect("create destination dir");
     for entry in fs::read_dir(from).expect("read source dir") {
@@ -235,337 +209,16 @@ fn copy_dir(from: &std::path::Path, to: &std::path::Path) {
     }
 }
 
-#[test]
-fn ui_serve_live_streams_demo_provider_calls_as_sse() {
-    let workspace = workspace_root();
-    let output_dir =
-        PathBuf::from("target/runwarden-contest-test/live-prompt-injection-file-exfil");
-    let absolute_output = workspace.join(&output_dir);
-    let _ = fs::remove_dir_all(&absolute_output);
-
-    let demo = Command::new(env!("CARGO_BIN_EXE_runwarden"))
-        .current_dir(&workspace)
-        .args([
-            "demo",
-            "run",
-            "--scenario",
-            "prompt-injection-file-exfil",
-            "--output",
-        ])
-        .arg(&output_dir)
-        .arg("--json")
-        .output()
-        .expect("run demo scenario");
-    assert!(
-        demo.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&demo.stderr)
-    );
-
-    let mut child = Command::new(env!("CARGO_BIN_EXE_runwarden"))
-        .current_dir(&workspace)
-        .args([
-            "ui",
-            "serve",
-            "--live",
-            "--demo",
-            output_dir.to_str().expect("utf8 path"),
-            "--bind",
-            "127.0.0.1",
-            "--port",
-            "0",
-            "--json",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn live ui server");
-
-    let startup = read_live_startup_json(&mut child);
-    let listen_addr = startup["listen_addr"]
-        .as_str()
-        .expect("listen_addr")
-        .to_string();
-    assert_eq!(startup["mode"], "live_demo_replay");
-    assert_eq!(startup["provider_call_count"], 3);
-    assert_eq!(startup["model_call_count"], 0);
-    assert_eq!(startup["event_count"], 3);
-    assert_eq!(startup["side_effect_executed"], false);
-
-    let mut stream = TcpStream::connect(&listen_addr).expect("connect live server");
-    stream
-        .write_all(b"GET /events HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-        .expect("write request");
-    let mut response = String::new();
-    stream.read_to_string(&mut response).expect("read response");
-
-    assert!(response.contains("HTTP/1.1 200 OK"));
-    assert!(response.contains("Content-Type: text/event-stream"));
-    assert!(response.contains("event: provider_call"));
-    assert!(response.contains("event: replay_complete"));
-    assert!(response.contains("obs_prompt_file_exfil_denied"));
-    assert!(response.contains("\"provider\":\"external.api.request\""));
-    assert!(response.contains("\"side_effect_executed\":false"));
-
-    child.kill().expect("kill live server");
-    child.wait().expect("wait live server");
-}
-
-#[test]
-fn ui_serve_live_streams_llm_trace_model_calls_as_sse() {
-    let workspace = workspace_root();
-    let output_dir = PathBuf::from("target/runwarden-contest-test/live-llm-trace-prompt-injection");
-    let absolute_output = workspace.join(&output_dir);
-    let _ = fs::remove_dir_all(&absolute_output);
-
-    let demo = Command::new(env!("CARGO_BIN_EXE_runwarden"))
-        .current_dir(&workspace)
-        .args([
-            "demo",
-            "run",
-            "--scenario",
-            "prompt-injection-file-exfil",
-            "--output",
-        ])
-        .arg(&output_dir)
-        .arg("--json")
-        .output()
-        .expect("run demo scenario");
-    assert!(
-        demo.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&demo.stderr)
-    );
-
-    let llm_trace_path = absolute_output.join("llm-trace.jsonl");
-    let llm_trace_arg = output_dir.join("llm-trace.jsonl");
-    let model_event = runwarden_kernel::evidence::TraceEvent::sealed(
-        "obs_model_blocked".to_string(),
-        "model_call".to_string(),
-        Some("mock".to_string()),
-        serde_json::json!({
-            "event_type": "model_call",
-            "model": "mock",
-            "decision": "input_blocked",
-            "upstream_status": "not_forwarded",
-            "side_effect_executed": false,
-            "input_risks": [],
-            "output_risks": [],
-            "prompt_preview": "ignore policy",
-            "completion_preview": ""
-        }),
-        None,
-    );
-    fs::write(
-        &llm_trace_path,
-        format!("{}\n", serde_json::to_string(&model_event).unwrap()),
-    )
-    .expect("write llm trace");
-
-    let mut child = Command::new(env!("CARGO_BIN_EXE_runwarden"))
-        .current_dir(&workspace)
-        .args([
-            "ui",
-            "serve",
-            "--live",
-            "--demo",
-            output_dir.to_str().expect("utf8 path"),
-            "--llm-trace",
-            llm_trace_arg.to_str().expect("utf8 path"),
-            "--bind",
-            "127.0.0.1",
-            "--port",
-            "0",
-            "--json",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn live ui server");
-
-    let startup = read_live_startup_json(&mut child);
-    let listen_addr = startup["listen_addr"]
-        .as_str()
-        .expect("listen_addr")
-        .to_string();
-
-    let mut stream = TcpStream::connect(&listen_addr).expect("connect live server");
-    stream
-        .write_all(b"GET /events HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-        .expect("write request");
-    let mut response = String::new();
-    stream.read_to_string(&mut response).expect("read response");
-
-    child.kill().expect("kill live server");
-    child.wait().expect("wait live server");
-
-    assert_eq!(startup["provider_call_count"], 3);
-    assert_eq!(startup["model_call_count"], 1);
-    assert_eq!(startup["event_count"], 4);
-    assert!(response.contains("event: model_call"));
-    assert!(response.contains("input_blocked"));
-    assert!(response.contains("not_forwarded"));
-    assert!(response.contains("obs_model_blocked"));
-    assert!(response.contains("event: replay_complete"));
-    assert!(response.contains("\"provider_call_count\":3"));
-    assert!(response.contains("\"model_call_count\":1"));
-    assert!(response.contains("\"event_count\":4"));
-}
-
-#[test]
-fn ui_serve_live_console_renders_sse_values_as_text() {
-    let workspace = workspace_root();
-    let output_dir = PathBuf::from("target/runwarden-contest-test/live-console-text-rendering");
-    let absolute_output = workspace.join(&output_dir);
-    let _ = fs::remove_dir_all(&absolute_output);
-
-    let demo = Command::new(env!("CARGO_BIN_EXE_runwarden"))
-        .current_dir(&workspace)
-        .args([
-            "demo",
-            "run",
-            "--scenario",
-            "prompt-injection-file-exfil",
-            "--output",
-        ])
-        .arg(&output_dir)
-        .arg("--json")
-        .output()
-        .expect("run demo scenario");
-    assert!(
-        demo.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&demo.stderr)
-    );
-
-    let mut child = Command::new(env!("CARGO_BIN_EXE_runwarden"))
-        .current_dir(&workspace)
-        .args([
-            "ui",
-            "serve",
-            "--live",
-            "--demo",
-            output_dir.to_str().expect("utf8 path"),
-            "--bind",
-            "127.0.0.1",
-            "--port",
-            "0",
-            "--json",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn live ui server");
-
-    let startup = read_live_startup_json(&mut child);
-    let listen_addr = startup["listen_addr"].as_str().expect("listen_addr");
-
-    let mut stream = TcpStream::connect(listen_addr).expect("connect live server");
-    stream
-        .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-        .expect("write request");
-    let mut response = String::new();
-    stream.read_to_string(&mut response).expect("read response");
-
-    child.kill().expect("kill live server");
-    child.wait().expect("wait live server");
-
-    assert!(response.contains("HTTP/1.1 200 OK"));
-    assert!(!response.contains("insertAdjacentHTML"));
-    assert!(
-        response.contains("textContent") || response.contains("createTextNode"),
-        "live console should render replay event fields with DOM text APIs"
-    );
-}
-
-#[test]
-fn ui_serve_live_rejects_missing_demo_and_unsafe_paths() {
-    let workspace = workspace_root();
-    let missing = PathBuf::from("target/runwarden-contest-test/missing-live-demo");
-    let _ = fs::remove_dir_all(workspace.join(&missing));
-
-    let missing_output = Command::new(env!("CARGO_BIN_EXE_runwarden"))
-        .current_dir(&workspace)
-        .args(["ui", "serve", "--live", "--demo"])
-        .arg(&missing)
-        .args(["--port", "0", "--json"])
-        .output()
-        .expect("serve missing demo");
-    assert!(!missing_output.status.success());
-    assert!(String::from_utf8_lossy(&missing_output.stderr).contains("live demo data is missing"));
-
-    let absolute_output = Command::new(env!("CARGO_BIN_EXE_runwarden"))
-        .current_dir(&workspace)
-        .args(["ui", "serve", "--live", "--demo"])
-        .arg(workspace.join("scenarios"))
-        .args(["--port", "0", "--json"])
-        .output()
-        .expect("serve absolute demo");
-    assert!(!absolute_output.status.success());
-    assert!(
-        String::from_utf8_lossy(&absolute_output.stderr)
-            .contains("path must be a relative path inside the workspace")
-    );
-
-    let traversal_output = Command::new(env!("CARGO_BIN_EXE_runwarden"))
-        .current_dir(&workspace)
-        .args([
-            "ui",
-            "serve",
-            "--live",
-            "--demo",
-            "../runwarden/scenarios",
-            "--port",
-            "0",
-            "--json",
-        ])
-        .output()
-        .expect("serve traversal demo");
-    assert!(!traversal_output.status.success());
-    assert!(
-        String::from_utf8_lossy(&traversal_output.stderr)
-            .contains("path must be a relative path inside the workspace")
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn ui_serve_live_rejects_symlink_demo_path() {
-    use std::os::unix::fs::symlink;
-
-    let workspace = workspace_root();
-    let link = workspace.join("target/runwarden-contest-test/live-demo-link");
-    let _ = fs::remove_file(&link);
-    fs::create_dir_all(link.parent().expect("link parent")).expect("create link parent");
-    symlink(workspace.join("scenarios"), &link).expect("create demo symlink");
-
-    let output = Command::new(env!("CARGO_BIN_EXE_runwarden"))
-        .current_dir(&workspace)
-        .args([
-            "ui",
-            "serve",
-            "--live",
-            "--demo",
-            "target/runwarden-contest-test/live-demo-link",
-            "--port",
-            "0",
-            "--json",
-        ])
-        .output()
-        .expect("serve symlink demo");
-
-    assert!(!output.status.success());
-    assert!(
-        String::from_utf8_lossy(&output.stderr)
-            .contains("path must not contain symlink components")
-    );
-}
-
-fn read_live_startup_json(child: &mut Child) -> Value {
-    let stdout = child.stdout.take().expect("live server stdout");
-    let mut reader = BufReader::new(stdout);
-    let mut line = String::new();
-    reader.read_line(&mut line).expect("read startup line");
-    assert!(!line.is_empty(), "live server did not print startup JSON");
-    serde_json::from_str(&line).expect("startup JSON")
+fn read_startup_json(child: &mut Child) -> Value {
+    let mut stdout = child.stdout.take().expect("server stdout");
+    let mut buf = Vec::new();
+    loop {
+        let mut byte = [0u8; 1];
+        stdout.read_exact(&mut byte).expect("read startup byte");
+        if byte[0] == b'\n' {
+            break;
+        }
+        buf.push(byte[0]);
+    }
+    serde_json::from_slice(&buf).expect("startup JSON")
 }

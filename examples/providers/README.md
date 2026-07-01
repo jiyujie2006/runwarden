@@ -13,7 +13,7 @@ Validate provider behavior through the active contest checks:
 
 ```bash
 cargo test --workspace
-target/debug/runwarden eval scenarios --json
+target/debug/runwarden check --strict --json
 ```
 
 ## First-Party Provider Catalog

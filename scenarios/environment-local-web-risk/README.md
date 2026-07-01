@@ -23,7 +23,7 @@ provider, decision, execution status, and side-effect state.
 ## Validate
 
 ```bash
-runwarden eval scenarios --json
-runwarden demo run --scenario environment-local-web-risk --output artifacts/demo/environment-local-web-risk --json
-runwarden ui serve --live --demo artifacts/demo/environment-local-web-risk --json
+runwarden check --strict --json
+runwarden demo --scenario environment-local-web-risk --output artifacts/demo/environment-local-web-risk --json
+runwarden demo
 ```

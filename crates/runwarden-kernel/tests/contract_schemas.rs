@@ -120,16 +120,10 @@ fn checked_in_schema_artifacts_match_rust_contracts() {
 }
 
 #[test]
-fn active_typescript_surface_is_static_webui_only() {
+fn active_typescript_webui_surface_is_removed() {
     let root = workspace_root();
-    let workspace =
-        fs::read_to_string(root.join("pnpm-workspace.yaml")).expect("read pnpm workspace");
-    let package_entries: Vec<_> = workspace
-        .lines()
-        .filter_map(|line| line.trim().strip_prefix("- "))
-        .map(|entry| entry.trim_matches('"'))
-        .collect();
-    assert_eq!(package_entries, ["packages/webui"]);
+    assert!(!root.join("pnpm-workspace.yaml").exists());
+    assert!(!root.join("packages/webui").exists());
 }
 
 #[test]

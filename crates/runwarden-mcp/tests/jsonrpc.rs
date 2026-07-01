@@ -1,5 +1,34 @@
+use std::{
+    fs,
+    path::PathBuf,
+    sync::{Mutex, OnceLock},
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+use runwarden_kernel::{
+    authority::{ApprovalBinding, ApprovalRecord},
+    evidence::hex_sha256,
+};
 use runwarden_mcp::{handle_jsonrpc_body, handle_jsonrpc_message, handle_stdio_payload};
 use serde_json::{Value, json};
+
+fn temp_state_dir(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "runwarden-mcp-{name}-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos()
+    ));
+    fs::create_dir_all(&dir).expect("temp state dir");
+    dir
+}
+
+fn cwd_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
 
 #[test]
 fn tools_list_exposes_only_runwarden_tools() {
@@ -314,6 +343,92 @@ fn provider_call_holds_external_provider_for_review_without_execution() {
         payload["trace_event"]["payload"]["side_effect_executed"],
         false
     );
+}
+
+#[test]
+fn provider_call_loads_disk_approval_and_consumes_it() {
+    let dir = temp_state_dir("approved");
+    let arguments = json!({
+        "provider": "external.email.send",
+        "to": "ops@example.com",
+        "subject": "Q3"
+    });
+    let mut approval = ApprovalRecord::new(
+        "approval-email-1",
+        ApprovalBinding {
+            session_id: "mcp-inline".to_string(),
+            provider: "external.email.send".to_string(),
+            action: "call".to_string(),
+            argument_hash: hex_sha256(&serde_json::to_vec(&arguments).expect("arguments")),
+            authz_id: None,
+            actor_id: Some("mcp-agent".to_string()),
+        },
+    );
+    approval
+        .approve("reviewer-alice", "reviewed")
+        .expect("approve");
+    let approval_dir = dir.join(".runwarden/approvals");
+    fs::create_dir_all(&approval_dir).expect("approval dir");
+    fs::write(
+        approval_dir.join("approval-email-1.json"),
+        serde_json::to_string_pretty(&approval).expect("approval json"),
+    )
+    .expect("write approval");
+
+    let _guard = cwd_lock().lock().expect("cwd lock");
+    let cwd = std::env::current_dir().expect("cwd");
+    std::env::set_current_dir(&dir).expect("set cwd");
+    let response = call_tool(116, "runwarden.provider.call", arguments);
+    std::env::set_current_dir(cwd).expect("restore cwd");
+
+    assert!(response.get("error").is_none());
+    assert_eq!(response["result"]["isError"], false);
+    let payload = tool_payload(&response);
+    assert_eq!(payload["decision"], "allowed");
+    assert_eq!(payload["side_effect_executed"], true);
+
+    let saved =
+        fs::read_to_string(approval_dir.join("approval-email-1.json")).expect("saved approval");
+    assert!(saved.contains(r#""state": "consumed""#));
+}
+
+#[test]
+fn provider_call_with_denied_disk_approval_still_requires_review() {
+    let dir = temp_state_dir("denied");
+    let arguments = json!({
+        "provider": "external.email.send",
+        "to": "ops@example.com"
+    });
+    let mut approval = ApprovalRecord::new(
+        "approval-email-denied",
+        ApprovalBinding {
+            session_id: "mcp-inline".to_string(),
+            provider: "external.email.send".to_string(),
+            action: "call".to_string(),
+            argument_hash: hex_sha256(&serde_json::to_vec(&arguments).expect("arguments")),
+            authz_id: None,
+            actor_id: Some("mcp-agent".to_string()),
+        },
+    );
+    approval.deny("reviewer-alice", "no").expect("deny");
+    let approval_dir = dir.join(".runwarden/approvals");
+    fs::create_dir_all(&approval_dir).expect("approval dir");
+    fs::write(
+        approval_dir.join("approval-email-denied.json"),
+        serde_json::to_string_pretty(&approval).expect("approval json"),
+    )
+    .expect("write approval");
+
+    let _guard = cwd_lock().lock().expect("cwd lock");
+    let cwd = std::env::current_dir().expect("cwd");
+    std::env::set_current_dir(&dir).expect("set cwd");
+    let response = call_tool(117, "runwarden.provider.call", arguments);
+    std::env::set_current_dir(cwd).expect("restore cwd");
+
+    let payload = tool_payload(&response);
+    assert_eq!(response["result"]["isError"], true);
+    assert_eq!(payload["decision"], "requires_review");
+    assert_eq!(payload["side_effect_executed"], false);
 }
 
 #[test]

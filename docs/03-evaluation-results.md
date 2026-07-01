@@ -3,8 +3,8 @@
 Runwarden contest evaluation evidence is produced by:
 
 ```bash
-target/debug/runwarden eval scenarios --json
-target/debug/runwarden demo run --scenario prompt-injection-file-exfil --output artifacts/demo/prompt-injection-file-exfil --json
+target/debug/runwarden check --strict --json
+target/debug/runwarden demo --scenario prompt-injection-file-exfil --output artifacts/demo/prompt-injection-file-exfil --json
 target/debug/runwarden report render --scenario-suite scenarios --format markdown --json
 ```
 

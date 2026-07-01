@@ -10,7 +10,7 @@
 | API/email tools | Done | `external.api.request`, `external.email.send` | provider catalog | 模拟业务工具, 不真发网络或邮件。 |
 | Model-call filtering | Done | `runwarden-llm-proxy` | `crates/runwarden-llm-proxy` | 输入过滤、输出过滤和 sealed trace。 |
 | Anomaly model | Done | `runwarden-anomaly` | `crates/runwarden-anomaly` | allowed-call 事后评分, 不替代 deny/review policy。 |
-| Live console | Done | WebUI SSE replay | `packages/webui`, CLI | timeline + review queue 展示 Rust-produced state。 |
+| Live console | Done | Rust SSE console | CLI | timeline + review queue 展示 Rust-produced state。 |
 | Evidence-backed report | Done | report lint 21 tests | `crates/runwarden-assurance/tests/report_lint.rs` | 验证 `obs_*` 引用和 claim semantics。 |
 | Allow/deny/ask | Done | `PolicyDecision` 3 态 | `crates/runwarden-kernel/src/contracts/provider.rs` | `Allowed`, `Denied`, `RequiresReview`。 |
 | OpenCode integration | Done | runwarden-only config | `examples/agent-configs` | OpenCode 只看见 `runwarden-mcp`。 |

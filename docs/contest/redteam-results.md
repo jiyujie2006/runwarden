@@ -7,7 +7,7 @@
 | 层 | corpus / scenario | 验证方式 | 结果位置 |
 | --- | --- | --- | --- |
 | Model-call filtering | `prompt_injection`, `jailbreak`, `indirect_prompt_injection`, `encoded_bypass`, `schema_poisoning`, `report_fabrication`, `benign_control` | `proxy-probe` (deterministic, offline) | `artifacts/redteam/proxy-probe-summary.json` |
-| Tool-call mediation | 5 个 `scenarios/*` | `runwarden eval scenarios` + `demo run` | `artifacts/demo/*/report.json`, `artifacts/reports/contest-report.md` |
+| Tool-call mediation | 5 个 `scenarios/*` | `runwarden check --strict` + `runwarden demo --all` | `artifacts/demo/*/report.json`, `artifacts/reports/contest-report.md` |
 | Real LLM agent drive | `path_escape` subset | `agent-drive` (optional, model-dependent) | `artifacts/redteam/agent-drive-results.jsonl` (if run) |
 
 ## Deterministic Proxy Probe
@@ -30,7 +30,7 @@ python3 redteam/run.py proxy-probe \
 ## Tool-Call Replay
 
 ```bash
-target/debug/runwarden eval scenarios --json
+target/debug/runwarden check --strict --json
 bash scripts/release_gate_local.sh
 ```
 

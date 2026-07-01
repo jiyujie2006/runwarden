@@ -46,8 +46,8 @@ Claude/OpenCode examples and unsafe counterexamples.
 ## Verification
 
 ```bash
-runwarden eval scenarios --json
-runwarden demo run --scenario prompt-injection-file-exfil --output artifacts/demo/prompt-injection-file-exfil --json
+runwarden check --strict --json
+runwarden demo --scenario prompt-injection-file-exfil --output artifacts/demo/prompt-injection-file-exfil --json
 runwarden provider list --json
 cargo test -p runwarden-mcp --test e2e_agent_flow
 ```

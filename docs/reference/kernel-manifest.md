@@ -21,7 +21,7 @@ The assessment manifest is the human-authored TOML input. The session manifest
 is the runtime policy input derived from that assessment.
 
 ```bash
-runwarden session create --manifest <assessment.toml> --session <id> --json
+runwarden demo --scenario <id> --output artifacts/demo/<id> --json
 runwarden session inspect --session <id> --json
 ```
 

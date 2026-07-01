@@ -3,7 +3,8 @@ use runwarden_anomaly::{AnomalyMonitor, BehaviorProfile};
 use runwarden_assurance::report::{
     RenderFormat, ReportDraft, lint_report_against_trace, render_report,
 };
-use runwarden_kernel::evidence::{InMemoryTraceStore, TraceEvent, TraceQuery};
+use runwarden_kernel::authority::{ApprovalBinding, ApprovalRecord, ApprovalState};
+use runwarden_kernel::evidence::{InMemoryTraceStore, TraceEvent, TraceQuery, hex_sha256};
 use runwarden_kernel::kernel::{KernelEnforcer, KernelPolicy, ProviderRegistry};
 use runwarden_kernel::{ErrorKind, KernelProvider, PolicyDecision, ProviderCall, ProviderOutcome};
 use runwarden_providers::catalog::{
@@ -13,7 +14,7 @@ use runwarden_providers::input::{InputInspectPolicy, InputSource, inspect_input}
 use runwarden_providers::tools;
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 const RUNWARDEN_TOOLS: &[(&str, &str)] = &[
@@ -323,14 +324,21 @@ fn handle_provider_call(id: Value, params: Option<&Value>) -> Value {
         );
     };
 
-    let call = provider_call_from_arguments(provider, arguments);
+    let mut call = provider_call_from_arguments(provider, arguments);
+    let approvals = read_all_approvals_mcp().unwrap_or_default();
+    attach_matching_approval_mcp(&mut call, &approvals);
     let mut enforcer = KernelEnforcer::new(full_provider_registry(), mcp_kernel_policy());
+    for approval in approvals {
+        enforcer.add_approval(approval);
+    }
     let outcome = enforcer.evaluate_call(&call);
     if outcome.decision != PolicyDecision::Allowed {
+        persist_pending_approval_mcp(&call, &outcome).ok();
+        append_mcp_provider_event(&outcome, &provider_outcome_payload(&outcome)).ok();
         return tool_error_result(id, provider_outcome_payload(&outcome));
     }
 
-    match provider {
+    let payload = match provider {
         "runwarden.input.inspect" => {
             let input_text = arguments
                 .get("input_text")
@@ -343,39 +351,45 @@ fn handle_provider_call(id: Value, params: Option<&Value>) -> Value {
                 input_text.as_bytes(),
                 InputInspectPolicy::default(),
             );
-            tool_result(
+            json!({
+                "provider": provider,
+                "decision": "allowed",
+                "execution_status": "completed",
+                "side_effect_executed": false,
+                "obs_ref": &outcome.observation_id,
+                "trace_event": trace_event_for_provider_result(
+                    &outcome,
+                    "provider_completed",
+                    "completed",
+                    false,
+                    false
+                ),
+                "output": inspection
+            })
+        }
+        other if provider_is_external(other) => {
+            external_provider_result(&outcome, arguments, &sandbox_root)
+        }
+        other => {
+            return tool_error_result(
                 id,
                 json!({
-                    "provider": provider,
-                    "decision": "allowed",
-                    "execution_status": "completed",
-                    "side_effect_executed": false,
-                    "obs_ref": &outcome.observation_id,
-                    "trace_event": trace_event_for_provider_result(
-                        &outcome,
-                        "provider_completed",
-                        "completed",
-                        false,
-                        false
-                    ),
-                    "output": inspection
-                }),
-            )
-        }
-        other if provider_is_external(other) => tool_result(
-            id,
-            external_provider_result(&outcome, arguments, &sandbox_root),
-        ),
-        other => tool_error_result(
-            id,
-            json!({
                 "error_kind": ErrorKind::ProviderUnknown,
                 "message": "provider is not implemented by the MCP inline call path",
                 "provider": other,
                 "side_effect_executed": false
-            }),
-        ),
+                }),
+            );
+        }
+    };
+
+    if let Some(approval_id) = call.approval_id.as_deref()
+        && enforcer.approval_state(approval_id) == Some(ApprovalState::Consumed)
+    {
+        persist_consumed_approval_mcp(&call, &enforcer.approval_binding_for_call(&call)).ok();
     }
+    append_mcp_provider_event(&outcome, &payload).ok();
+    tool_result(id, payload)
 }
 
 /// Map a caller-supplied `input_source` string to an `InputSource` so the
@@ -556,10 +570,135 @@ fn provider_call_from_arguments(provider: &str, arguments: &Value) -> ProviderCa
             .unwrap_or("call")
             .to_string(),
         arguments: arguments.clone(),
-        actor_id: None,
+        actor_id: Some("mcp-agent".to_string()),
         authz_id: None,
         approval_id: None,
     }
+}
+
+fn state_dir_mcp() -> PathBuf {
+    std::env::var("RUNWARDEN_STATE_DIR")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(".runwarden"))
+}
+
+fn approvals_dir_mcp() -> PathBuf {
+    state_dir_mcp().join("approvals")
+}
+
+fn read_all_approvals_mcp() -> anyhow::Result<Vec<ApprovalRecord>> {
+    let dir = approvals_dir_mcp();
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut approvals = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        if entry.path().extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let body = std::fs::read_to_string(entry.path())?;
+        if let Ok(approval) = serde_json::from_str::<ApprovalRecord>(&body) {
+            approvals.push(approval);
+        }
+    }
+    Ok(approvals)
+}
+
+fn approval_binding_for_mcp_call(call: &ProviderCall) -> ApprovalBinding {
+    ApprovalBinding {
+        session_id: call.session_id.clone(),
+        provider: call.provider.clone(),
+        action: call.action.clone(),
+        argument_hash: hex_sha256(&serde_json::to_vec(&call.arguments).unwrap_or_default()),
+        authz_id: call.authz_id.clone(),
+        actor_id: call.actor_id.clone(),
+    }
+}
+
+fn attach_matching_approval_mcp(call: &mut ProviderCall, approvals: &[ApprovalRecord]) {
+    let binding = approval_binding_for_mcp_call(call);
+    if let Some(approval) = approvals.iter().find(|approval| {
+        approval.binding == binding
+            && approval.state == ApprovalState::Approved
+            && approval
+                .expires_at
+                .is_none_or(|expires_at| expires_at > time::OffsetDateTime::now_utc())
+    }) {
+        call.approval_id = Some(approval.approval_id.clone());
+    }
+}
+
+fn persist_pending_approval_mcp(
+    call: &ProviderCall,
+    outcome: &ProviderOutcome,
+) -> anyhow::Result<()> {
+    if outcome.decision != PolicyDecision::RequiresReview {
+        return Ok(());
+    }
+    let approval_id = format!("webui-{}", outcome.observation_id);
+    let path = approvals_dir_mcp().join(format!("{approval_id}.json"));
+    if path.exists() {
+        return Ok(());
+    }
+    let approval = ApprovalRecord::new(approval_id, approval_binding_for_mcp_call(call));
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, serde_json::to_string_pretty(&approval)?)?;
+    Ok(())
+}
+
+fn persist_consumed_approval_mcp(
+    call: &ProviderCall,
+    binding: &ApprovalBinding,
+) -> anyhow::Result<()> {
+    let Some(approval_id) = call.approval_id.as_deref() else {
+        return Ok(());
+    };
+    let path = approvals_dir_mcp().join(format!("{approval_id}.json"));
+    let body = std::fs::read_to_string(&path)?;
+    let mut approval = serde_json::from_str::<ApprovalRecord>(&body)?;
+    if approval.state == ApprovalState::Approved {
+        approval.consume_once(binding)?;
+        std::fs::write(path, serde_json::to_string_pretty(&approval)?)?;
+    }
+    Ok(())
+}
+
+fn append_mcp_provider_event(outcome: &ProviderOutcome, payload: &Value) -> anyhow::Result<()> {
+    let path = state_dir_mcp().join("events.jsonl");
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let event = json!({
+        "kind": "provider_call",
+        "provider": &outcome.envelope.provider,
+        "action": &outcome.envelope.action,
+        "decision": &outcome.decision,
+        "error_kind": &outcome.envelope.error_kind,
+        "reason": &outcome.envelope.reason,
+        "obs_ref": &outcome.observation_id,
+        "approval_id": if outcome.decision == PolicyDecision::RequiresReview {
+            json!(format!("webui-{}", outcome.observation_id))
+        } else {
+            Value::Null
+        },
+        "side_effect_executed": payload
+            .get("side_effect_executed")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        "data": payload
+    });
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    use std::io::Write;
+    writeln!(file, "{}", serde_json::to_string(&event)?)?;
+    Ok(())
 }
 
 fn first_party_provider_registry() -> ProviderRegistry {

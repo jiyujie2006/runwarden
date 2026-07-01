@@ -29,6 +29,6 @@ arguments. `expected/report.json` must cite the matching `obs_*` refs.
 Validate with:
 
 ```bash
-runwarden eval scenarios --json
-runwarden demo run --scenario prompt-injection-file-exfil --output artifacts/demo/prompt-injection-file-exfil --json
+runwarden check --strict --json
+runwarden demo --scenario prompt-injection-file-exfil --output artifacts/demo/prompt-injection-file-exfil --json
 ```

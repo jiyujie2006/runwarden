@@ -4,7 +4,9 @@ Sessions and approval records define the runtime policy envelope for provider ca
 
 ## Sessions
 
-`runwarden session create` derives a session from an assessment manifest. A session carries provider allowlist, scoped roots, budgets, actor id, authz state, and active-assessment state used by `KernelEnforcer`.
+Sessions are now internal to demo/check flows. A session derived from an
+assessment manifest carries provider allowlist, scoped roots, budgets, actor
+id, authz state, and active-assessment state used by `KernelEnforcer`.
 
 MCP callers do not create or mutate that envelope through tool arguments.
 `runwarden-mcp` builds any inline kernel policy from server-owned defaults and
@@ -25,3 +27,8 @@ Approval records bind a reviewer decision to one exact provider call:
 - actor id
 
 High-risk provider calls consume matching approved records once. File-backed calls bind SHA-256 digests after kernel path policy allows the path and verify those digests again before approval consumption or execution.
+
+Interactive approvals are file-backed. `runwarden demo` writes reviewer
+decisions to `.runwarden/approvals`, while `runwarden-mcp` reads the same
+directory via `RUNWARDEN_STATE_DIR` when the agent runs outside the repository
+working directory.

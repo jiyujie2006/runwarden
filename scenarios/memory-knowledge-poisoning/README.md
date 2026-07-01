@@ -22,7 +22,7 @@ review-blocked or denied writes did not execute side effects.
 ## Validate
 
 ```bash
-runwarden eval scenarios --json
-runwarden demo run --scenario memory-knowledge-poisoning --output artifacts/demo/memory-knowledge-poisoning --json
-runwarden ui serve --live --demo artifacts/demo/memory-knowledge-poisoning --json
+runwarden check --strict --json
+runwarden demo --scenario memory-knowledge-poisoning --output artifacts/demo/memory-knowledge-poisoning --json
+runwarden demo
 ```

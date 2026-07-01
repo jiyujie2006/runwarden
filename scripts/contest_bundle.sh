@@ -34,7 +34,7 @@ cp -R schemas "$BUNDLE/schemas"
 mkdir -p "$BUNDLE/reports"
 cp artifacts/reports/contest-report.md "$BUNDLE/reports/contest-report.md"
 cp -R artifacts/demo "$BUNDLE/demo"
-cp artifacts/reviewer-console.html "$BUNDLE/reviewer-console.html"
+cp artifacts/demo/reviewer-console.html "$BUNDLE/reviewer-console.html"
 
 if [ -d artifacts/redteam ]; then
   cp -R artifacts/redteam "$BUNDLE/redteam-results"

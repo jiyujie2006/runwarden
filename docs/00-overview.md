@@ -31,7 +31,7 @@ Runwarden makes those answers reproducible from checked-in scenarios.
 - `runwarden-llm-proxy`: local model-call filtering proxy for red-team probes.
 - `runwarden-anomaly`: lightweight behavior anomaly scoring for provider
   evidence.
-- `packages/webui`: presentation-only static reviewer console renderer.
+- Rust reviewer console: presentation-only static/interactive renderer.
 
 ## Proof Loop
 

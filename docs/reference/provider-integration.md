@@ -27,7 +27,7 @@ path canonicalizes inside the sandbox root; symlinked parents that resolve
 outside the root are denied before any side effect is reported.
 
 The contest package does not invoke trusted downstream network adapters during
-local replay. API and browser provider ids return simulated outcomes and
+local demo runs. API and browser provider ids return simulated outcomes and
 `obs_*` evidence. Local filesystem, email, memory, and knowledge providers use
 the same Rust-owned manifest and policy contract, then perform only bounded
 local sandbox side effects after the kernel and approval gates allow them.
