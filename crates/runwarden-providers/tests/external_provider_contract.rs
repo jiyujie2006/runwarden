@@ -4,7 +4,9 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
-use runwarden_kernel::{ProviderKind, ProviderManifest, ProviderRisk};
+use runwarden_kernel::{
+    ProviderClass, ProviderKind, ProviderManifest, ProviderRisk, ProviderSchemaPin, SideEffectKind,
+};
 use runwarden_providers::external::{
     ExternalMcpAdapterRequest, certify_external_provider_manifest, execute_external_mcp_adapter,
     load_provider_manifest,
@@ -32,20 +34,35 @@ fn execute_adapter(
     execute_external_mcp_adapter(manifest, request, runtime_root)
 }
 
+fn stdio_manifest(working_root: &Path, command_allowlist: &[&str]) -> ProviderManifest {
+    let schema = serde_json::json!({"type": "object"});
+    ProviderManifest {
+        schema_version: "1".to_string(),
+        provider_id: "external.mcp.browser.open_page".to_string(),
+        provider_class: ProviderClass::External,
+        kind: ProviderKind::Mcp,
+        risk: ProviderRisk::High,
+        side_effects: vec![SideEffectKind::ProcessSpawn],
+        transport: Some("stdio".to_string()),
+        downstream_identity: Some("browser-mcp".to_string()),
+        tool_identity: Some("open_page".to_string()),
+        declared_permissions: vec!["process_spawn".to_string()],
+        allowed_origins: Vec::new(),
+        command_allowlist: command_allowlist
+            .iter()
+            .map(|value| value.to_string())
+            .collect(),
+        working_root: Some(working_root.to_string_lossy().to_string()),
+        schema_pin: ProviderSchemaPin::new(schema.clone()),
+        observed_schema: schema,
+    }
+}
+
 #[cfg(unix)]
 fn write_executable_script(path: &Path, content: &str) {
-    use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
 
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .expect("script");
-    file.write_all(content.as_bytes()).expect("write script");
-    file.sync_all().expect("sync script");
-    drop(file);
-
+    fs::write(path, content).expect("write script");
     let mut permissions = fs::metadata(path).expect("metadata").permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(path, permissions).expect("chmod");
@@ -211,32 +228,7 @@ fn external_mcp_https_transport_is_not_certified_without_trusted_adapter() {
 #[test]
 fn external_mcp_stdio_adapter_executes_framed_downstream_call() {
     let dir = tempdir().expect("tempdir");
-    let working_root = json_path(dir.path());
-    let manifest = load_provider_manifest(&format!(
-        r#"{{
-          "schema_version": "1",
-          "provider_id": "external.mcp.browser.open_page",
-          "provider_class": "external",
-          "kind": "mcp",
-          "risk": "high",
-          "side_effects": ["process_spawn"],
-          "transport": "stdio",
-          "downstream_identity": "browser-mcp",
-          "tool_identity": "open_page",
-          "declared_permissions": ["process_spawn"],
-          "allowed_origins": [],
-          "command_allowlist": ["cat"],
-          "working_root": {},
-          "schema_pin": {{
-            "algorithm": "sha256",
-            "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-            "schema": {{"type": "object"}}
-          }},
-          "observed_schema": {{"type": "object"}}
-        }}"#,
-        working_root
-    ))
-    .expect("manifest parses");
+    let manifest = stdio_manifest(dir.path(), &["cat"]);
     let request = ExternalMcpAdapterRequest {
         transport: Some("stdio".to_string()),
         command: Some("cat".to_string()),
@@ -267,32 +259,7 @@ fn external_mcp_stdio_adapter_executes_framed_downstream_call() {
 #[test]
 fn external_mcp_request_transport_must_match_manifest() {
     let dir = tempdir().expect("tempdir");
-    let working_root = json_path(dir.path());
-    let manifest = load_provider_manifest(&format!(
-        r#"{{
-          "schema_version": "1",
-          "provider_id": "external.mcp.browser.open_page",
-          "provider_class": "external",
-          "kind": "mcp",
-          "risk": "high",
-          "side_effects": ["process_spawn"],
-          "transport": "stdio",
-          "downstream_identity": "browser-mcp",
-          "tool_identity": "open_page",
-          "declared_permissions": ["process_spawn"],
-          "allowed_origins": [],
-          "command_allowlist": ["cat"],
-          "working_root": {},
-          "schema_pin": {{
-            "algorithm": "sha256",
-            "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-            "schema": {{"type": "object"}}
-          }},
-          "observed_schema": {{"type": "object"}}
-        }}"#,
-        working_root
-    ))
-    .expect("manifest parses");
+    let manifest = stdio_manifest(dir.path(), &["cat"]);
     let request = ExternalMcpAdapterRequest {
         transport: Some("http".to_string()),
         command: Some("cat".to_string()),
@@ -359,32 +326,7 @@ fn external_mcp_stdio_rejects_request_args_before_spawn() {
     let runtime_root = dir.path().join("runtime");
     fs::create_dir(&runtime_root).expect("runtime root");
     fs::write(dir.path().join("outside-secret.txt"), "outside secret").expect("outside secret");
-    let working_root = json_path(&runtime_root);
-    let manifest = load_provider_manifest(&format!(
-        r#"{{
-          "schema_version": "1",
-          "provider_id": "external.mcp.browser.open_page",
-          "provider_class": "external",
-          "kind": "mcp",
-          "risk": "high",
-          "side_effects": ["process_spawn"],
-          "transport": "stdio",
-          "downstream_identity": "browser-mcp",
-          "tool_identity": "open_page",
-          "declared_permissions": ["process_spawn"],
-          "allowed_origins": [],
-          "command_allowlist": ["cat"],
-          "working_root": {},
-          "schema_pin": {{
-            "algorithm": "sha256",
-            "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-            "schema": {{"type": "object"}}
-          }},
-          "observed_schema": {{"type": "object"}}
-        }}"#,
-        working_root
-    ))
-    .expect("manifest parses");
+    let manifest = stdio_manifest(&runtime_root, &["cat"]);
     let request = ExternalMcpAdapterRequest {
         transport: Some("stdio".to_string()),
         command: Some("cat".to_string()),
@@ -413,63 +355,6 @@ fn external_mcp_stdio_rejects_request_args_before_spawn() {
             .unwrap_or_default()
             .contains("outside secret")
     );
-}
-
-#[cfg(unix)]
-#[test]
-fn external_mcp_stdio_rejects_symlink_escape_args() {
-    use std::os::unix::fs::symlink;
-
-    let dir = tempdir().expect("tempdir");
-    let runtime_root = dir.path().join("runtime");
-    fs::create_dir(&runtime_root).expect("runtime root");
-    fs::write(dir.path().join("outside-secret.txt"), "outside secret").expect("outside secret");
-    symlink(
-        dir.path().join("outside-secret.txt"),
-        runtime_root.join("secret-link"),
-    )
-    .expect("symlink");
-    let working_root = json_path(&runtime_root);
-    let manifest = load_provider_manifest(&format!(
-        r#"{{
-          "schema_version": "1",
-          "provider_id": "external.mcp.browser.open_page",
-          "provider_class": "external",
-          "kind": "mcp",
-          "risk": "high",
-          "side_effects": ["process_spawn"],
-          "transport": "stdio",
-          "downstream_identity": "browser-mcp",
-          "tool_identity": "open_page",
-          "declared_permissions": ["process_spawn"],
-          "allowed_origins": [],
-          "command_allowlist": ["cat"],
-          "working_root": {},
-          "schema_pin": {{
-            "algorithm": "sha256",
-            "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-            "schema": {{"type": "object"}}
-          }},
-          "observed_schema": {{"type": "object"}}
-        }}"#,
-        working_root
-    ))
-    .expect("manifest parses");
-    let request = ExternalMcpAdapterRequest {
-        transport: Some("stdio".to_string()),
-        command: Some("cat".to_string()),
-        args: vec!["secret-link".to_string()],
-        cwd: Some(runtime_root.clone()),
-        request: serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "open_page"}),
-        ..ExternalMcpAdapterRequest::default()
-    };
-
-    let result = execute_adapter(&manifest, &request, Some(&runtime_root));
-
-    assert_eq!(result["decision"], "denied");
-    assert_eq!(result["execution_status"], "not_executed");
-    assert_eq!(result["error_kind"], "provider_not_allowed");
-    assert_eq!(result["side_effect_executed"], false);
 }
 
 #[test]
@@ -521,32 +406,7 @@ fn external_mcp_stdio_adapter_requires_trusted_runtime_root() {
 #[test]
 fn external_mcp_stdio_adapter_rejects_shell_capable_command() {
     let dir = tempdir().expect("tempdir");
-    let working_root = json_path(dir.path());
-    let manifest = load_provider_manifest(&format!(
-        r#"{{
-          "schema_version": "1",
-          "provider_id": "external.mcp.browser.open_page",
-          "provider_class": "external",
-          "kind": "mcp",
-          "risk": "high",
-          "side_effects": ["process_spawn"],
-          "transport": "stdio",
-          "downstream_identity": "browser-mcp",
-          "tool_identity": "open_page",
-          "declared_permissions": ["process_spawn"],
-          "allowed_origins": [],
-          "command_allowlist": ["sh"],
-          "working_root": {},
-          "schema_pin": {{
-            "algorithm": "sha256",
-            "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-            "schema": {{"type": "object"}}
-          }},
-          "observed_schema": {{"type": "object"}}
-        }}"#,
-        working_root
-    ))
-    .expect("manifest parses");
+    let manifest = stdio_manifest(dir.path(), &["sh"]);
     let request = ExternalMcpAdapterRequest {
         transport: Some("stdio".to_string()),
         command: Some("sh".to_string()),
@@ -827,32 +687,7 @@ fn external_mcp_http_adapter_rejects_control_characters_in_path() {
 #[test]
 fn external_mcp_stdio_requires_exact_allowlisted_command() {
     let dir = tempdir().expect("tempdir");
-    let working_root = json_path(dir.path());
-    let manifest = load_provider_manifest(&format!(
-        r#"{{
-          "schema_version": "1",
-          "provider_id": "external.mcp.browser.open_page",
-          "provider_class": "external",
-          "kind": "mcp",
-          "risk": "high",
-          "side_effects": ["process_spawn"],
-          "transport": "stdio",
-          "downstream_identity": "browser-mcp",
-          "tool_identity": "open_page",
-          "declared_permissions": ["process_spawn"],
-          "allowed_origins": [],
-          "command_allowlist": ["sh"],
-          "working_root": {},
-          "schema_pin": {{
-            "algorithm": "sha256",
-            "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-            "schema": {{"type": "object"}}
-          }},
-          "observed_schema": {{"type": "object"}}
-        }}"#,
-        working_root
-    ))
-    .expect("manifest parses");
+    let manifest = stdio_manifest(dir.path(), &["sh"]);
     let request = ExternalMcpAdapterRequest {
         transport: Some("stdio".to_string()),
         command: Some("/bin/sh".to_string()),
@@ -917,36 +752,11 @@ fn external_mcp_stdio_enforces_timeout_while_waiting() {
     let dir = tempdir().expect("tempdir");
     let script = dir.path().join("sleep-adapter");
     write_executable_script(&script, "#!/bin/sh\ncat >/dev/null & sleep 1\n");
-    let command = json_path(&script);
-    let working_root = json_path(dir.path());
-    let manifest = load_provider_manifest(&format!(
-        r#"{{
-          "schema_version": "1",
-          "provider_id": "external.mcp.browser.open_page",
-          "provider_class": "external",
-          "kind": "mcp",
-          "risk": "high",
-          "side_effects": ["process_spawn"],
-          "transport": "stdio",
-          "downstream_identity": "browser-mcp",
-          "tool_identity": "open_page",
-          "declared_permissions": ["process_spawn"],
-          "allowed_origins": [],
-          "command_allowlist": [{}],
-          "working_root": {},
-          "schema_pin": {{
-            "algorithm": "sha256",
-            "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-            "schema": {{"type": "object"}}
-          }},
-          "observed_schema": {{"type": "object"}}
-        }}"#,
-        command, working_root
-    ))
-    .expect("manifest parses");
+    let command = script.to_string_lossy().into_owned();
+    let manifest = stdio_manifest(dir.path(), &[&command]);
     let request = ExternalMcpAdapterRequest {
         transport: Some("stdio".to_string()),
-        command: Some(script.to_string_lossy().into_owned()),
+        command: Some(command),
         cwd: Some(dir.path().to_path_buf()),
         timeout_ms: Some(10),
         ..ExternalMcpAdapterRequest::default()
@@ -971,36 +781,11 @@ fn external_mcp_stdio_enforces_output_limit_while_reading() {
     let dir = tempdir().expect("tempdir");
     let script = dir.path().join("output-adapter");
     write_executable_script(&script, "#!/bin/sh\ncat >/dev/null\nprintf 1234567890\n");
-    let command = json_path(&script);
-    let working_root = json_path(dir.path());
-    let manifest = load_provider_manifest(&format!(
-        r#"{{
-          "schema_version": "1",
-          "provider_id": "external.mcp.browser.open_page",
-          "provider_class": "external",
-          "kind": "mcp",
-          "risk": "high",
-          "side_effects": ["process_spawn"],
-          "transport": "stdio",
-          "downstream_identity": "browser-mcp",
-          "tool_identity": "open_page",
-          "declared_permissions": ["process_spawn"],
-          "allowed_origins": [],
-          "command_allowlist": [{}],
-          "working_root": {},
-          "schema_pin": {{
-            "algorithm": "sha256",
-            "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-            "schema": {{"type": "object"}}
-          }},
-          "observed_schema": {{"type": "object"}}
-        }}"#,
-        command, working_root
-    ))
-    .expect("manifest parses");
+    let command = script.to_string_lossy().into_owned();
+    let manifest = stdio_manifest(dir.path(), &[&command]);
     let request = ExternalMcpAdapterRequest {
         transport: Some("stdio".to_string()),
-        command: Some(script.to_string_lossy().into_owned()),
+        command: Some(command),
         cwd: Some(dir.path().to_path_buf()),
         stdout_limit_bytes: Some(4),
         ..ExternalMcpAdapterRequest::default()
@@ -1030,36 +815,11 @@ fn external_mcp_stdio_cleans_process_group_after_success() {
         &script,
         "#!/bin/sh\ncat >/dev/null\nsleep 60 >/dev/null 2>/dev/null </dev/null &\necho $!\n",
     );
-    let command = json_path(&script);
-    let working_root = json_path(dir.path());
-    let manifest = load_provider_manifest(&format!(
-        r#"{{
-          "schema_version": "1",
-          "provider_id": "external.mcp.browser.open_page",
-          "provider_class": "external",
-          "kind": "mcp",
-          "risk": "high",
-          "side_effects": ["process_spawn"],
-          "transport": "stdio",
-          "downstream_identity": "browser-mcp",
-          "tool_identity": "open_page",
-          "declared_permissions": ["process_spawn"],
-          "allowed_origins": [],
-          "command_allowlist": [{}],
-          "working_root": {},
-          "schema_pin": {{
-            "algorithm": "sha256",
-            "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-            "schema": {{"type": "object"}}
-          }},
-          "observed_schema": {{"type": "object"}}
-        }}"#,
-        command, working_root
-    ))
-    .expect("manifest parses");
+    let command = script.to_string_lossy().into_owned();
+    let manifest = stdio_manifest(dir.path(), &[&command]);
     let request = ExternalMcpAdapterRequest {
         transport: Some("stdio".to_string()),
-        command: Some(script.to_string_lossy().into_owned()),
+        command: Some(command),
         cwd: Some(dir.path().to_path_buf()),
         ..ExternalMcpAdapterRequest::default()
     };

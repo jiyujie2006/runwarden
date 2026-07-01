@@ -1188,7 +1188,7 @@ pub mod external {
         serde_json::from_str(input)
     }
 
-    #[derive(Debug, Clone, PartialEq, Deserialize)]
+    #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
     pub struct ExternalMcpAdapterRequest {
         #[serde(default)]
         pub manifest_path: Option<PathBuf>,
@@ -1212,24 +1212,6 @@ pub mod external {
         pub stderr_limit_bytes: Option<usize>,
         #[serde(default)]
         pub request: Value,
-    }
-
-    impl Default for ExternalMcpAdapterRequest {
-        fn default() -> Self {
-            Self {
-                manifest_path: None,
-                transport: None,
-                command: None,
-                args: Vec::new(),
-                cwd: None,
-                url: None,
-                headers: BTreeMap::new(),
-                timeout_ms: None,
-                stdout_limit_bytes: None,
-                stderr_limit_bytes: None,
-                request: Value::Null,
-            }
-        }
     }
 
     pub fn execute_external_mcp_adapter(
@@ -2010,29 +1992,19 @@ pub mod external {
         let bytes = value.as_bytes();
         let mut index = 0;
         while index + 2 < bytes.len() {
-            if bytes[index] == b'%'
-                && let (Some(high), Some(low)) =
-                    (hex_value(bytes[index + 1]), hex_value(bytes[index + 2]))
-            {
-                let decoded = (high << 4) | low;
-                if decoded < 0x20 || decoded == 0x7f {
-                    return true;
+            if bytes[index] == b'%' {
+                let hex = std::str::from_utf8(&bytes[index + 1..index + 3]).unwrap_or("");
+                if let Ok(decoded) = u8::from_str_radix(hex, 16) {
+                    if decoded < 0x20 || decoded == 0x7f {
+                        return true;
+                    }
+                    index += 3;
+                    continue;
                 }
-                index += 3;
-                continue;
             }
             index += 1;
         }
         false
-    }
-
-    fn hex_value(byte: u8) -> Option<u8> {
-        match byte {
-            b'0'..=b'9' => Some(byte - b'0'),
-            b'a'..=b'f' => Some(byte - b'a' + 10),
-            b'A'..=b'F' => Some(byte - b'A' + 10),
-            _ => None,
-        }
     }
 
     fn origin_allowed(origin: &str, allowed_origins: &[String]) -> bool {
