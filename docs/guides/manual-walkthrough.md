@@ -45,7 +45,7 @@ cat artifacts/contest-bundle/redteam-results/SUMMARY.md
 cat artifacts/contest-bundle/manifest.json
 
 # 可视化：timeline + review queue + denied/requires_review/allowed + obs_ref
-xdg-open artifacts/reviewer-console.html
+xdg-open artifacts/demo/reviewer-console.html
 
 # 单场景详情
 python3 -c "import json; [print(f'{c[\"provider\"]} -> {c[\"decision\"]} (side_effect={c[\"side_effect_executed\"]})') for c in json.load(open('artifacts/demo/tool-hijack-email-api/webui.json'))['provider_calls']]"
@@ -137,23 +137,25 @@ Runwarden demo server running.
 # 否则 MCP 写事件到 opencode 的工作目录，浏览器看不到
 export RUNWARDEN_STATE_DIR="$HOME/runwarden/.runwarden"
 export RUNWARDEN_LLM_API_KEY=dummy
+export PATH="$HOME/runwarden/target/debug:$PATH"
+export OPENCODE_RUN_DIR=/tmp/oc-runwarden
+export XDG_CONFIG_HOME="$OPENCODE_RUN_DIR/xdg/config"
+export XDG_DATA_HOME="$OPENCODE_RUN_DIR/xdg/data"
+export XDG_CACHE_HOME="$OPENCODE_RUN_DIR/xdg/cache"
+export XDG_STATE_HOME="$OPENCODE_RUN_DIR/xdg/state"
 
-mkdir -p /tmp/oc-runwarden
+mkdir -p "$XDG_CONFIG_HOME/opencode" "$OPENCODE_RUN_DIR/project"
 
-# 用绝对路径配置 MCP，避免 PATH 找不到 runwarden-mcp
-python3 -c "
-import json, os
-home = os.path.expanduser('~')
-config = json.load(open(f'{home}/runwarden/examples/agent-configs/opencode.runwarden-only.json'))
-config['mcp']['runwarden']['command'] = [f'{home}/runwarden/target/debug/runwarden-mcp']
-json.dump(config, open('/tmp/oc-runwarden/opencode.json', 'w'), indent=2)
-"
+# 用干净 XDG 配置隔离用户级 OpenCode MCP；配置保持 checked safe shape
+cp "$HOME/runwarden/examples/agent-configs/opencode.runwarden-only.json" \
+  "$XDG_CONFIG_HOME/opencode/opencode.json"
 
-cd /tmp/oc-runwarden
+cd "$OPENCODE_RUN_DIR/project"
 
-# 确认 MCP 连接成功
-opencode mcp list
-# 应显示: ✓ runwarden connected
+# 确认 OpenCode 解析后的 MCP 只有 runwarden，且连接成功
+opencode debug config --pure | python3 -c "import json, sys; c=json.load(sys.stdin); assert sorted(c.get('mcp', {})) == ['runwarden']; assert c['tools']['bash'] is False"
+opencode mcp list --pure
+# 应只显示: ✓ runwarden connected
 ```
 
 本手动演示用两个模型入口：

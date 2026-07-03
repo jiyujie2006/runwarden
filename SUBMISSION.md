@@ -22,7 +22,7 @@ Reviewer console/report <- verified obs_* evidence chain
 
 1. `bash scripts/release_gate_local.sh` — 5 个 scenario 真实 kernel/provider demo + report + console。
 2. `bash scripts/contest_bundle.sh` — 自动运行 proxy-probe/output-probe + 生成最终提交包。
-3. 打开 `artifacts/reviewer-console.html` — 查看 timeline / review queue / denied / obs_ref。
+3. 打开 `artifacts/demo/reviewer-console.html` — 查看 timeline / review queue / denied / obs_ref。
 4. 阅读 `artifacts/reports/contest-report.md` — trace-backed 报告，每个结论引用 `obs_*`。
 5. 检查 `artifacts/redteam/*-summary.json` — deterministic 红队测试结果。
 

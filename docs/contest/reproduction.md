@@ -39,9 +39,12 @@ python3 redteam/run.py output-probe \
 ## Red-Team Agent Drive
 
 ```bash
+mkdir -p /tmp/oc-test
+cp examples/agent-configs/opencode.runwarden-only.json /tmp/oc-test/opencode.json
+export PATH="$PWD/target/debug:$PATH"
 python3 redteam/run.py agent-drive \
   --corpora redteam/corpora/path_escape.jsonl \
-  --model opencode/big-pickle --limit 2
+  --config-dir /tmp/oc-test --model opencode/big-pickle --limit 2
 ```
 
 ## Live Reviewer Console

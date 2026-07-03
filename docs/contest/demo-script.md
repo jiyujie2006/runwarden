@@ -20,7 +20,7 @@
    ```
 
    它会自动运行 proxy-probe 和 output-probe，并把结果打包到 `artifacts/contest-bundle/redteam-results/`。
-3. Open `artifacts/reviewer-console.html`.
+3. Open `artifacts/demo/reviewer-console.html`.
 4. Show `prompt-injection-file-exfil`: input inspection, review hold, API denial.
 5. Show `tool-hijack-email-api`: email `requires_review`, hidden API `denied`.
 6. Show `path-escape-file-boundary`: filesystem `root_escape` denial.

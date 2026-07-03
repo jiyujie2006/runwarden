@@ -7,7 +7,7 @@ use std::{
 
 use runwarden_kernel::{
     ErrorKind, PolicyDecision, ProviderCall,
-    authority::{ApprovalBinding, ApprovalRecord},
+    authority::{ApprovalBinding, ApprovalRecord, ApprovalState},
     evidence::{TraceEvent, hex_sha256},
     kernel::{KernelEnforcer, KernelPolicy, ProviderRegistry, provider_requires_approval},
 };
@@ -31,6 +31,16 @@ fn temp_state_dir(name: &str) -> PathBuf {
 fn cwd_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn restore_env(key: &str, value: Option<std::ffi::OsString>) {
+    unsafe {
+        if let Some(value) = value {
+            std::env::set_var(key, value);
+        } else {
+            std::env::remove_var(key);
+        }
+    }
 }
 
 #[test]
@@ -434,6 +444,100 @@ fn provider_call_loads_disk_approval_and_consumes_it() {
     let saved =
         fs::read_to_string(approval_dir.join("approval-email-1.json")).expect("saved approval");
     assert!(saved.contains(r#""state": "consumed""#));
+}
+
+#[test]
+fn provider_call_honors_runwarden_state_dir_for_events_and_approvals() {
+    let dir = temp_state_dir("state-env");
+    let state_dir = dir.join("shared-state");
+    let sandbox_root = dir.join("sandbox");
+    let arguments = json!({
+        "provider": "external.email.send",
+        "to": "ops@example.com"
+    });
+
+    let _guard = cwd_lock().lock().expect("cwd lock");
+    let old_state = std::env::var_os("RUNWARDEN_STATE_DIR");
+    let old_sandbox = std::env::var_os("RUNWARDEN_SANDBOX_ROOT");
+    unsafe {
+        std::env::set_var("RUNWARDEN_STATE_DIR", &state_dir);
+        std::env::set_var("RUNWARDEN_SANDBOX_ROOT", &sandbox_root);
+    }
+    let response = call_tool(216, "runwarden.provider.call", arguments);
+    restore_env("RUNWARDEN_STATE_DIR", old_state);
+    restore_env("RUNWARDEN_SANDBOX_ROOT", old_sandbox);
+
+    assert_eq!(response["result"]["isError"], true);
+    let payload = tool_payload(&response);
+    assert_eq!(payload["decision"], "requires_review");
+    assert_eq!(payload["side_effect_executed"], false);
+    assert!(state_dir.join("events.jsonl").exists());
+    let approvals = fs::read_dir(state_dir.join("approvals"))
+        .expect("approvals dir")
+        .count();
+    assert_eq!(approvals, 1);
+}
+
+#[test]
+fn provider_call_after_consumed_webui_approval_creates_new_pending_review() {
+    let dir = temp_state_dir("consumed-retry");
+    let arguments = json!({
+        "provider": "external.email.send",
+        "to": "ops@example.com",
+        "subject": "Q3"
+    });
+
+    let _guard = cwd_lock().lock().expect("cwd lock");
+    let cwd = std::env::current_dir().expect("cwd");
+    std::env::set_current_dir(&dir).expect("set cwd");
+
+    let first = call_tool(217, "runwarden.provider.call", arguments.clone());
+    assert_eq!(first["result"]["isError"], true);
+    let first_payload = tool_payload(&first);
+    assert_eq!(first_payload["decision"], "requires_review");
+    let first_approval_id = first_payload["approval_id"]
+        .as_str()
+        .expect("approval id")
+        .to_string();
+
+    let approval_dir = dir.join(".runwarden/approvals");
+    let first_path = approval_dir.join(format!("{first_approval_id}.json"));
+    let mut approval: ApprovalRecord =
+        serde_json::from_str(&fs::read_to_string(&first_path).expect("first pending approval"))
+            .expect("approval json");
+    approval.approve("webui", "approved").expect("approve");
+    fs::write(
+        &first_path,
+        serde_json::to_string_pretty(&approval).expect("approved json"),
+    )
+    .expect("write approved approval");
+
+    let allowed = call_tool(218, "runwarden.provider.call", arguments.clone());
+    assert_eq!(allowed["result"]["isError"], false);
+    let allowed_payload = tool_payload(&allowed);
+    assert_eq!(allowed_payload["decision"], "allowed");
+    assert_eq!(allowed_payload["side_effect_executed"], true);
+    let consumed: ApprovalRecord =
+        serde_json::from_str(&fs::read_to_string(&first_path).expect("consumed approval"))
+            .expect("consumed approval json");
+    assert_eq!(consumed.state, ApprovalState::Consumed);
+
+    let second = call_tool(219, "runwarden.provider.call", arguments);
+    std::env::set_current_dir(cwd).expect("restore cwd");
+
+    assert_eq!(second["result"]["isError"], true);
+    let second_payload = tool_payload(&second);
+    assert_eq!(second_payload["decision"], "requires_review");
+    let second_approval_id = second_payload["approval_id"]
+        .as_str()
+        .expect("second approval id");
+    assert_ne!(second_approval_id, first_approval_id);
+    let second_record: ApprovalRecord = serde_json::from_str(
+        &fs::read_to_string(approval_dir.join(format!("{second_approval_id}.json")))
+            .expect("second pending approval"),
+    )
+    .expect("second approval json");
+    assert_eq!(second_record.state, ApprovalState::Pending);
 }
 
 #[test]

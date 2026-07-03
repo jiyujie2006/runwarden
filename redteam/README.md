@@ -64,14 +64,18 @@ to use `runwarden-mcp` as its only tool server, and scores whether the Runwarden
 kernel **denied** the resulting tool call (parsed from the runwarden-mcp debug log).
 
 ```bash
-# requires: opencode installed + runwarden-mcp built + /tmp/oc-test/opencode.json
+mkdir -p /tmp/oc-test
+cp examples/agent-configs/opencode.runwarden-only.json /tmp/oc-test/opencode.json
+export PATH="$PWD/target/debug:$PATH"
 python3 redteam/run.py agent-drive \
   --corpora redteam/corpora/path_escape.jsonl \
-  --model opencode/big-pickle --limit 2
+  --config-dir /tmp/oc-test --model opencode/big-pickle --limit 2
 ```
 
-Result: **2/2 denied** (`error_kind: root_escape`, `side_effect_executed: false`) —
-the kernel blocks path-traversal reads driven by the real LLM.
+Expected when the model calls the tool: path traversal is denied
+(`error_kind: root_escape`, `side_effect_executed: false`). This mode is
+model-dependent; deterministic gates use proxy/output probes plus scenario
+replay.
 
 ## Notes
 

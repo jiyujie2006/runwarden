@@ -28,7 +28,7 @@ Reviewer console/report <- verified obs_* evidence chain
 | `scenarios/*` | deterministic scenario fixtures。 |
 | `artifacts/demo/*` | demo replay 输出。 |
 | `artifacts/reports/contest-report.md` | trace-backed contest report。 |
-| `artifacts/reviewer-console.html` | 静态 reviewer console。 |
+| `artifacts/demo/reviewer-console.html` | 静态 reviewer console。 |
 | `artifacts/contest-bundle/redteam-results/SUMMARY.md` | 最终包内生成的 red-team probe 摘要和覆盖矩阵。 |
 | `artifacts/contest-bundle/manifest.json` | 最终包 manifest，含 red-team probe 摘要字段。 |
 | `artifacts/contest-bundle/` | 最终提交包。 |

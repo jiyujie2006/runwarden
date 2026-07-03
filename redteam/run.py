@@ -20,7 +20,7 @@ Three modes:
 
 Examples:
   python3 run.py proxy-probe --corpora corpora/prompt_injection.jsonl corpora/jailbreak.jsonl
-  python3 run.py agent-drive --corpora corpora/path_escape.jsonl --model opencode/deepseek-v4-flash-free --limit 3
+  python3 run.py agent-drive --corpora corpora/path_escape.jsonl --model opencode/big-pickle --limit 3
   python3 run.py output-probe --corpora corpora/output_filter.jsonl
 
 Each attack record in a corpus is one JSON object per line:

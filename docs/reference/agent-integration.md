@@ -16,6 +16,12 @@ The checked config also defines `runwarden-proxy/big-pickle` as the
 OpenAI-compatible model entry that routes model calls through the local LLM
 proxy at `http://127.0.0.1:8787/v1`.
 
+OpenCode also reads user-level configuration. For a strict Runwarden-only demo,
+run OpenCode with clean `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`,
+and `XDG_STATE_HOME` directories, place the Runwarden config at
+`$XDG_CONFIG_HOME/opencode/opencode.json`, and verify `opencode debug config
+--pure` resolves exactly one MCP entry: `runwarden`.
+
 Agent configuration arguments and MCP tool arguments do not carry Runwarden
 session policy. Agents cannot provide provider allowlists, active-assessment
 state, scoped roots, authz grants or ids, budgets, approval ids, or

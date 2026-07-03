@@ -67,5 +67,5 @@ This index is the canonical map for the contest edition.
 ## Maintenance Rules
 
 - Security decisions stay in Rust crates.
-- TypeScript presents Rust-produced demo state and must not reimplement allow/deny policy.
+- Browser code, and any future TypeScript, may present Rust-produced demo state but must not reimplement allow/deny policy.
 - Keep this index aligned with CLI, MCP, provider, report, approval, and WebUI behavior.

@@ -1,5 +1,9 @@
 # Runwarden Contest Optimization Implementation Plan
 
+> Archived implementation plan. Some baseline counts and worktree observations
+> below are historical; use `docs/README.md`, `SUBMISSION.md`, and
+> `docs/contest/*` as the current reviewer-facing source of truth.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Turn Runwarden from a contest-complete prototype into a high-trust, judge-friendly LLM agent security system with authoritative evidence, clean submission artifacts, stronger red-team coverage, and a clear attack-to-defense review loop.
@@ -40,7 +44,7 @@ The finished project should satisfy these observable outcomes:
 - MCP inline provider calls use server-owned session policy, scoped roots, egress allowlists, argument budget, approval state, and trace persistence.
 - The static and live reviewer console show each scenario as an attack-to-defense chain: attack summary, provider attempts, decision, reason, `obs_*`, and side-effect state.
 - The generated contest report contains one closed-loop table per scenario.
-- Red-team output explains all 12 corpus files: which are covered by proxy-probe, scenario replay, or agent-drive.
+- Red-team output explains all 13 corpus files: which are covered by proxy-probe, output-probe, scenario replay, or optional agent-drive.
 - Base-model output filtering has a red-team harness path, not only unit tests.
 - Chinese attack samples are included and validated.
 
@@ -55,9 +59,9 @@ cargo test --workspace
 
 Observed baseline:
 
-- 12 red-team corpus files, 84 valid records.
+- 13 red-team corpus files, 92 valid records.
 - Workspace tests pass.
-- Existing worktree has uncommitted changes in MCP, CLI console/server, OpenCode config, and docs. Do not revert them.
+- Historical note: the original planning session observed uncommitted changes in MCP, CLI console/server, OpenCode config, and docs.
 
 ## Non-Negotiable Invariants
 
@@ -838,10 +842,11 @@ rm -rf artifacts/demo artifacts/reports artifacts/reviewer-console.html
 rm -f artifacts/llm-proxy/trace.jsonl
 ```
 
-After generating `artifacts/demo/reviewer-console.html`, copy the stable root alias:
+After generating `artifacts/demo/reviewer-console.html`, keep that path as the
+primary local console output:
 
 ```bash
-cp artifacts/demo/reviewer-console.html artifacts/reviewer-console.html
+test -f artifacts/demo/reviewer-console.html
 ```
 
 - [ ] **Step 4: Make contest bundle copy only whitelisted demo paths**
@@ -874,7 +879,7 @@ artifacts/demo/reviewer-console.html
 Mention root alias:
 
 ```text
-artifacts/reviewer-console.html is copied from artifacts/demo/reviewer-console.html for quick opening.
+artifacts/contest-bundle/reviewer-console.html is the bundle quick-open copy.
 ```
 
 - [ ] **Step 6: Run verification**
@@ -2001,7 +2006,7 @@ Verify `manifest.json` includes:
 By default, generated artifacts may be left uncommitted depending on repository policy. If the user wants a contest snapshot committed:
 
 ```bash
-git add artifacts/contest-bundle artifacts/demo artifacts/reports artifacts/reviewer-console.html
+git add artifacts/contest-bundle artifacts/demo artifacts/reports
 git commit -m "chore: refresh contest submission artifacts"
 ```
 

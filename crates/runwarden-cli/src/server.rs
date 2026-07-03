@@ -5,6 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use anyhow::Context;
 use axum::{
     Json, Router,
     extract::State,
@@ -116,9 +117,13 @@ pub fn run_console_server(
             println!("  export PATH=\"$PWD/target/debug:$PATH\"");
             println!("  export RUNWARDEN_LLM_API_KEY=dummy");
             println!("  export RUNWARDEN_STATE_DIR=\"$PWD/.runwarden\"");
-            println!("  mkdir -p /tmp/oc-runwarden");
+            println!("  export XDG_CONFIG_HOME=/tmp/oc-runwarden/xdg/config");
+            println!("  export XDG_DATA_HOME=/tmp/oc-runwarden/xdg/data");
+            println!("  export XDG_CACHE_HOME=/tmp/oc-runwarden/xdg/cache");
+            println!("  export XDG_STATE_HOME=/tmp/oc-runwarden/xdg/state");
+            println!("  mkdir -p /tmp/oc-runwarden \"$XDG_CONFIG_HOME/opencode\"");
             println!(
-                "  cp examples/agent-configs/opencode.runwarden-only.json /tmp/oc-runwarden/opencode.json"
+                "  cp examples/agent-configs/opencode.runwarden-only.json \"$XDG_CONFIG_HOME/opencode/opencode.json\""
             );
             println!("  cd /tmp/oc-runwarden");
             println!("  opencode run \"send an email to test@example.com\" -m opencode/big-pickle --print-logs");
@@ -192,25 +197,7 @@ async fn trace_verify_handler(State(state): State<AppState>) -> Json<Value> {
         Err(_) => json!({ "verified": false, "error": "trace file not found", "event_count": 0 }),
     };
 
-    // Verify MCP provider-call trace (sealed TraceEvents inside events.jsonl)
-    let mcp_events_path = state.state_dir.join("events.jsonl");
-    let mcp_trace_events: Vec<TraceEvent> = match fs::read_to_string(&mcp_events_path) {
-        Ok(content) => content
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .filter_map(|line| {
-                let event: Value = serde_json::from_str(line).ok()?;
-                let trace_event = event.get("data")?.get("trace_event")?;
-                serde_json::from_value::<TraceEvent>(trace_event.clone()).ok()
-            })
-            .collect(),
-        Err(_) => Vec::new(),
-    };
-    let mcp_result = if mcp_trace_events.is_empty() {
-        json!({ "verified": false, "error": "no provider trace events", "event_count": 0 })
-    } else {
-        verify_trace_events(mcp_trace_events)
-    };
+    let mcp_result = provider_trace_verify_result(&state.state_dir.join("events.jsonl"));
 
     Json(json!({
         "model_trace": model_result,
@@ -219,6 +206,42 @@ async fn trace_verify_handler(State(state): State<AppState>) -> Json<Value> {
             || mcp_result["verified"].as_bool().unwrap_or(false),
         "side_effect_executed": false
     }))
+}
+
+fn read_provider_trace_events(path: &Path) -> anyhow::Result<Vec<TraceEvent>> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("read provider events from {}", path.display()))?;
+    let mut trace_events = Vec::new();
+    for (index, line) in content.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let event: Value = serde_json::from_str(line)
+            .with_context(|| format!("parse event line {}", index + 1))?;
+        let trace_event = event
+            .get("data")
+            .and_then(|data| data.get("trace_event"))
+            .cloned()
+            .with_context(|| format!("event line {} is missing data.trace_event", index + 1))?;
+        trace_events.push(
+            serde_json::from_value(trace_event)
+                .with_context(|| format!("parse trace_event on event line {}", index + 1))?,
+        );
+    }
+    Ok(trace_events)
+}
+
+fn provider_trace_verify_result(path: &Path) -> Value {
+    match read_provider_trace_events(path) {
+        Ok(events) if events.is_empty() => {
+            json!({ "verified": false, "error": "no provider trace events", "event_count": 0 })
+        }
+        Ok(events) => verify_trace_events(events),
+        Err(err) => json!({ "verified": false, "error": err.to_string(), "event_count": 0 }),
+    }
 }
 
 fn update_approval(state: &AppState, approval_id: &str, approve: bool) -> Json<Value> {
@@ -500,6 +523,7 @@ fn verify_trace_events(events: Vec<TraceEvent>) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use runwarden_kernel::authority::ApprovalBinding;
 
     #[test]
     fn approval_path_accepts_record_ids_only() {
@@ -513,6 +537,90 @@ mod tests {
         assert!(approval_path(Path::new("/tmp/state"), "../webui-obs_1").is_err());
         assert!(approval_path(Path::new("/tmp/state"), "webui/obs_1").is_err());
         assert!(approval_path(Path::new("/tmp/state"), "webui.obs_1").is_err());
+    }
+
+    #[test]
+    fn webui_approval_updates_pending_record_and_broadcasts_without_side_effect() {
+        let dir = tempfile::tempdir().expect("state dir");
+        let approvals_dir = dir.path().join("approvals");
+        fs::create_dir_all(&approvals_dir).expect("approvals dir");
+        let approval = ApprovalRecord::new(
+            "webui-obs_loop",
+            ApprovalBinding {
+                session_id: "mcp-inline".to_string(),
+                provider: "external.email.send".to_string(),
+                action: "call".to_string(),
+                argument_hash: "hash".to_string(),
+                authz_id: None,
+                actor_id: Some("mcp-agent".to_string()),
+            },
+        );
+        fs::write(
+            approvals_dir.join("webui-obs_loop.json"),
+            serde_json::to_string_pretty(&approval).expect("approval json"),
+        )
+        .expect("write approval");
+
+        let (tx, mut rx) = broadcast::channel(4);
+        let state = AppState {
+            event_tx: tx,
+            state_dir: dir.path().to_path_buf(),
+            trace_path: dir.path().join("trace.jsonl"),
+        };
+
+        let pending = read_all_approvals(dir.path()).expect("pending approvals");
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].state, ApprovalState::Pending);
+
+        let response = update_approval(&state, "webui-obs_loop", true).0;
+        assert_eq!(response["state"], "approved");
+        assert_eq!(response["side_effect_executed"], false);
+
+        let saved: ApprovalRecord = serde_json::from_str(
+            &fs::read_to_string(approvals_dir.join("webui-obs_loop.json")).expect("saved approval"),
+        )
+        .expect("saved approval json");
+        assert_eq!(saved.state, ApprovalState::Approved);
+        assert_eq!(saved.reviewer.as_deref(), Some("webui"));
+
+        let event = rx.try_recv().expect("approval event");
+        assert_eq!(event.kind, "approval_granted");
+        assert_eq!(event.provider.as_deref(), Some("external.email.send"));
+        assert_eq!(event.obs_ref.as_deref(), Some("obs_loop"));
+        assert_eq!(event.side_effect_executed, Some(false));
+    }
+
+    #[test]
+    fn provider_trace_verification_rejects_event_lines_without_trace_event() {
+        let dir = tempfile::tempdir().expect("state dir");
+        let path = dir.path().join("events.jsonl");
+        let trace_event = TraceEvent::sealed(
+            "obs_console_trace".to_string(),
+            "provider_completed".to_string(),
+            Some("external.email.send".to_string()),
+            json!({"decision": "allowed", "side_effect_executed": true}),
+            None,
+        );
+        fs::write(
+            &path,
+            format!(
+                "{}\n{}\n",
+                serde_json::to_string(&json!({"data": {"trace_event": trace_event}}))
+                    .expect("valid event"),
+                serde_json::to_string(&json!({"data": {"decision": "allowed"}}))
+                    .expect("missing trace event")
+            ),
+        )
+        .expect("events jsonl");
+
+        let result = provider_trace_verify_result(&path);
+
+        assert_eq!(result["verified"], false);
+        assert!(
+            result["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("missing data.trace_event"))
+        );
     }
 
     #[test]

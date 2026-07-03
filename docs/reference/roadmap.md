@@ -7,8 +7,8 @@ trace-backed review outputs.
 
 - Kernel-owned provider mediation.
 - External MCP stdio, HTTP, and SSE adapter safeguards.
-- Session and bound approval commands.
-- Four-scenario contest corpus and eval gate.
+- Internal session derivation and file-backed WebUI/MCP approval flow.
+- Five-scenario contest corpus and eval gate.
 - Deterministic demo runner.
 - Scenario-suite report rendering.
 - Static WebUI reviewer-console rendering.

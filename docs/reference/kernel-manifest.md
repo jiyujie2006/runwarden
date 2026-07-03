@@ -22,8 +22,9 @@ is the runtime policy input derived from that assessment.
 
 ```bash
 runwarden demo --scenario <id> --output artifacts/demo/<id> --json
-runwarden session inspect --session <id> --json
+runwarden check --strict --json
 ```
 
-Session-backed provider calls use the session's allowlist, roots, authz, actor,
-and active-assessment state before side effects.
+Demo and check flows derive the session policy internally. Provider calls use
+the session's allowlist, roots, authz, actor, and active-assessment state before
+side effects.

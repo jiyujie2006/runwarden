@@ -1,12 +1,16 @@
 use std::{
+    ffi::OsString,
     fs,
     io::{Read, Write},
     net::TcpStream,
     path::PathBuf,
     process::{Child, Command, Stdio},
+    sync::{Mutex, OnceLock},
 };
 
+use runwarden_mcp::handle_jsonrpc_body;
 use serde_json::Value;
+use serde_json::json;
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -15,6 +19,21 @@ fn workspace_root() -> PathBuf {
         .parent()
         .expect("workspace root")
         .to_path_buf()
+}
+
+fn demo_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn restore_env(key: &str, value: Option<OsString>) {
+    unsafe {
+        if let Some(value) = value {
+            std::env::set_var(key, value);
+        } else {
+            std::env::remove_var(key);
+        }
+    }
 }
 
 #[test]
@@ -222,6 +241,7 @@ fn output_path_rejections_preserve_command_labels() {
 
 #[test]
 fn demo_interactive_serves_console_and_healthz() {
+    let _guard = demo_lock().lock().expect("demo lock");
     let workspace = workspace_root();
     let mut child = Command::new(env!("CARGO_BIN_EXE_runwarden"))
         .current_dir(&workspace)
@@ -250,6 +270,93 @@ fn demo_interactive_serves_console_and_healthz() {
 
     assert!(response.contains("HTTP/1.1 200 OK"));
     assert!(response.contains(r#"{"ok":true}"#));
+}
+
+#[test]
+fn demo_interactive_approval_http_to_mcp_retry_closed_loop() {
+    let _guard = demo_lock().lock().expect("demo lock");
+    let workspace = workspace_root();
+    let state_dir = workspace.join(".runwarden");
+    let sandbox_root = workspace.join("target/runwarden-contest-test/live-console-sandbox");
+    let _ = fs::remove_dir_all(&state_dir);
+    let _ = fs::remove_dir_all(&sandbox_root);
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_runwarden"))
+        .current_dir(&workspace)
+        .args(["demo", "--port", "0", "--json"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn demo server");
+
+    let startup = read_startup_json(&mut child);
+    let listen_addr = startup["listen_addr"]
+        .as_str()
+        .expect("listen_addr")
+        .to_string();
+
+    let old_state = std::env::var_os("RUNWARDEN_STATE_DIR");
+    let old_sandbox = std::env::var_os("RUNWARDEN_SANDBOX_ROOT");
+    unsafe {
+        std::env::set_var("RUNWARDEN_STATE_DIR", &state_dir);
+        std::env::set_var("RUNWARDEN_SANDBOX_ROOT", &sandbox_root);
+    }
+
+    let arguments = json!({
+        "provider": "external.email.send",
+        "to": "ops@example.com",
+        "subject": "closed loop"
+    });
+    let first = call_mcp_tool(901, "runwarden.provider.call", arguments.clone());
+    let first_payload = mcp_tool_payload(&first);
+    assert_eq!(first["result"]["isError"], true);
+    assert_eq!(first_payload["decision"], "requires_review");
+    assert_eq!(first_payload["side_effect_executed"], false);
+    let approval_id = first_payload["approval_id"]
+        .as_str()
+        .expect("approval id")
+        .to_string();
+
+    let pending = http_json(&listen_addr, "GET", "/api/pending", None);
+    assert!(
+        pending["pending"]
+            .as_array()
+            .expect("pending array")
+            .iter()
+            .any(|approval| approval["approval_id"] == approval_id)
+    );
+
+    let approved = http_json(
+        &listen_addr,
+        "POST",
+        "/api/approve",
+        Some(json!({ "approval_id": approval_id })),
+    );
+    assert_eq!(approved["state"], "approved");
+    assert_eq!(approved["side_effect_executed"], false);
+
+    let second = call_mcp_tool(902, "runwarden.provider.call", arguments);
+    let second_payload = mcp_tool_payload(&second);
+    assert_eq!(second["result"]["isError"], false);
+    assert_eq!(second_payload["decision"], "allowed");
+    assert_eq!(second_payload["side_effect_executed"], true);
+
+    let saved = fs::read_to_string(
+        state_dir
+            .join("approvals")
+            .join(format!("{approval_id}.json")),
+    )
+    .expect("saved approval");
+    assert!(saved.contains(r#""state": "consumed""#));
+
+    let trace = http_json(&listen_addr, "GET", "/api/trace/verify", None);
+    assert_eq!(trace["provider_trace"]["verified"], true);
+    assert_eq!(trace["provider_trace"]["event_count"], 2);
+
+    restore_env("RUNWARDEN_STATE_DIR", old_state);
+    restore_env("RUNWARDEN_SANDBOX_ROOT", old_sandbox);
+    child.kill().expect("kill demo server");
+    child.wait().expect("wait demo server");
 }
 
 #[test]
@@ -342,4 +449,50 @@ fn read_startup_json(child: &mut Child) -> Value {
         buf.push(byte[0]);
     }
     serde_json::from_slice(&buf).expect("startup JSON")
+}
+
+fn call_mcp_tool(id: u64, name: &str, arguments: Value) -> Value {
+    handle_jsonrpc_body(
+        &json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/call",
+            "params": {
+                "name": name,
+                "arguments": arguments
+            }
+        })
+        .to_string(),
+    )
+    .expect("mcp response")
+}
+
+fn mcp_tool_payload(response: &Value) -> Value {
+    let text = response["result"]["content"][0]["text"]
+        .as_str()
+        .expect("mcp text content");
+    serde_json::from_str(text).expect("mcp payload JSON")
+}
+
+fn http_json(addr: &str, method: &str, path: &str, body: Option<Value>) -> Value {
+    let body = body.map(|value| value.to_string()).unwrap_or_default();
+    let request = if method == "POST" {
+        format!(
+            "{method} {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+    } else {
+        format!("{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+    };
+    let mut stream = TcpStream::connect(addr).expect("connect demo server");
+    stream.write_all(request.as_bytes()).expect("write request");
+    let mut response = String::new();
+    stream.read_to_string(&mut response).expect("read response");
+    assert!(
+        response.contains("HTTP/1.1 200 OK"),
+        "unexpected response: {response}"
+    );
+    let (_, body) = response.split_once("\r\n\r\n").expect("response body");
+    serde_json::from_str(body).expect("response JSON")
 }

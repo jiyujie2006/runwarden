@@ -32,7 +32,16 @@ When running an agent from a different working directory, set:
 
 ```bash
 export RUNWARDEN_STATE_DIR="$PWD/.runwarden"
+export XDG_CONFIG_HOME=/tmp/oc-runwarden/xdg/config
+export XDG_DATA_HOME=/tmp/oc-runwarden/xdg/data
+export XDG_CACHE_HOME=/tmp/oc-runwarden/xdg/cache
+export XDG_STATE_HOME=/tmp/oc-runwarden/xdg/state
 ```
+
+The `XDG_*` variables keep OpenCode from merging user-level MCP servers into
+the demo. Copy `examples/agent-configs/opencode.runwarden-only.json` to
+`$XDG_CONFIG_HOME/opencode/opencode.json` and confirm `opencode debug config
+--pure` lists only `runwarden` under `mcp`.
 
 `runwarden demo --scenario <name> --output <dir> --json` executes the scenario
 provider calls through the Rust kernel and provider layer, then writes

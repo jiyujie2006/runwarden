@@ -339,8 +339,11 @@ fn handle_provider_call(id: Value, params: Option<&Value>) -> Value {
     }
     let outcome = enforcer.evaluate_call(&call);
     if outcome.decision != PolicyDecision::Allowed {
-        persist_pending_approval_mcp(&call, &outcome).ok();
-        let payload = provider_outcome_payload(&outcome, Some(arguments));
+        let pending_approval_id = persist_pending_approval_mcp(&call, &outcome).ok().flatten();
+        let mut payload = provider_outcome_payload(&outcome, Some(arguments));
+        if let Some(approval_id) = pending_approval_id {
+            payload["approval_id"] = json!(approval_id);
+        }
         let payload = append_mcp_provider_event(&outcome, &payload).unwrap_or(payload);
         return tool_error_result(id, payload);
     }
@@ -642,21 +645,38 @@ fn attach_matching_approval_mcp(call: &mut ProviderCall, approvals: &[ApprovalRe
 fn persist_pending_approval_mcp(
     call: &ProviderCall,
     outcome: &ProviderOutcome,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Option<String>> {
     if outcome.decision != PolicyDecision::RequiresReview {
-        return Ok(());
+        return Ok(None);
     }
-    let approval_id = format!("webui-{}", outcome.observation_id);
-    let path = approvals_dir_mcp().join(format!("{approval_id}.json"));
-    if path.exists() {
-        return Ok(());
+    let dir = approvals_dir_mcp();
+    std::fs::create_dir_all(&dir)?;
+    let base_approval_id = format!("webui-{}", outcome.observation_id);
+    let binding = approval_binding_for_mcp_call(call);
+    for attempt in 0..100 {
+        let approval_id = if attempt == 0 {
+            base_approval_id.clone()
+        } else {
+            format!("{base_approval_id}-{}", attempt + 1)
+        };
+        let path = dir.join(format!("{approval_id}.json"));
+        if !path.exists() {
+            let approval = ApprovalRecord::new(approval_id.clone(), binding.clone());
+            std::fs::write(path, serde_json::to_string_pretty(&approval)?)?;
+            return Ok(Some(approval_id));
+        }
+        if let Ok(body) = std::fs::read_to_string(&path)
+            && let Ok(approval) = serde_json::from_str::<ApprovalRecord>(&body)
+            && approval.binding == binding
+            && approval.state == ApprovalState::Pending
+        {
+            return Ok(Some(approval.approval_id));
+        }
     }
-    let approval = ApprovalRecord::new(approval_id, approval_binding_for_mcp_call(call));
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(path, serde_json::to_string_pretty(&approval)?)?;
-    Ok(())
+    bail!(
+        "too many pending approval attempts for {}",
+        outcome.observation_id
+    )
 }
 
 fn persist_consumed_approval_mcp(
@@ -712,7 +732,10 @@ fn append_mcp_provider_event_to_path(
         "reason": &outcome.envelope.reason,
         "obs_ref": &outcome.observation_id,
         "approval_id": if outcome.decision == PolicyDecision::RequiresReview {
-            json!(format!("webui-{}", outcome.observation_id))
+            payload
+                .get("approval_id")
+                .cloned()
+                .unwrap_or_else(|| json!(format!("webui-{}", outcome.observation_id)))
         } else {
             Value::Null
         },
@@ -856,6 +879,9 @@ fn provider_outcome_payload(outcome: &ProviderOutcome, arguments: Option<&Value>
     payload["reason"] = json!(&outcome.envelope.reason);
     payload["side_effect_executed"] = json!(outcome.envelope.side_effect_executed);
     payload["obs_ref"] = json!(&outcome.observation_id);
+    if outcome.decision == PolicyDecision::RequiresReview {
+        payload["approval_id"] = json!(format!("webui-{}", outcome.observation_id));
+    }
     payload["trace_event"] = trace_event_for_outcome(outcome, anomaly.as_ref());
     if let Some(anomaly) = anomaly {
         payload["anomaly"] = anomaly;

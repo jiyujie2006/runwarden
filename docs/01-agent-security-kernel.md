@@ -1,8 +1,8 @@
 # Agent Security Kernel
 
 The Rust kernel is the source of truth for Runwarden security decisions. CLI,
-MCP, and TypeScript presentation code may display state or call contracts, but
-they must not duplicate allow/deny policy.
+MCP, browser code, and any future TypeScript presentation code may display
+state or call contracts, but they must not duplicate allow/deny policy.
 
 ## Enforcement Path
 
