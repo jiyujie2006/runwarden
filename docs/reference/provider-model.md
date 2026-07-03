@@ -43,3 +43,9 @@ allow the call. Those outcomes report `simulated=false`,
 `execution_status=completed`, and `side_effect_executed=true` only when the
 local effect actually happened. Review-blocked and denied external providers
 always report `side_effect_executed=false`.
+
+Reviewable local-business evidence is kept in the scenario fixtures:
+`tool-hijack-email-api` shows email review and API denial,
+`path-escape-file-boundary` shows filesystem root escape denial, and
+`memory-knowledge-poisoning` shows memory/knowledge review and denial without
+network egress.

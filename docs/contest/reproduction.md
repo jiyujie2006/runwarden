@@ -27,6 +27,15 @@ python3 redteam/run.py proxy-probe \
   --fail-on-fail
 ```
 
+## Red-Team Output Probe
+
+```bash
+python3 redteam/run.py output-probe \
+  --corpora redteam/corpora/output_filter.jsonl \
+  --summary-out artifacts/redteam/output-probe-summary.json \
+  --fail-on-fail
+```
+
 ## Red-Team Agent Drive
 
 ```bash

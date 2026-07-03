@@ -1,0 +1,22 @@
+version = "1"
+name = "anomalous provider sequence"
+mode = "audit"
+provider_allowlist = [
+  "runwarden.input.inspect",
+  "external.memory.write",
+  "external.api.request"
+]
+
+[[roots]]
+name = "workspace"
+path = "."
+
+[authorization]
+id = "contest-authz"
+state = "active"
+
+[actor]
+id = "contest-agent"
+
+[active_assessment]
+enabled = true

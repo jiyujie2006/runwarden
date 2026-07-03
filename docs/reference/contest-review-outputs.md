@@ -34,18 +34,22 @@ regenerating contest outputs.
 `artifacts/redteam/proxy-probe-results.jsonl` and
 `artifacts/redteam/proxy-probe-summary.json` plus
 `artifacts/redteam/proxy-trace.jsonl`; deterministic gates should pass
-`--fail-on-fail` so any proxy-probe `FAIL` exits non-zero. `agent-drive` writes
-`artifacts/redteam/agent-drive-results.jsonl` and
+`--fail-on-fail` so any proxy-probe `FAIL` exits non-zero. `redteam/run.py
+output-probe` writes `artifacts/redteam/output-probe-results.jsonl`,
+`artifacts/redteam/output-probe-summary.json`, and
+`artifacts/redteam/output-trace.jsonl` for streaming output-filter evidence.
+`agent-drive` writes `artifacts/redteam/agent-drive-results.jsonl` and
 `artifacts/redteam/agent-drive-summary.json`.
 
 These outputs are review evidence, not installable product artifacts.
 
 `bash scripts/contest_bundle.sh` runs the local gate, rebuilds
-`runwarden-llm-proxy`, runs the full deterministic proxy-probe corpus with
+`runwarden-llm-proxy`, runs deterministic proxy-probe and output-probe with
 `--fail-on-fail`, and writes `artifacts/contest-bundle/` with `manifest.json`,
-`SHA256SUMS`, and generated `redteam-results/SUMMARY.md`. The manifest includes the proxy-probe
-`total`/`pass`/`fail`/`skip` values when `proxy-probe-summary.json` exists and
-uses `null` values when it is missing. The bundle copies only the five
+`SHA256SUMS`, and generated `redteam-results/SUMMARY.md`. The manifest includes
+proxy-probe and output-probe `total`/`pass`/`fail`/`skip` values when summary
+JSON exists and uses `null` values when it is missing. The generated summary
+also includes the corpus coverage matrix. The bundle copies only the five
 official scenario directories, their matching demo outputs, and other
-whitelisted submission paths. It excludes `.env`, `target/`, and
-`node_modules/`.
+whitelisted submission paths. It excludes `.env`, `target/`, `node_modules/`,
+Python cache files, and internal planning docs.

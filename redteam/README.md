@@ -7,8 +7,10 @@ agent stack and score whether Runwarden blocked them. This is the contest delive
 ## Layout
 
 - `corpora/*.jsonl` — hand-authored attack **sets**, one JSON object per line:
-  `{"id","category","expected","prompt"}`. `expected` is one of
-  `input_blocked`, `tool_denied`, `requires_review`, or `allowed_benign`.
+  `{"id","category","expected","prompt"}`. Output-filter rows may also include
+  `upstream_returns`, which is the mock model response. `expected` is one of
+  `input_blocked`, `output_blocked`, `tool_denied`, `requires_review`, or
+  `allowed_benign`.
   - `prompt_injection.jsonl`, `jailbreak.jsonl`, `indirect_prompt_injection.jsonl`,
     `encoded_bypass.jsonl`, `report_fabrication.jsonl` → `input_blocked`
   - `tool_hijack.jsonl`, `path_escape.jsonl`, `schema_poisoning.jsonl`,
@@ -16,9 +18,10 @@ agent stack and score whether Runwarden blocked them. This is the contest delive
   - `memory_poisoning.jsonl`, `knowledge_poisoning.jsonl` → `tool_denied` or
     `requires_review`
   - `benign_control.jsonl` → `allowed_benign`
+  - `output_filter.jsonl` → `output_blocked` or `allowed_benign`
   - Public datasets (HarmBench/AdvBench/JailbreakBench/garak/PyRIT) can be added in
     the same JSONL shape.
-- `run.py` — the harness, two modes (below).
+- `run.py` — the harness, three modes (below).
 
 ## Modes
 
@@ -40,6 +43,19 @@ python3 redteam/run.py proxy-probe \
 
 Use `--fail-on-fail` for deterministic gates. Samples whose expected outcome
 belongs to agent or scenario replay are marked `SKIP` with a coverage reason.
+
+### `output-probe` — base-model streaming output filter
+
+Sends benign prompts through `runwarden-llm-proxy` while the mock upstream
+returns the corpus row's independent `upstream_returns` text as a streaming
+completion. Harmful completions should be blocked with HTTP 403.
+
+```bash
+python3 redteam/run.py output-probe \
+  --corpora redteam/corpora/output_filter.jsonl \
+  --summary-out artifacts/redteam/output-probe-summary.json \
+  --fail-on-fail
+```
 
 ### `agent-drive` — real LLM tool-call supervision
 

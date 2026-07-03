@@ -6,7 +6,13 @@ import glob
 import json
 import sys
 
-VALID_EXPECTED = {"input_blocked", "tool_denied", "requires_review", "allowed_benign"}
+VALID_EXPECTED = {
+    "input_blocked",
+    "tool_denied",
+    "requires_review",
+    "allowed_benign",
+    "output_blocked",
+}
 REQUIRED = ["id", "category", "expected", "prompt"]
 
 

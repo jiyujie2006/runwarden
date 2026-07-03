@@ -26,7 +26,7 @@ and Python harness unit tests.
 ## Contest Bundle
 
 `scripts/contest_bundle.sh` runs the local contest gate, runs deterministic
-`proxy-probe`, then copies the submission whitelist into
+`proxy-probe` and `output-probe`, then copies the submission whitelist into
 `artifacts/contest-bundle`. The whitelist contains only the five official
 scenario directories and their matching demo outputs.
 

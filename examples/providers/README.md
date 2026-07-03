@@ -43,6 +43,13 @@ The contest catalog models these mediated external/demo provider families:
 External provider execution is selected from registry metadata and manifest
 fields. Do not use provider id prefixes as the source of truth for dispatch.
 
+## Review Examples
+
+- Email review hold: `scenarios/tool-hijack-email-api/expected/provider-calls.json`
+- API denial: `scenarios/tool-hijack-email-api/expected/denials.json`
+- Root escape denial: `scenarios/path-escape-file-boundary/expected/denials.json`
+- Memory/knowledge review: `scenarios/memory-knowledge-poisoning/expected/provider-calls.json`
+
 Maintained references:
 
 - [Provider Model](../../docs/reference/provider-model.md)

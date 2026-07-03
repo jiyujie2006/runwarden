@@ -475,6 +475,39 @@ fn report_lint_accepts_unstructured_review_blocked_claim_without_side_effects() 
 }
 
 #[test]
+fn report_lint_accepts_held_for_review_claim_with_structured_support() {
+    let trace_events = vec![trace_with_payload(
+        "obs_review",
+        "provider_approval_pending",
+        "external.api.request",
+        json!({
+            "decision": "requires_review",
+            "execution_status": "not_executed",
+            "side_effect_executed": false
+        }),
+    )];
+    let report = ReportDraft::new(vec![
+        ReportClaim::new(
+            "finding-1",
+            "The memory-to-API sequence was held for review with no side effect",
+            ["obs_review"],
+        )
+        .with_support(ReportClaimSupport {
+            provider: Some("external.api.request".to_string()),
+            event_type: Some("provider_approval_pending".to_string()),
+            decision: Some("requires_review".to_string()),
+            execution_status: Some("not_executed".to_string()),
+            side_effect_executed: Some(false),
+            simulated: None,
+        }),
+    ]);
+
+    let result = lint_report_against_trace(&report, &trace_events);
+
+    assert!(result.ok, "{result:#?}");
+}
+
+#[test]
 fn report_lint_rejects_simulated_completed_claim_without_simulated_support() {
     let trace_events = vec![trace_with_payload(
         "obs_1",

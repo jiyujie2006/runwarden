@@ -338,7 +338,7 @@ fn handle_provider_call(id: Value, params: Option<&Value>) -> Value {
     let outcome = enforcer.evaluate_call(&call);
     if outcome.decision != PolicyDecision::Allowed {
         persist_pending_approval_mcp(&call, &outcome).ok();
-        let payload = provider_outcome_payload(&outcome);
+        let payload = provider_outcome_payload(&outcome, Some(arguments));
         let payload = append_mcp_provider_event(&outcome, &payload).unwrap_or(payload);
         return tool_error_result(id, payload);
     }
@@ -367,7 +367,8 @@ fn handle_provider_call(id: Value, params: Option<&Value>) -> Value {
                     "provider_completed",
                     "completed",
                     false,
-                    false
+                    false,
+                    None
                 ),
                 "output": inspection
             })
@@ -840,7 +841,12 @@ fn tool_arguments(params: Option<&Value>) -> &Value {
         .unwrap_or(&Value::Null)
 }
 
-fn provider_outcome_payload(outcome: &ProviderOutcome) -> Value {
+fn provider_outcome_payload(outcome: &ProviderOutcome, arguments: Option<&Value>) -> Value {
+    let anomaly = if provider_is_external(&outcome.envelope.provider) {
+        arguments.map(|arguments| analyze_anomaly(outcome, arguments))
+    } else {
+        None
+    };
     let mut payload = serde_json::to_value(outcome).expect("provider outcome serializes");
     payload["provider"] = json!(&outcome.envelope.provider);
     payload["action"] = json!(&outcome.envelope.action);
@@ -848,11 +854,14 @@ fn provider_outcome_payload(outcome: &ProviderOutcome) -> Value {
     payload["reason"] = json!(&outcome.envelope.reason);
     payload["side_effect_executed"] = json!(outcome.envelope.side_effect_executed);
     payload["obs_ref"] = json!(&outcome.observation_id);
-    payload["trace_event"] = trace_event_for_outcome(outcome);
+    payload["trace_event"] = trace_event_for_outcome(outcome, anomaly.as_ref());
+    if let Some(anomaly) = anomaly {
+        payload["anomaly"] = anomaly;
+    }
     payload
 }
 
-fn trace_event_for_outcome(outcome: &ProviderOutcome) -> Value {
+fn trace_event_for_outcome(outcome: &ProviderOutcome, anomaly: Option<&Value>) -> Value {
     let event_type = match outcome.decision {
         PolicyDecision::Allowed => "provider_policy_evaluated",
         PolicyDecision::Denied => "provider_denied",
@@ -868,6 +877,7 @@ fn trace_event_for_outcome(outcome: &ProviderOutcome) -> Value {
             .unwrap_or("not_executed"),
         false,
         outcome.envelope.side_effect_executed,
+        anomaly,
     )
 }
 
@@ -877,22 +887,27 @@ fn trace_event_for_provider_result(
     execution_status: &str,
     simulated: bool,
     side_effect_executed: bool,
+    anomaly: Option<&Value>,
 ) -> Value {
+    let mut payload = json!({
+        "provider": &outcome.envelope.provider,
+        "action": &outcome.envelope.action,
+        "decision": &outcome.decision,
+        "execution_status": execution_status,
+        "gate_id": &outcome.envelope.gate_id,
+        "reason": &outcome.envelope.reason,
+        "error_kind": &outcome.envelope.error_kind,
+        "side_effect_executed": side_effect_executed,
+        "simulated": simulated
+    });
+    if let Some(anomaly) = anomaly {
+        payload["anomaly"] = anomaly.clone();
+    }
     let event = TraceEvent::sealed(
         outcome.observation_id.clone(),
         event_type.to_string(),
         Some(outcome.envelope.provider.clone()),
-        json!({
-            "provider": &outcome.envelope.provider,
-            "action": &outcome.envelope.action,
-            "decision": &outcome.decision,
-            "execution_status": execution_status,
-            "gate_id": &outcome.envelope.gate_id,
-            "reason": &outcome.envelope.reason,
-            "error_kind": &outcome.envelope.error_kind,
-            "side_effect_executed": side_effect_executed,
-            "simulated": simulated
-        }),
+        payload,
         None,
     );
     serde_json::to_value(event).expect("trace event serializes")
@@ -965,6 +980,7 @@ fn external_provider_result(
     } else {
         "provider_completed"
     };
+    let anomaly = analyze_anomaly(outcome, arguments);
     json!({
         "provider": &outcome.envelope.provider,
         "action": &outcome.envelope.action,
@@ -978,10 +994,11 @@ fn external_provider_result(
             event_type,
             execution_status,
             simulated,
-            side_effect_executed
+            side_effect_executed,
+            Some(&anomaly)
         ),
         "output": executed.get("output").cloned().unwrap_or(Value::Null),
-        "anomaly": analyze_anomaly(outcome, arguments)
+        "anomaly": anomaly
     })
 }
 
@@ -1037,7 +1054,7 @@ fn handle_trace_export(id: Value, arguments: &Value) -> Value {
     );
     let outcome = enforcer.evaluate_call(&call);
     if outcome.decision != PolicyDecision::Allowed {
-        return tool_error_result(id, provider_outcome_payload(&outcome));
+        return tool_error_result(id, provider_outcome_payload(&outcome, None));
     }
 
     let mut store = InMemoryTraceStore::default();
@@ -1246,7 +1263,7 @@ fn handle_report_render(id: Value, params: Option<&Value>) -> Value {
     );
     let outcome = enforcer.evaluate_call(&call);
     if outcome.decision != PolicyDecision::Allowed {
-        return tool_error_result(id, provider_outcome_payload(&outcome));
+        return tool_error_result(id, provider_outcome_payload(&outcome, None));
     }
 
     let Some(report) = report_arg(params) else {
@@ -1458,6 +1475,43 @@ mod tests {
     }
 
     #[test]
+    fn provider_outcome_payload_adds_anomaly_for_review_blocked_external_call() {
+        let call = ProviderCall {
+            session_id: "mcp-inline".to_string(),
+            provider: "external.api.request".to_string(),
+            action: "request".to_string(),
+            arguments: json!({
+                "method": "POST",
+                "url": "https://api.example.com/callback",
+                "body": {"source": "memory"}
+            }),
+            actor_id: None,
+            authz_id: None,
+            approval_id: None,
+        };
+        let outcome = ProviderOutcome::before_side_effect(
+            PolicyDecision::RequiresReview,
+            &call,
+            "approval",
+            "approval required for test",
+            Some(ErrorKind::ApprovalInvalid),
+        );
+
+        let payload = provider_outcome_payload(&outcome, Some(&call.arguments));
+
+        assert_eq!(payload["decision"], "requires_review");
+        assert_eq!(payload["side_effect_executed"], false);
+        assert!(payload["anomaly"]["score"].is_number());
+        assert!(payload["anomaly"]["is_anomalous"].is_boolean());
+        assert!(payload["anomaly"]["reasons"].is_array());
+        assert!(payload["trace_event"]["payload"]["anomaly"]["score"].is_number());
+        assert_eq!(
+            payload["trace_event"]["payload"]["side_effect_executed"],
+            false
+        );
+    }
+
+    #[test]
     fn append_mcp_provider_event_stores_verifiable_trace_chain() {
         let dir = std::env::temp_dir().join(format!(
             "runwarden-mcp-event-chain-{}-{}",
@@ -1488,7 +1542,7 @@ mod tests {
         let first_payload = append_mcp_provider_event_to_path(
             &path,
             &first_outcome,
-            &provider_outcome_payload(&first_outcome),
+            &provider_outcome_payload(&first_outcome, None),
         )
         .expect("first event");
 
@@ -1511,7 +1565,7 @@ mod tests {
         let second_payload = append_mcp_provider_event_to_path(
             &path,
             &second_outcome,
-            &provider_outcome_payload(&second_outcome),
+            &provider_outcome_payload(&second_outcome, None),
         )
         .expect("second event");
 

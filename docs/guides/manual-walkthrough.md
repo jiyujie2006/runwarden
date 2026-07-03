@@ -30,7 +30,8 @@ bash scripts/contest_bundle.sh
 | `dev_gate.sh` | `cargo fmt` + `cargo clippy -D warnings` + `cargo-deny` + corpus 校验 + Python unittest + `cargo test --workspace` |
 | `check --strict` | 5 场景 fixture 验证 + 评估 |
 | `demo --all` | 5 场景真实执行（kernel → sandbox → 真写 mbox/真读文件），生成 `webui.json` × 5 + `reviewer-console.html` |
-| `proxy-probe` | 7 corpus 红队测试（53 pass / 0 fail / 3 skip） |
+| `proxy-probe` | deterministic 模型输入过滤红队测试 |
+| `output-probe` | deterministic 流式输出过滤红队测试 |
 | `report render` | 汇总 5 场景为 `contest-report.md` |
 | 打包 | `artifacts/contest-bundle/`（含 manifest.json + SUMMARY.md + SHA256SUMS） |
 
@@ -40,7 +41,7 @@ bash scripts/contest_bundle.sh
 # 红队摘要
 cat artifacts/contest-bundle/redteam-results/SUMMARY.md
 
-# 提交包 manifest（含 scenario_count + redteam_proxy_probe 摘要）
+# 提交包 manifest（含 scenario_count + redteam_proxy_probe / redteam_output_probe 摘要）
 cat artifacts/contest-bundle/manifest.json
 
 # 可视化：timeline + review queue + denied/requires_review/allowed + obs_ref
@@ -55,7 +56,7 @@ python3 -c "import json; [print(f'{c[\"provider\"]} -> {c[\"decision\"]} (side_e
 ```bash
 # 模型调用面 trace（proxy-probe 生成）
 target/debug/runwarden trace verify --trace artifacts/redteam/proxy-trace.jsonl --json
-# {"verified": true, "event_count": 53}
+# event_count equals the number of forwarded or blocked proxy-probe calls.
 
 # 工具调用面 trace（demo --all 生成）
 target/debug/runwarden trace verify --trace artifacts/demo/tool-hijack-email-api/trace.json --json
@@ -71,7 +72,7 @@ python3 redteam/run.py proxy-probe \
   --fail-on-fail
 ```
 
-期望：`34 total / 34 pass / 0 fail / 0 skip`（恶意全阻断，良性全转发）。
+期望：`fail: 0`（恶意全阻断，良性全转发）。
 
 **自动演示到此结束。以下为手动互动演示。**
 

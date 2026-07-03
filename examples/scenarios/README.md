@@ -2,6 +2,9 @@
 
 Scenario examples show expected provider calls, denials, obs refs, and reports.
 The authoritative checked-in corpus lives under `scenarios/`.
+Supplemental examples, such as `anomalous-provider-sequence`, stay under
+`examples/scenarios/` and are not part of the five official contest scenarios
+or contest bundle scenario whitelist.
 
 ## Scenario Contract
 

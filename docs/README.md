@@ -9,7 +9,7 @@ This index is the canonical map for the contest edition.
 - [Submission Map](02-xa-202620-submission-map.md): reviewer package map.
 - [Evaluation Results](03-evaluation-results.md): scenario metrics and evidence.
 - [Contest Submission](contest/README.md): scorecard, reproduction, demo script, artifacts, and limitations.
-- [Red-Team Results](contest/redteam-results.md): deterministic proxy-probe coverage and result artifacts.
+- [Red-Team Results](contest/redteam-results.md): deterministic proxy/output probe coverage and result artifacts.
 
 ## Operate The Demo
 
@@ -45,7 +45,6 @@ This index is the canonical map for the contest edition.
 ## Development
 
 - [Contest Verification](development/contest-verification.md)
-- [Contest Optimization Plan](superpowers/plans/2026-07-02-runwarden-contest-optimization.md)
 - [Repository Review](repository-review.md)
 - [Roadmap](reference/roadmap.md)
 
@@ -54,6 +53,7 @@ This index is the canonical map for the contest edition.
 - [Provider Examples](../examples/providers/README.md)
 - [Report Examples](../examples/reports/README.md)
 - [Scenario Examples](../examples/scenarios/README.md)
+- [Supplemental Anomaly Scenario](../examples/scenarios/anomalous-provider-sequence/README.md)
 - [Red-Team Harness](../redteam/README.md)
 
 ## Scenario Fixtures

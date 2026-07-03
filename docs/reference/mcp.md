@@ -63,10 +63,12 @@ Unknown tools, raw tools, and removed tools such as `runwarden.session.create_fr
   whose `obs_id` starts with `obs_*`. Provider-call events appended to
   `.runwarden/events.jsonl` chain each `trace_event.previous_hash` to the prior
   provider event hash so the WebUI can verify the provider-call trace.
-- Allowed external provider-call results include `anomaly: { score,
-  is_anomalous, reasons }`, produced by `runwarden-anomaly` from provider
-  sequence, argument size, and URL host. This is evidence metadata only; it
-  does not change allow, deny, or approval policy.
+- External provider-call results with scoreable arguments include `anomaly:
+  { score, is_anomalous, reasons }`, produced by `runwarden-anomaly` from
+  provider sequence, argument size, and URL host. The same anomaly metadata is
+  sealed into `trace_event.payload` for allowed and review-blocked evidence.
+  This is evidence metadata only; it does not change allow, deny, or approval
+  policy.
 
 ## Trace And Report Tools
 
