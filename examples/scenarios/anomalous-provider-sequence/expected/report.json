@@ -1,0 +1,16 @@
+{
+  "claims": [
+    {
+      "id": "anomaly-1",
+      "text": "The memory-to-API sequence was held for review with no side effect",
+      "obs_refs": ["obs_anomaly_api_review"],
+      "support": {
+        "provider": "external.api.request",
+        "event_type": "provider_approval_pending",
+        "decision": "requires_review",
+        "execution_status": "not_executed",
+        "side_effect_executed": false
+      }
+    }
+  ]
+}

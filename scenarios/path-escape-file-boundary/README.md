@@ -21,7 +21,7 @@ side-effect state.
 ## Validate
 
 ```bash
-runwarden eval scenarios --json
-runwarden demo run --scenario path-escape-file-boundary --output artifacts/demo/path-escape-file-boundary --json
-runwarden ui serve --live --demo artifacts/demo/path-escape-file-boundary --json
+runwarden check --strict --json
+runwarden demo --scenario path-escape-file-boundary --output artifacts/demo/path-escape-file-boundary --json
+runwarden demo
 ```

@@ -5,13 +5,13 @@ use std::path::{Component, Path, PathBuf};
 
 use serde_json::Value;
 use time::OffsetDateTime;
+use url::Url;
 
 use crate::authority::{ApprovalBinding, ApprovalRecord, ApprovalState, ApprovalTransitionError};
-use crate::contracts::{
-    ErrorKind, KernelProvider, PolicyDecision, ProviderCall, ProviderOutcome, ProviderRisk,
-    SideEffectKind,
-};
+use crate::contracts::{ErrorKind, KernelProvider, PolicyDecision, ProviderCall, ProviderOutcome};
 use crate::evidence::hex_sha256;
+
+pub use crate::contracts::provider_requires_approval;
 
 #[derive(Debug, Default)]
 pub struct ProviderRegistry {
@@ -495,28 +495,6 @@ fn requires_review(
     )
 }
 
-fn provider_requires_approval(provider: &KernelProvider) -> bool {
-    matches!(
-        provider.risk,
-        ProviderRisk::High
-            | ProviderRisk::NetworkActive
-            | ProviderRisk::FileWrite
-            | ProviderRisk::CredentialUse
-            | ProviderRisk::Destructive
-            | ProviderRisk::ReportClaim
-    ) || provider.side_effects.iter().any(|side_effect| {
-        matches!(
-            side_effect,
-            SideEffectKind::Network
-                | SideEffectKind::FileWrite
-                | SideEffectKind::ProcessSpawn
-                | SideEffectKind::CredentialUse
-                | SideEffectKind::Destructive
-                | SideEffectKind::ArtifactWrite
-        )
-    })
-}
-
 fn argument_hash(arguments: &Value) -> String {
     let bytes = serde_json::to_vec(arguments).expect("provider arguments must serialize");
     hex_sha256(&bytes)
@@ -594,29 +572,10 @@ fn normalize_path(path: &Path) -> PathBuf {
 }
 
 fn extract_url_host(url: &str) -> Option<String> {
-    let (_, rest) = url.split_once("://")?;
-    let authority = rest
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or_default()
-        .rsplit('@')
-        .next()
-        .unwrap_or_default();
-    if authority.is_empty() {
-        return None;
-    }
-
-    let host = if let Some(stripped) = authority.strip_prefix('[') {
-        stripped.split(']').next().unwrap_or_default()
-    } else {
-        authority.split(':').next().unwrap_or_default()
-    };
-
-    if host.is_empty() {
-        None
-    } else {
-        Some(normalize_host(host))
-    }
+    Url::parse(url)
+        .ok()
+        .and_then(|url| url.host_str().map(normalize_host))
+        .filter(|host| !host.is_empty())
 }
 
 fn normalize_host(host: &str) -> String {

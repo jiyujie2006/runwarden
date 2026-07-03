@@ -1,11 +1,20 @@
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::PathBuf,
+    sync::{Mutex, OnceLock},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
-use runwarden_kernel::evidence::TraceEvent;
 use runwarden_mcp::{handle_jsonrpc_body, validate_runwarden_only_agent_config};
 use serde_json::{Value, json};
 
 #[test]
 fn agent_only_assessment_flow_mediates_report_render_before_execution() {
+    let dir = temp_state_dir("agent-flow");
+    let _guard = cwd_lock().lock().expect("cwd lock");
+    let cwd = std::env::current_dir().expect("cwd");
+    std::env::set_current_dir(&dir).expect("set cwd");
+
     let listed =
         handle_jsonrpc_body(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#)
             .expect("tools/list");
@@ -39,27 +48,17 @@ fn agent_only_assessment_flow_mediates_report_render_before_execution() {
     ));
     assert_eq!(inspection["provider"], "runwarden.input.inspect");
     assert_eq!(inspection["side_effect_executed"], false);
-
-    let trace_events = json!([TraceEvent::sealed(
-        "obs_1".to_string(),
-        "provider_completed".to_string(),
-        Some("runwarden.input.inspect".to_string()),
-        json!({"ok": true}),
-        None,
-    )]);
+    let obs_ref = inspection["obs_ref"].as_str().expect("obs_ref");
     let report = json!({
         "claims": [
-            {"id": "finding-1", "text": "Input inspection completed", "obs_refs": ["obs_1"]}
+            {"id": "finding-1", "text": "Input inspection completed", "obs_refs": [obs_ref]}
         ]
     });
 
     let lint = tool_payload(&call_tool(
         4,
         "runwarden.report.lint",
-        json!({
-            "report": report,
-            "trace_events": trace_events
-        }),
+        json!({ "report": report }),
     ));
     assert_eq!(lint["ok"], true);
 
@@ -68,7 +67,6 @@ fn agent_only_assessment_flow_mediates_report_render_before_execution() {
         "runwarden.report.render",
         json!({
             "report": report,
-            "trace_events": trace_events,
             "format": "html"
         }),
     );
@@ -77,6 +75,8 @@ fn agent_only_assessment_flow_mediates_report_render_before_execution() {
     assert_eq!(render["decision"], "requires_review");
     assert_eq!(render["envelope"]["error_kind"], "approval_invalid");
     assert_eq!(render["side_effect_executed"], false);
+
+    std::env::set_current_dir(cwd).expect("restore cwd");
 }
 
 #[test]
@@ -139,12 +139,69 @@ fn opencode_example_config_and_transcript_expose_only_runwarden_tools() {
 }
 
 #[test]
+fn opencode_denied_provider_call_transcript_replays_current_flat_schema() {
+    let root = workspace_root();
+    let transcript_path =
+        root.join("examples/agent-configs/opencode.provider-call-denied-transcript.json");
+    let transcript: Value =
+        serde_json::from_str(&fs::read_to_string(transcript_path).expect("transcript"))
+            .expect("transcript JSON");
+    let request = &transcript["request"];
+    let arguments = &request["params"]["arguments"];
+    assert_eq!(arguments["provider"], "external.mcp.filesystem.read_file");
+    assert_eq!(arguments["path"], "../../../../etc/passwd");
+    assert!(
+        arguments.get("arguments").is_none(),
+        "provider.call uses flat provider arguments"
+    );
+
+    let dir = temp_state_dir("opencode-denied-transcript");
+    let _guard = cwd_lock().lock().expect("cwd lock");
+    let cwd = std::env::current_dir().expect("cwd");
+    std::env::set_current_dir(&dir).expect("set cwd");
+    let actual = handle_jsonrpc_body(&request.to_string()).expect("provider.call response");
+    std::env::set_current_dir(cwd).expect("restore cwd");
+
+    assert_eq!(actual["result"]["isError"], true);
+    let payload = tool_payload(&actual);
+    assert_eq!(payload["decision"], "denied");
+    assert_eq!(payload["error_kind"], "root_escape");
+    assert_eq!(payload["execution_status"], "not_executed");
+    assert_eq!(payload["side_effect_executed"], false);
+    assert!(
+        payload["obs_ref"]
+            .as_str()
+            .is_some_and(|obs| obs.starts_with("obs_"))
+    );
+}
+
+#[test]
 fn runwarden_only_agent_config_validator_accepts_claude_empty_args() {
     let root = workspace_root();
     let config_path = root.join("examples/agent-configs/claude.runwarden-only.json");
     let config: Value =
         serde_json::from_str(&fs::read_to_string(config_path).expect("claude config"))
             .expect("config JSON");
+
+    let validation = validate_runwarden_only_agent_config(&config);
+
+    assert!(validation.ok, "{:?}", validation.errors);
+    assert!(validation.errors.is_empty());
+    assert!(!validation.side_effect_executed);
+}
+
+#[test]
+fn runwarden_only_agent_config_validator_accepts_opencode_empty_args() {
+    let config = json!({
+        "mcp": {
+            "runwarden": {
+                "type": "local",
+                "command": ["runwarden-mcp"],
+                "args": []
+            }
+        },
+        "tools": {"bash": false}
+    });
 
     let validation = validate_runwarden_only_agent_config(&config);
 
@@ -193,6 +250,66 @@ fn runwarden_only_agent_config_validator_rejects_overrides_and_raw_servers() {
                     "env": {"RUNWARDEN_POLICY": "off"}
                 }
             }
+        }),
+        json!({
+            "mcp": {
+                "runwarden": {
+                    "type": "local",
+                    "command": ["runwarden-mcp"],
+                    "args": ["--unsafe"]
+                }
+            },
+            "tools": {"bash": false}
+        }),
+        json!({
+            "mcp": {
+                "runwarden": {
+                    "type": "local",
+                    "command": ["runwarden-mcp"],
+                    "args": "--unsafe"
+                }
+            },
+            "tools": {"bash": false}
+        }),
+        json!({
+            "mcp": {
+                "runwarden": {
+                    "type": "local",
+                    "command": ["runwarden-mcp"],
+                    "env": {"RUNWARDEN_POLICY": "off"}
+                }
+            },
+            "tools": {"bash": false}
+        }),
+        json!({
+            "mcp": {
+                "runwarden": {
+                    "type": "local",
+                    "command": ["runwarden-mcp"],
+                    "environment": {"RUNWARDEN_POLICY": "off"}
+                }
+            },
+            "tools": {"bash": false}
+        }),
+        json!({
+            "mcp": {
+                "runwarden": {
+                    "type": "local",
+                    "command": ["runwarden-mcp"],
+                    "url": "http://127.0.0.1:3000/mcp"
+                }
+            },
+            "tools": {"bash": false}
+        }),
+        json!({
+            "mcp": {
+                "runwarden": {
+                    "type": "local",
+                    "command": ["runwarden-mcp"],
+                    "transport": "sse"
+                }
+            },
+            "tools": {"bash": false}
         }),
         json!({
             "mcp": {
@@ -269,6 +386,24 @@ fn workspace_root() -> PathBuf {
         .parent()
         .expect("workspace root")
         .to_path_buf()
+}
+
+fn temp_state_dir(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "runwarden-mcp-e2e-{name}-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos()
+    ));
+    fs::create_dir_all(&dir).expect("temp state dir");
+    dir
+}
+
+fn cwd_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
 }
 
 fn tool_names(tools: &Value) -> Vec<String> {

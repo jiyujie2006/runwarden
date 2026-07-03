@@ -18,10 +18,10 @@ assessment scope. They are the input for persisted session manifests.
 
 ## Runtime Role
 
-`runwarden session create` derives a session from an assessment manifest:
+Demo/check flows derive sessions from assessment manifests internally:
 
 ```bash
-runwarden session create --manifest scenarios/prompt-injection-file-exfil/manifests/assessment.toml --session contest_ops --json
+runwarden demo --scenario prompt-injection-file-exfil --output artifacts/demo/prompt-injection-file-exfil --json
 ```
 
 The resulting session carries the provider allowlist, scoped roots, actor,
@@ -38,7 +38,7 @@ scenarios/<scenario>/manifests/assessment.toml
 Run:
 
 ```bash
-runwarden eval scenarios --json
+runwarden check --strict --json
 ```
 
 to validate the scenario golden corpora that reference these manifests.

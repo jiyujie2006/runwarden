@@ -10,5 +10,3 @@ cargo deny check
 python3 redteam/validate_corpora.py redteam/corpora/*.jsonl
 python3 -m unittest redteam.test_run
 cargo test --workspace
-pnpm test
-pnpm build

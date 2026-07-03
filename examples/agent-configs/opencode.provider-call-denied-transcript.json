@@ -1,7 +1,7 @@
 {
   "client": "opencode",
   "config": "examples/agent-configs/opencode.runwarden-only.json",
-  "claim": "OpenCode can only call runwarden.provider.call, and a path traversal provider call is denied by Runwarden before side effects.",
+  "claim": "OpenCode can only call Runwarden MCP tools, and a path traversal provider call is denied by Runwarden before side effects.",
   "request": {
     "jsonrpc": "2.0",
     "id": 2,
@@ -11,9 +11,7 @@
       "arguments": {
         "provider": "external.mcp.filesystem.read_file",
         "action": "read_file",
-        "arguments": {
-          "path": "../../../../etc/passwd"
-        }
+        "path": "../../../../etc/passwd"
       }
     }
   },

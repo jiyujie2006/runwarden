@@ -1,8 +1,8 @@
 # Reviewer Console Guide
 
-The Reviewer Console is a static security workbench for humans. It displays
-Rust-produced demo JSON and does not submit approval decisions. It is not a
-policy engine.
+The Reviewer Console is a Rust-served security workbench for humans. It
+displays Rust-produced event JSON and can write reviewer approval decisions.
+It is not a policy engine.
 
 ## Local Build
 
@@ -15,23 +15,17 @@ cargo build --workspace
 Generate demo JSON:
 
 ```bash
-target/debug/runwarden demo run \
-  --scenario prompt-injection-file-exfil \
-  --output artifacts/demo/prompt-injection-file-exfil \
-  --json
+target/debug/runwarden demo --all --output artifacts/demo --json
 ```
 
-Build the static console:
+Open the static console:
 
 ```bash
-target/debug/runwarden ui build \
-  --input artifacts/demo \
-  --output artifacts/reviewer-console.html \
-  --json
+xdg-open artifacts/demo/reviewer-console.html
 ```
 
-The JSON response includes `html_path`, `launch_url`, `local_api_url: null`,
-and `side_effect_executed: true`.
+For interactive review, run `target/debug/runwarden demo` and open
+`http://127.0.0.1:8088`.
 
 ## Review Workflow
 
@@ -42,21 +36,16 @@ and `side_effect_executed: true`.
    `obs_*` refs.
 4. Open the generated report path for the trace-backed narrative.
 
-Approval decisions are not submitted from WebUI. Use the CLI path:
-
-```bash
-target/debug/runwarden approval pending --json
-target/debug/runwarden approval approve <approval_id> \
-  --reviewer reviewer_alice --reason "reviewed scope and risk" --json
-```
+Approval decisions are submitted from the browser by updating
+`.runwarden/approvals/*.json`; MCP consumes matching approvals on retry.
 
 ## Security Rules
 
-- The browser UI must not mutate authority directly.
+- The browser UI may only mutate approval files through Rust HTTP handlers.
 - High-risk review states come from Rust-produced demo JSON.
 - `--output` must be a relative workspace path. Absolute paths, parent
   traversal, and symlink escapes are rejected before writing.
 - The WebUI displays Rust-owned state; it must not reimplement provider,
-  approval, egress, or report policy in TypeScript.
+  approval, egress, or report policy.
 
 Maintained reference: [WebUI Review Console](../reference/webui-review-console.md).

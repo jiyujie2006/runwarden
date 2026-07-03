@@ -9,5 +9,6 @@ pub use contracts::{
     ArtifactRef, DecisionEnvelope, ErrorCode, ErrorKind, ExecutionMode, ExecutionStatus,
     KernelProvider, OperationError, OperationResult, OperationStatus, PolicyDecision, ProviderCall,
     ProviderClass, ProviderContract, ProviderEnforcementContract, ProviderKind, ProviderManifest,
-    ProviderOutcome, ProviderRisk, ProviderSchemaPin, SideEffectKind, schema_digest,
+    ProviderOutcome, ProviderRisk, ProviderSchemaPin, SideEffectKind, provider_requires_approval,
+    schema_digest,
 };

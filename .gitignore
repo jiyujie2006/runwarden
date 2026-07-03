@@ -4,6 +4,8 @@ dist/
 coverage/
 playwright-report/
 test-results/
+.runwarden/
+runwarden-sandbox/
 .turbo/
 .cache/
 __pycache__/

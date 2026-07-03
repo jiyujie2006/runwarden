@@ -1,23 +1,14 @@
 # CLI Reference
 
-`runwarden` is the contest control plane. It creates sessions, evaluates provider calls, verifies traces, lints and renders reports, evaluates scenario fixtures, runs deterministic demos, and builds a static reviewer console.
+`runwarden` exposes four user-facing commands. Session, provider, approval,
+authority, eval, and UI internals are no longer separate CLI surfaces.
 
 ## Command Map
 
 ```bash
-runwarden check --strict
-
-runwarden session create --manifest scenarios/prompt-injection-file-exfil/manifests/assessment.toml --session demo --json
-runwarden session inspect --session demo --json
-
-runwarden provider list --session demo --json
-runwarden provider call --session demo --provider runwarden.input.inspect --root workspace --input input.txt --json
-
-runwarden approval pending --json
-runwarden approval approve approval-1 --reviewer reviewer_alice --reason "reviewed scope and risk" --json
-runwarden approval deny approval-1 --reviewer reviewer_alice --reason "out of scope" --json
-runwarden authority create --approval approval-1 --session demo --provider external.api.request --action request --arguments '{"url":"https://api.example.com/upload"}' --json
-runwarden authority inspect approval-1 --json
+runwarden demo
+runwarden demo --scenario tool-hijack-email-api --output artifacts/demo/tool-hijack-email-api --json
+runwarden demo --all --output artifacts/demo --json
 
 runwarden trace verify --trace trace.json --json
 runwarden trace export --trace trace.json --provider runwarden.input.inspect --compact-refs --json
@@ -26,20 +17,39 @@ runwarden report lint --report report.json --trace trace.json --json
 runwarden report render --report report.json --trace trace.json --format markdown --json
 runwarden report render --scenario-suite scenarios --format markdown --output artifacts/reports/contest-report.md --json
 
-runwarden eval scenarios --json
-runwarden demo run --scenario prompt-injection-file-exfil --output artifacts/demo/prompt-injection-file-exfil --json
-
-runwarden ui build --input artifacts/demo --output artifacts/reviewer-console.html --json
-runwarden ui serve --file artifacts/reviewer-console.html --json
-runwarden ui serve --live --demo artifacts/demo/prompt-injection-file-exfil --json
-runwarden ui serve --live --demo artifacts/demo/prompt-injection-file-exfil --llm-trace artifacts/redteam/proxy-trace.jsonl --json
+runwarden check --strict --json
 ```
 
-## Provider Calls
+## Demo
 
-Provider calls require `--session` and are evaluated by `KernelEnforcer` before execution. The CLI performs a pre-read policy check before binding file digests so traversal and scoped-root failures are denied before any file read.
+`runwarden demo` starts the Rust console at `http://127.0.0.1:8088` and the
+LLM proxy at `http://127.0.0.1:8787/v1`. The browser console streams sealed
+model-call JSONL and MCP provider-call events. Approval buttons update
+`.runwarden/approvals/*.json`; MCP retries load matching approved records and
+consume them once.
 
-Session-backed calls resolve relative provider paths under the selected session root. High-risk providers require a bound approval record before simulated or real side effects can run.
+When running an agent from a different working directory, set:
+
+```bash
+export RUNWARDEN_STATE_DIR="$PWD/.runwarden"
+export XDG_CONFIG_HOME=/tmp/oc-runwarden/xdg/config
+export XDG_DATA_HOME=/tmp/oc-runwarden/xdg/data
+export XDG_CACHE_HOME=/tmp/oc-runwarden/xdg/cache
+export XDG_STATE_HOME=/tmp/oc-runwarden/xdg/state
+```
+
+The `XDG_*` variables keep OpenCode from merging user-level MCP servers into
+the demo. Copy `examples/agent-configs/opencode.runwarden-only.json` to
+`$XDG_CONFIG_HOME/opencode/opencode.json` and confirm `opencode debug config
+--pure` lists only `runwarden` under `mcp`.
+
+`runwarden demo --scenario <name> --output <dir> --json` executes the scenario
+provider calls through the Rust kernel and provider layer, then writes
+`trace.json`, `provider-calls.json`, `denials.json`, `report.json`,
+`metrics.json`, and `webui.json`.
+
+`runwarden demo --all --output artifacts/demo --json` runs all five scenarios
+and writes `artifacts/demo/reviewer-console.html`.
 
 ## Trace Commands
 
@@ -47,35 +57,8 @@ Session-backed calls resolve relative provider paths under the selected session 
 `TraceEvent` data as either a JSON array or newline-delimited JSONL. Missing
 `event_hash`, malformed JSONL, or hash-chain tampering fails closed.
 
-## Demo Runner
-
-`runwarden demo run` loads a scenario, replays its deterministic agent script
-through Rust-owned provider outcomes, writes `trace.json`,
-`provider-calls.json`, `denials.json`, `report.json`, `metrics.json`, and
-`webui.json`, and keeps denied/review-blocked calls at
-`side_effect_executed=false`. `webui.json` includes Rust-produced
-`trace_verification`; WebUI renderers must use that field for trace status.
-
-## Live Replay Server
-
-`runwarden ui serve --file <relative-html> --json` validates the static console
-path and returns metadata with `local_api_url=null`; it does not start an HTTP
-server unless `--live` is passed.
-
-`runwarden ui serve --live --demo <relative-demo-dir> [--llm-trace
-<relative-jsonl>]` starts a local replay server for existing demo artifacts.
-The server serves the static reviewer console at `/` and emits finite
-Server-Sent Events at `/events`. `provider_call` events come from
-`webui.json`; when `--llm-trace` is supplied, `model_call` events from the
-LLM-proxy sealed JSONL trace are appended. The server does not submit
-approvals or execute providers.
-
-Startup JSON and the final `replay_complete` event include
-`provider_call_count`, `model_call_count`, and `event_count`. Provider count is
-only demo provider calls; event count is provider plus model events.
-
 ## Output Paths
 
-Demo output, report output, UI build input/output, and UI serve `--file`,
-`--demo`, and `--llm-trace` paths must be relative workspace paths. Absolute
-paths, parent traversal, and symlink components are rejected.
+Demo and report outputs must be relative workspace paths. Absolute paths,
+parent traversal, and symlink escapes are rejected. Symlink components are
+accepted only when canonical containment keeps the output inside the workspace.

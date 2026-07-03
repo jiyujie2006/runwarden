@@ -10,7 +10,7 @@ fn trace_events(obs_ids: &[&str]) -> Vec<TraceEvent> {
             (*obs_id).to_string(),
             "provider_completed",
             Some("runwarden.input.inspect"),
-            json!({"ok": true}),
+            json!({"ok": true, "execution_status": "completed"}),
         );
     }
     store.events_mut_for_test().to_vec()

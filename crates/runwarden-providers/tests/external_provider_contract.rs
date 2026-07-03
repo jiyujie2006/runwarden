@@ -5,11 +5,12 @@ use std::{
 };
 
 use runwarden_kernel::{
-    ProviderClass, ProviderKind, ProviderManifest, ProviderRisk, ProviderSchemaPin, SideEffectKind,
+    PolicyDecision, ProviderCall, ProviderClass, ProviderKind, ProviderManifest, ProviderOutcome,
+    ProviderRisk, ProviderSchemaPin, SideEffectKind,
 };
 use runwarden_providers::external::{
-    ExternalMcpAdapterRequest, certify_external_provider_manifest, execute_external_mcp_adapter,
-    load_provider_manifest,
+    ExternalMcpAdapterRequest, certify_external_provider_manifest,
+    execute_mediated_external_mcp_adapter, load_provider_manifest,
 };
 use tempfile::tempdir;
 
@@ -31,7 +32,24 @@ fn execute_adapter(
         .get_or_init(|| Mutex::new(()))
         .lock()
         .expect("adapter execution lock");
-    execute_external_mcp_adapter(manifest, request, runtime_root)
+    let outcome = provider_outcome(manifest, PolicyDecision::Allowed);
+    execute_mediated_external_mcp_adapter(&outcome, manifest, request, runtime_root)
+}
+
+fn provider_outcome(manifest: &ProviderManifest, decision: PolicyDecision) -> ProviderOutcome {
+    let call = ProviderCall {
+        session_id: "session-test".to_string(),
+        provider: manifest.provider_id.clone(),
+        action: manifest
+            .tool_identity
+            .clone()
+            .unwrap_or_else(|| "call".to_string()),
+        arguments: serde_json::json!({}),
+        actor_id: Some("agent-test".to_string()),
+        authz_id: Some("authz-test".to_string()),
+        approval_id: None,
+    };
+    ProviderOutcome::before_side_effect(decision, &call, "test", "test outcome", None)
 }
 
 fn stdio_manifest(working_root: &Path, command_allowlist: &[&str]) -> ProviderManifest {
@@ -254,6 +272,28 @@ fn external_mcp_stdio_adapter_executes_framed_downstream_call() {
             .expect("stdout string")
             .contains("Content-Length:")
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn mediated_external_mcp_adapter_refuses_denied_kernel_outcome() {
+    let dir = tempdir().expect("tempdir");
+    let manifest = stdio_manifest(dir.path(), &["cat"]);
+    let request = ExternalMcpAdapterRequest {
+        transport: Some("stdio".to_string()),
+        command: Some("cat".to_string()),
+        cwd: Some(dir.path().to_path_buf()),
+        request: serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "open_page"}),
+        ..ExternalMcpAdapterRequest::default()
+    };
+    let outcome = provider_outcome(&manifest, PolicyDecision::Denied);
+
+    let result =
+        execute_mediated_external_mcp_adapter(&outcome, &manifest, &request, Some(dir.path()));
+
+    assert_eq!(result["decision"], "denied");
+    assert_eq!(result["execution_status"], "not_executed");
+    assert_eq!(result["side_effect_executed"], false);
 }
 
 #[test]

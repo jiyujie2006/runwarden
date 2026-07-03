@@ -27,5 +27,6 @@ sha2 = "0.10"
 thiserror = "2.0"
 time = { version = "0.3", features = ["serde", "formatting", "parsing"] }
 toml = "0.8"
+url = "2.5"
 uuid = { version = "1.11", features = ["serde", "v7"] }
 ureq = { version = "2.12", default-features = false, features = ["native-tls", "json"] }

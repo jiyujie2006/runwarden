@@ -25,10 +25,15 @@ arguments. `expected/report.json` must cite the matching `obs_*` refs.
 - `tool-hijack-email-api`
 - `memory-knowledge-poisoning`
 - `environment-local-web-risk`
+- `path-escape-file-boundary`
+
+Additional scenario experiments belong under `examples/scenarios/` until they
+are intentionally promoted. The contest bundle includes only the five main
+scenarios above.
 
 Validate with:
 
 ```bash
-runwarden eval scenarios --json
-runwarden demo run --scenario prompt-injection-file-exfil --output artifacts/demo/prompt-injection-file-exfil --json
+runwarden check --strict --json
+runwarden demo --scenario prompt-injection-file-exfil --output artifacts/demo/prompt-injection-file-exfil --json
 ```

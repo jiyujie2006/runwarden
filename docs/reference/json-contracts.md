@@ -25,6 +25,6 @@ Schema drift is caught by:
 cargo test -p runwarden-kernel --test contract_schemas
 ```
 
-The contest TypeScript surface is `packages/webui`. It defines
+The contest edition has no active TypeScript package. Any future TypeScript may define
 presentation-only demo JSON types and does not generate authoritative security
 contracts.

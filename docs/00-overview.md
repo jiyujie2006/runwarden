@@ -31,7 +31,7 @@ Runwarden makes those answers reproducible from checked-in scenarios.
 - `runwarden-llm-proxy`: local model-call filtering proxy for red-team probes.
 - `runwarden-anomaly`: lightweight behavior anomaly scoring for provider
   evidence.
-- `packages/webui`: presentation-only static reviewer console renderer.
+- Rust reviewer console: presentation-only static/interactive renderer.
 
 ## Proof Loop
 
@@ -50,9 +50,9 @@ bash scripts/pr_fast_gate.sh
 bash scripts/release_gate_local.sh
 ```
 
-The local contest gate runs fast Rust/TypeScript checks, strict repository
-validation, scenario evaluation, deterministic demo generation, contest report
-rendering, and static reviewer-console build.
+The local contest gate runs Rust checks, Python red-team corpus/harness checks,
+strict repository validation, deterministic demos, report rendering, and static
+reviewer-console build.
 
 ## Reading Path
 

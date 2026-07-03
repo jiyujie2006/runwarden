@@ -23,8 +23,8 @@ directly. Use only `runwarden-mcp` and Runwarden provider calls.
 6. Lint reports with `runwarden.report.lint`.
 7. Render reports with `runwarden.report.render` only after every claim cites
    verified `obs_*` evidence.
-8. For contest demos, run `runwarden eval scenarios --json` and
-   `runwarden demo run --scenario <id> --output artifacts/demo/<id>`.
+8. For contest demos, run `runwarden check --strict --json` and
+   `runwarden demo --scenario <id> --output artifacts/demo/<id>`.
 
 ## Hard Rules
 

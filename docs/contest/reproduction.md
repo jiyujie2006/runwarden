@@ -4,7 +4,6 @@
 
 ```bash
 cargo build --workspace
-pnpm install
 ```
 
 ## Contest Gate
@@ -28,27 +27,34 @@ python3 redteam/run.py proxy-probe \
   --fail-on-fail
 ```
 
+## Red-Team Output Probe
+
+```bash
+python3 redteam/run.py output-probe \
+  --corpora redteam/corpora/output_filter.jsonl \
+  --summary-out artifacts/redteam/output-probe-summary.json \
+  --fail-on-fail
+```
+
 ## Red-Team Agent Drive
 
 ```bash
+mkdir -p /tmp/oc-test
+cp examples/agent-configs/opencode.runwarden-only.json /tmp/oc-test/opencode.json
+export PATH="$PWD/target/debug:$PATH"
 python3 redteam/run.py agent-drive \
   --corpora redteam/corpora/path_escape.jsonl \
-  --model opencode/big-pickle --limit 2
+  --config-dir /tmp/oc-test --model opencode/big-pickle --limit 2
 ```
 
 ## Live Reviewer Console
 
 ```bash
-./target/debug/runwarden ui serve --live \
-  --demo artifacts/demo/tool-hijack-email-api \
-  --llm-trace artifacts/llm-proxy/trace.jsonl \
-  --port 8088
+./target/debug/runwarden demo
 ```
 
 ## Approve A Pending Review
 
 ```bash
-target/debug/runwarden approval pending --json
-target/debug/runwarden approval approve <approval_id> \
-  --reviewer reviewer_alice --reason "reviewed scope and risk" --json
+Open `http://127.0.0.1:8088` and click Approve on a pending review.
 ```

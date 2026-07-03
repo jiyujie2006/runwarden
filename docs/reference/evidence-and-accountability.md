@@ -18,9 +18,9 @@ Report claims may include structured support:
 When present, lint validates those fields against the cited trace event. Claims
 without structured support use text semantics only for clearly completed,
 allowed, denied, blocked, rejected, or review-blocked behavior. A plain
-`completed` claim requires a completed event type or
-`execution_status=completed`; an `allowed` claim can be supported by an
-allowed/completed decision.
+`completed` claim requires the cited trace payload to state
+`execution_status=completed`; the event type alone is not sufficient. An
+`allowed` claim can be supported by an allowed/completed decision.
 
 Denied, blocked, rejected, and review-blocked text claims without structured
 support pass only when the cited trace payload states
@@ -37,3 +37,8 @@ the provider.
 LLM proxy model-call traces are written as sealed JSONL `TraceEvent` records.
 Each line includes `previous_hash` and `event_hash`; CLI trace verification
 accepts this JSONL form and rejects malformed or unsigned legacy lines.
+
+MCP report lint uses the server-owned provider-call trace store, not inline
+trace events supplied by an agent. Provider-call events are read from
+`RUNWARDEN_STATE_DIR/events.jsonl` when configured, otherwise from
+`.runwarden/events.jsonl` relative to the MCP process.

@@ -13,14 +13,11 @@ The gate runs:
 1. `cargo fmt --check`.
 2. `cargo clippy --workspace -- -D warnings`.
 3. `cargo deny check` (requires `cargo-deny`; the script fails with an install hint when missing).
-4. `cargo test --workspace`.
-5. `pnpm test`.
-6. `pnpm build`.
-7. `target/debug/runwarden check --strict`.
-8. `target/debug/runwarden eval scenarios --json`.
-9. Four deterministic `target/debug/runwarden demo run ...` commands.
-10. `target/debug/runwarden report render --scenario-suite scenarios --format markdown --output artifacts/reports/contest-report.md --json`.
-11. `target/debug/runwarden ui build --input artifacts/demo --output artifacts/reviewer-console.html --json`.
+4. Python red-team corpus and harness checks.
+5. `cargo test --workspace`.
+6. `target/debug/runwarden check --strict --json`.
+7. `target/debug/runwarden demo --all --output artifacts/demo --json`.
+8. `target/debug/runwarden report render --scenario-suite scenarios --format markdown --output artifacts/reports/contest-report.md --json`.
 
 Install `cargo-deny` before running gates locally:
 

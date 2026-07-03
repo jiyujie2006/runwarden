@@ -1,5 +1,87 @@
+use std::fs;
+use std::path::{Component, Path, PathBuf};
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum ArtifactPathError {
+    #[error("artifact path must not be empty")]
+    Empty,
+    #[error("artifact path must be relative")]
+    NotRelative,
+    #[error("artifact path must not contain parent traversal")]
+    ParentTraversal,
+    #[error("artifact path escapes workspace root")]
+    RootEscape,
+    #[error("workspace root is unavailable: {0}")]
+    RootUnavailable(String),
+    #[error("artifact path canonicalization failed: {0}")]
+    CanonicalizationFailed(String),
+}
+
+pub fn resolve_workspace_relative_path(
+    root: &Path,
+    requested: &Path,
+) -> Result<PathBuf, ArtifactPathError> {
+    if requested.as_os_str().is_empty() {
+        return Err(ArtifactPathError::Empty);
+    }
+
+    let mut relative = PathBuf::new();
+    for component in requested.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(segment) => relative.push(segment),
+            Component::ParentDir => return Err(ArtifactPathError::ParentTraversal),
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(ArtifactPathError::NotRelative);
+            }
+        }
+    }
+
+    let resolved = if relative.as_os_str().is_empty() {
+        root.to_path_buf()
+    } else {
+        root.join(relative)
+    };
+    ensure_workspace_containment(root, &resolved)?;
+    Ok(resolved)
+}
+
+fn ensure_workspace_containment(root: &Path, resolved: &Path) -> Result<(), ArtifactPathError> {
+    if !resolved.starts_with(root) {
+        return Err(ArtifactPathError::RootEscape);
+    }
+
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|error| ArtifactPathError::RootUnavailable(error.to_string()))?;
+    let mut probe = resolved.to_path_buf();
+
+    loop {
+        match fs::symlink_metadata(&probe) {
+            Ok(_) => {
+                let canonical_probe = probe.canonicalize().map_err(|error| {
+                    ArtifactPathError::CanonicalizationFailed(error.to_string())
+                })?;
+                if canonical_probe.starts_with(&canonical_root) {
+                    return Ok(());
+                }
+                return Err(ArtifactPathError::RootEscape);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if !probe.pop() || !probe.starts_with(root) {
+                    return Err(ArtifactPathError::RootEscape);
+                }
+            }
+            Err(error) => {
+                return Err(ArtifactPathError::CanonicalizationFailed(error.to_string()));
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ArtifactManifest {

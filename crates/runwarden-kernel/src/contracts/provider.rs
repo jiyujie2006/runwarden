@@ -176,46 +176,30 @@ impl ProviderContract {
     pub fn from_manifest(manifest: &ProviderManifest) -> Self {
         let observed_schema_digest = schema_digest(&manifest.observed_schema);
         let schema_rug_pull_detected = observed_schema_digest != manifest.schema_pin.digest;
-        let requires_approval_gate = matches!(
-            manifest.risk,
-            ProviderRisk::High
-                | ProviderRisk::NetworkActive
-                | ProviderRisk::FileWrite
-                | ProviderRisk::CredentialUse
-                | ProviderRisk::Destructive
-                | ProviderRisk::ReportClaim
-        ) || manifest.side_effects.iter().any(|effect| {
-            matches!(
-                effect,
-                SideEffectKind::Network
-                    | SideEffectKind::FileWrite
-                    | SideEffectKind::ProcessSpawn
-                    | SideEffectKind::CredentialUse
-                    | SideEffectKind::Destructive
-                    | SideEffectKind::ArtifactWrite
-            )
+        let mut provider = KernelProvider {
+            id: manifest.provider_id.clone(),
+            class: manifest.provider_class.clone(),
+            kind: manifest.kind.clone(),
+            risk: manifest.risk.clone(),
+            side_effects: manifest.side_effects.clone(),
+            input_schema: manifest.observed_schema.clone(),
+            output_schema: Value::Object(Default::default()),
+            evidence_contract: serde_json::json!({
+                "obs_refs_required": true,
+                "downstream_identity": manifest.downstream_identity,
+                "tool_identity": manifest.tool_identity
+            }),
+            authority_requirements: Value::Object(Default::default()),
+        };
+        let requires_approval_gate = provider_requires_approval(&provider);
+        provider.authority_requirements = serde_json::json!({
+            "approval_required": requires_approval_gate,
+            "schema_pin_required": true,
+            "kernel_mediation_required": true
         });
 
         Self {
-            provider: KernelProvider {
-                id: manifest.provider_id.clone(),
-                class: manifest.provider_class.clone(),
-                kind: manifest.kind.clone(),
-                risk: manifest.risk.clone(),
-                side_effects: manifest.side_effects.clone(),
-                input_schema: manifest.observed_schema.clone(),
-                output_schema: Value::Object(Default::default()),
-                evidence_contract: serde_json::json!({
-                    "obs_refs_required": true,
-                    "downstream_identity": manifest.downstream_identity,
-                    "tool_identity": manifest.tool_identity
-                }),
-                authority_requirements: serde_json::json!({
-                    "approval_required": requires_approval_gate,
-                    "schema_pin_required": true,
-                    "kernel_mediation_required": true
-                }),
-            },
+            provider,
             schema_pin: manifest.schema_pin.clone(),
             observed_schema_digest,
             schema_rug_pull_detected,
@@ -238,6 +222,28 @@ impl ProviderContract {
             },
         }
     }
+}
+
+pub fn provider_requires_approval(provider: &KernelProvider) -> bool {
+    matches!(
+        provider.risk,
+        ProviderRisk::High
+            | ProviderRisk::NetworkActive
+            | ProviderRisk::FileWrite
+            | ProviderRisk::CredentialUse
+            | ProviderRisk::Destructive
+            | ProviderRisk::ReportClaim
+    ) || provider.side_effects.iter().any(|side_effect| {
+        matches!(
+            side_effect,
+            SideEffectKind::Network
+                | SideEffectKind::FileWrite
+                | SideEffectKind::ProcessSpawn
+                | SideEffectKind::CredentialUse
+                | SideEffectKind::Destructive
+                | SideEffectKind::ArtifactWrite
+        )
+    })
 }
 
 pub fn schema_digest(schema: &Value) -> String {

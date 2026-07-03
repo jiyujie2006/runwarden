@@ -3,18 +3,24 @@ use runwarden_anomaly::{AnomalyMonitor, BehaviorProfile};
 use runwarden_assurance::report::{
     RenderFormat, ReportDraft, lint_report_against_trace, render_report,
 };
-use runwarden_kernel::evidence::{InMemoryTraceStore, TraceEvent, TraceQuery};
-use runwarden_kernel::kernel::{KernelEnforcer, KernelPolicy, ProviderRegistry};
+use runwarden_kernel::authority::{ApprovalBinding, ApprovalRecord, ApprovalState};
+use runwarden_kernel::evidence::{InMemoryTraceStore, TraceEvent, TraceQuery, hex_sha256};
+use runwarden_kernel::kernel::{
+    KernelEnforcer, KernelPolicy, ProviderRegistry, ScopedRoot, provider_requires_approval,
+};
 use runwarden_kernel::{ErrorKind, KernelProvider, PolicyDecision, ProviderCall, ProviderOutcome};
 use runwarden_providers::catalog::{
-    default_external_providers, default_first_party_providers, full_provider_registry,
+    default_external_provider_manifests, default_external_providers, default_first_party_providers,
+    full_provider_registry,
 };
 use runwarden_providers::input::{InputInspectPolicy, InputSource, inspect_input};
 use runwarden_providers::tools;
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::path::Path;
+use std::net::{IpAddr, Ipv4Addr};
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
+use url::Url;
 
 const RUNWARDEN_TOOLS: &[(&str, &str)] = &[
     (
@@ -51,6 +57,7 @@ const RUNWARDEN_TOOLS: &[(&str, &str)] = &[
     ),
 ];
 const MAX_STDIO_FRAME_BYTES: usize = 1_048_576;
+const MCP_INLINE_MAX_ARGUMENT_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentConfigValidation {
@@ -323,14 +330,25 @@ fn handle_provider_call(id: Value, params: Option<&Value>) -> Value {
         );
     };
 
-    let call = provider_call_from_arguments(provider, arguments);
+    let mut call = provider_call_from_arguments(provider, arguments);
+    let approvals = read_all_approvals_mcp().unwrap_or_default();
+    attach_matching_approval_mcp(&mut call, &approvals);
     let mut enforcer = KernelEnforcer::new(full_provider_registry(), mcp_kernel_policy());
+    for approval in approvals {
+        enforcer.add_approval(approval);
+    }
     let outcome = enforcer.evaluate_call(&call);
     if outcome.decision != PolicyDecision::Allowed {
-        return tool_error_result(id, provider_outcome_payload(&outcome));
+        let pending_approval_id = persist_pending_approval_mcp(&call, &outcome).ok().flatten();
+        let mut payload = provider_outcome_payload(&outcome, Some(arguments));
+        if let Some(approval_id) = pending_approval_id {
+            payload["approval_id"] = json!(approval_id);
+        }
+        let payload = append_mcp_provider_event(&outcome, &payload).unwrap_or(payload);
+        return tool_error_result(id, payload);
     }
 
-    match provider {
+    let payload = match provider {
         "runwarden.input.inspect" => {
             let input_text = arguments
                 .get("input_text")
@@ -343,39 +361,46 @@ fn handle_provider_call(id: Value, params: Option<&Value>) -> Value {
                 input_text.as_bytes(),
                 InputInspectPolicy::default(),
             );
-            tool_result(
+            json!({
+                "provider": provider,
+                "decision": "allowed",
+                "execution_status": "completed",
+                "side_effect_executed": false,
+                "obs_ref": &outcome.observation_id,
+                "trace_event": trace_event_for_provider_result(
+                    &outcome,
+                    "provider_completed",
+                    "completed",
+                    false,
+                    false,
+                    None
+                ),
+                "output": inspection
+            })
+        }
+        other if provider_is_external(other) => {
+            external_provider_result(&outcome, arguments, &sandbox_root)
+        }
+        other => {
+            return tool_error_result(
                 id,
                 json!({
-                    "provider": provider,
-                    "decision": "allowed",
-                    "execution_status": "completed",
-                    "side_effect_executed": false,
-                    "obs_ref": &outcome.observation_id,
-                    "trace_event": trace_event_for_provider_result(
-                        &outcome,
-                        "provider_completed",
-                        "completed",
-                        false,
-                        false
-                    ),
-                    "output": inspection
-                }),
-            )
-        }
-        other if provider_is_external(other) => tool_result(
-            id,
-            external_provider_result(&outcome, arguments, &sandbox_root),
-        ),
-        other => tool_error_result(
-            id,
-            json!({
                 "error_kind": ErrorKind::ProviderUnknown,
                 "message": "provider is not implemented by the MCP inline call path",
                 "provider": other,
                 "side_effect_executed": false
-            }),
-        ),
+                }),
+            );
+        }
+    };
+
+    if let Some(approval_id) = call.approval_id.as_deref()
+        && enforcer.approval_state(approval_id) == Some(ApprovalState::Consumed)
+    {
+        persist_consumed_approval_mcp(&call, &enforcer.approval_binding_for_call(&call)).ok();
     }
+    let payload = append_mcp_provider_event(&outcome, &payload).unwrap_or(payload);
+    tool_result(id, payload)
 }
 
 /// Map a caller-supplied `input_source` string to an `InputSource` so the
@@ -556,10 +581,190 @@ fn provider_call_from_arguments(provider: &str, arguments: &Value) -> ProviderCa
             .unwrap_or("call")
             .to_string(),
         arguments: arguments.clone(),
-        actor_id: None,
+        actor_id: Some("mcp-agent".to_string()),
         authz_id: None,
         approval_id: None,
     }
+}
+
+fn state_dir_mcp() -> PathBuf {
+    std::env::var("RUNWARDEN_STATE_DIR")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(".runwarden"))
+}
+
+fn approvals_dir_mcp() -> PathBuf {
+    state_dir_mcp().join("approvals")
+}
+
+fn read_all_approvals_mcp() -> anyhow::Result<Vec<ApprovalRecord>> {
+    let dir = approvals_dir_mcp();
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut approvals = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        if entry.path().extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let body = std::fs::read_to_string(entry.path())?;
+        if let Ok(approval) = serde_json::from_str::<ApprovalRecord>(&body) {
+            approvals.push(approval);
+        }
+    }
+    Ok(approvals)
+}
+
+fn approval_binding_for_mcp_call(call: &ProviderCall) -> ApprovalBinding {
+    ApprovalBinding {
+        session_id: call.session_id.clone(),
+        provider: call.provider.clone(),
+        action: call.action.clone(),
+        argument_hash: hex_sha256(&serde_json::to_vec(&call.arguments).unwrap_or_default()),
+        authz_id: call.authz_id.clone(),
+        actor_id: call.actor_id.clone(),
+    }
+}
+
+fn attach_matching_approval_mcp(call: &mut ProviderCall, approvals: &[ApprovalRecord]) {
+    let binding = approval_binding_for_mcp_call(call);
+    if let Some(approval) = approvals.iter().find(|approval| {
+        approval.binding == binding
+            && approval.state == ApprovalState::Approved
+            && approval
+                .expires_at
+                .is_none_or(|expires_at| expires_at > time::OffsetDateTime::now_utc())
+    }) {
+        call.approval_id = Some(approval.approval_id.clone());
+    }
+}
+
+fn persist_pending_approval_mcp(
+    call: &ProviderCall,
+    outcome: &ProviderOutcome,
+) -> anyhow::Result<Option<String>> {
+    if outcome.decision != PolicyDecision::RequiresReview {
+        return Ok(None);
+    }
+    let dir = approvals_dir_mcp();
+    std::fs::create_dir_all(&dir)?;
+    let base_approval_id = format!("webui-{}", outcome.observation_id);
+    let binding = approval_binding_for_mcp_call(call);
+    for attempt in 0..100 {
+        let approval_id = if attempt == 0 {
+            base_approval_id.clone()
+        } else {
+            format!("{base_approval_id}-{}", attempt + 1)
+        };
+        let path = dir.join(format!("{approval_id}.json"));
+        if !path.exists() {
+            let approval = ApprovalRecord::new(approval_id.clone(), binding.clone());
+            std::fs::write(path, serde_json::to_string_pretty(&approval)?)?;
+            return Ok(Some(approval_id));
+        }
+        if let Ok(body) = std::fs::read_to_string(&path)
+            && let Ok(approval) = serde_json::from_str::<ApprovalRecord>(&body)
+            && approval.binding == binding
+            && approval.state == ApprovalState::Pending
+        {
+            return Ok(Some(approval.approval_id));
+        }
+    }
+    bail!(
+        "too many pending approval attempts for {}",
+        outcome.observation_id
+    )
+}
+
+fn persist_consumed_approval_mcp(
+    call: &ProviderCall,
+    binding: &ApprovalBinding,
+) -> anyhow::Result<()> {
+    let Some(approval_id) = call.approval_id.as_deref() else {
+        return Ok(());
+    };
+    let path = approvals_dir_mcp().join(format!("{approval_id}.json"));
+    let body = std::fs::read_to_string(&path)?;
+    let mut approval = serde_json::from_str::<ApprovalRecord>(&body)?;
+    if approval.state == ApprovalState::Approved {
+        approval.consume_once(binding)?;
+        std::fs::write(path, serde_json::to_string_pretty(&approval)?)?;
+    }
+    Ok(())
+}
+
+fn append_mcp_provider_event(outcome: &ProviderOutcome, payload: &Value) -> anyhow::Result<Value> {
+    let path = state_dir_mcp().join("events.jsonl");
+    append_mcp_provider_event_to_path(&path, outcome, payload)
+}
+
+fn append_mcp_provider_event_to_path(
+    path: &Path,
+    outcome: &ProviderOutcome,
+    payload: &Value,
+) -> anyhow::Result<Value> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut payload = payload.clone();
+    if let Some(trace_event) = payload
+        .get("trace_event")
+        .and_then(|value| serde_json::from_value::<TraceEvent>(value.clone()).ok())
+    {
+        let trace_event = TraceEvent::sealed(
+            trace_event.obs_id,
+            trace_event.event_type,
+            trace_event.provider,
+            trace_event.payload,
+            last_mcp_provider_event_hash(path)?,
+        );
+        payload["trace_event"] = serde_json::to_value(trace_event)?;
+    }
+    let event = json!({
+        "kind": "provider_call",
+        "provider": &outcome.envelope.provider,
+        "action": &outcome.envelope.action,
+        "decision": &outcome.decision,
+        "error_kind": &outcome.envelope.error_kind,
+        "reason": &outcome.envelope.reason,
+        "obs_ref": &outcome.observation_id,
+        "approval_id": if outcome.decision == PolicyDecision::RequiresReview {
+            payload
+                .get("approval_id")
+                .cloned()
+                .unwrap_or_else(|| json!(format!("webui-{}", outcome.observation_id)))
+        } else {
+            Value::Null
+        },
+        "side_effect_executed": payload
+            .get("side_effect_executed")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        "data": payload
+    });
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    use std::io::Write;
+    writeln!(file, "{}", serde_json::to_string(&event)?)?;
+    Ok(payload)
+}
+
+fn last_mcp_provider_event_hash(path: &Path) -> anyhow::Result<Option<String>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(path)?;
+    Ok(content.lines().rev().find_map(|line| {
+        let event: Value = serde_json::from_str(line).ok()?;
+        let trace_event: TraceEvent =
+            serde_json::from_value(event.get("data")?.get("trace_event")?.clone()).ok()?;
+        Some(trace_event.event_hash)
+    }))
 }
 
 fn first_party_provider_registry() -> ProviderRegistry {
@@ -580,8 +785,20 @@ fn all_kernel_managed_providers() -> Vec<KernelProvider> {
 fn mcp_kernel_policy() -> KernelPolicy {
     let mut policy = KernelPolicy::default();
     policy.active_assessment = true;
+    policy.max_argument_bytes = Some(MCP_INLINE_MAX_ARGUMENT_BYTES);
+    policy.add_scoped_root(ScopedRoot::new(
+        "mcp-inline-sandbox",
+        tools::sandbox_root_from(),
+    ));
     for provider in all_kernel_managed_providers() {
         policy.allow_provider(provider.id);
+    }
+    for manifest in default_external_provider_manifests() {
+        for origin in manifest.allowed_origins {
+            if let Some(host) = public_host_from_origin(&origin) {
+                policy.allow_egress_host(host);
+            }
+        }
     }
     policy
 }
@@ -589,8 +806,58 @@ fn mcp_kernel_policy() -> KernelPolicy {
 fn mcp_single_provider_policy(provider: &str) -> KernelPolicy {
     let mut policy = KernelPolicy::default();
     policy.active_assessment = true;
+    policy.max_argument_bytes = Some(MCP_INLINE_MAX_ARGUMENT_BYTES);
     policy.allow_provider(provider);
     policy
+}
+
+fn public_host_from_origin(origin: &str) -> Option<String> {
+    let url = Url::parse(origin).ok()?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return None;
+    }
+    let host = url.host_str().map(normalize_host)?;
+    (!is_private_or_local_host(&host)).then_some(host)
+}
+
+fn normalize_host(host: &str) -> String {
+    host.trim().trim_end_matches('.').to_ascii_lowercase()
+}
+
+fn is_private_or_local_host(host: &str) -> bool {
+    if host == "localhost" || host.ends_with(".localhost") {
+        return true;
+    }
+
+    let Ok(ip) = host.parse::<IpAddr>() else {
+        return false;
+    };
+
+    match ip {
+        IpAddr::V4(addr) => is_private_or_local_ipv4(addr),
+        IpAddr::V6(addr) => {
+            if let Some(mapped) = addr.to_ipv4_mapped() {
+                return is_private_or_local_ipv4(mapped);
+            }
+            addr.is_loopback()
+                || addr.is_unspecified()
+                || addr.is_unique_local()
+                || addr.is_unicast_link_local()
+        }
+    }
+}
+
+fn is_private_or_local_ipv4(addr: Ipv4Addr) -> bool {
+    addr.is_private()
+        || addr.is_loopback()
+        || addr.is_link_local()
+        || addr.is_unspecified()
+        || is_carrier_grade_nat(addr)
+}
+
+fn is_carrier_grade_nat(addr: Ipv4Addr) -> bool {
+    let octets = addr.octets();
+    octets[0] == 100 && (64..=127).contains(&octets[1])
 }
 
 fn tool_arguments(params: Option<&Value>) -> &Value {
@@ -599,7 +866,12 @@ fn tool_arguments(params: Option<&Value>) -> &Value {
         .unwrap_or(&Value::Null)
 }
 
-fn provider_outcome_payload(outcome: &ProviderOutcome) -> Value {
+fn provider_outcome_payload(outcome: &ProviderOutcome, arguments: Option<&Value>) -> Value {
+    let anomaly = if provider_is_external(&outcome.envelope.provider) {
+        arguments.map(|arguments| analyze_anomaly(outcome, arguments))
+    } else {
+        None
+    };
     let mut payload = serde_json::to_value(outcome).expect("provider outcome serializes");
     payload["provider"] = json!(&outcome.envelope.provider);
     payload["action"] = json!(&outcome.envelope.action);
@@ -607,11 +879,17 @@ fn provider_outcome_payload(outcome: &ProviderOutcome) -> Value {
     payload["reason"] = json!(&outcome.envelope.reason);
     payload["side_effect_executed"] = json!(outcome.envelope.side_effect_executed);
     payload["obs_ref"] = json!(&outcome.observation_id);
-    payload["trace_event"] = trace_event_for_outcome(outcome);
+    if outcome.decision == PolicyDecision::RequiresReview {
+        payload["approval_id"] = json!(format!("webui-{}", outcome.observation_id));
+    }
+    payload["trace_event"] = trace_event_for_outcome(outcome, anomaly.as_ref());
+    if let Some(anomaly) = anomaly {
+        payload["anomaly"] = anomaly;
+    }
     payload
 }
 
-fn trace_event_for_outcome(outcome: &ProviderOutcome) -> Value {
+fn trace_event_for_outcome(outcome: &ProviderOutcome, anomaly: Option<&Value>) -> Value {
     let event_type = match outcome.decision {
         PolicyDecision::Allowed => "provider_policy_evaluated",
         PolicyDecision::Denied => "provider_denied",
@@ -627,6 +905,7 @@ fn trace_event_for_outcome(outcome: &ProviderOutcome) -> Value {
             .unwrap_or("not_executed"),
         false,
         outcome.envelope.side_effect_executed,
+        anomaly,
     )
 }
 
@@ -636,22 +915,27 @@ fn trace_event_for_provider_result(
     execution_status: &str,
     simulated: bool,
     side_effect_executed: bool,
+    anomaly: Option<&Value>,
 ) -> Value {
+    let mut payload = json!({
+        "provider": &outcome.envelope.provider,
+        "action": &outcome.envelope.action,
+        "decision": &outcome.decision,
+        "execution_status": execution_status,
+        "gate_id": &outcome.envelope.gate_id,
+        "reason": &outcome.envelope.reason,
+        "error_kind": &outcome.envelope.error_kind,
+        "side_effect_executed": side_effect_executed,
+        "simulated": simulated
+    });
+    if let Some(anomaly) = anomaly {
+        payload["anomaly"] = anomaly.clone();
+    }
     let event = TraceEvent::sealed(
         outcome.observation_id.clone(),
         event_type.to_string(),
         Some(outcome.envelope.provider.clone()),
-        json!({
-            "provider": &outcome.envelope.provider,
-            "action": &outcome.envelope.action,
-            "decision": &outcome.decision,
-            "execution_status": execution_status,
-            "gate_id": &outcome.envelope.gate_id,
-            "reason": &outcome.envelope.reason,
-            "error_kind": &outcome.envelope.error_kind,
-            "side_effect_executed": side_effect_executed,
-            "simulated": simulated
-        }),
+        payload,
         None,
     );
     serde_json::to_value(event).expect("trace event serializes")
@@ -662,15 +946,10 @@ fn anomaly_monitors() -> &'static Mutex<HashMap<String, AnomalyMonitor>> {
     STORE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Extract the host part of a URL (best-effort, no external URL crate).
 fn host_of(url: &str) -> Option<String> {
-    let after_scheme = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
-    let host = after_scheme.split(['/', ':']).next()?;
-    if host.is_empty() {
-        None
-    } else {
-        Some(host.to_string())
-    }
+    Url::parse(url)
+        .ok()
+        .and_then(|url| url.host_str().map(normalize_host))
 }
 
 /// Run the behavior-anomaly monitor for an allowed external provider call and
@@ -729,6 +1008,7 @@ fn external_provider_result(
     } else {
         "provider_completed"
     };
+    let anomaly = analyze_anomaly(outcome, arguments);
     json!({
         "provider": &outcome.envelope.provider,
         "action": &outcome.envelope.action,
@@ -742,10 +1022,11 @@ fn external_provider_result(
             event_type,
             execution_status,
             simulated,
-            side_effect_executed
+            side_effect_executed,
+            Some(&anomaly)
         ),
         "output": executed.get("output").cloned().unwrap_or(Value::Null),
-        "anomaly": analyze_anomaly(outcome, arguments)
+        "anomaly": anomaly
     })
 }
 
@@ -801,7 +1082,7 @@ fn handle_trace_export(id: Value, arguments: &Value) -> Value {
     );
     let outcome = enforcer.evaluate_call(&call);
     if outcome.decision != PolicyDecision::Allowed {
-        return tool_error_result(id, provider_outcome_payload(&outcome));
+        return tool_error_result(id, provider_outcome_payload(&outcome, None));
     }
 
     let mut store = InMemoryTraceStore::default();
@@ -950,26 +1231,45 @@ fn handle_provider_status(id: Value, params: Option<&Value>) -> Value {
             "kind": provider.kind,
             "risk": provider.risk,
             "side_effects": provider.side_effects,
-            "approval_required": approval_required(&provider),
+            "approval_required": provider_requires_approval(&provider),
             "side_effect_executed": false
         }),
     )
 }
 
 fn handle_report_lint(id: Value, params: Option<&Value>) -> Value {
-    let Some((report, trace_events)) = report_and_trace_args(params) else {
+    let Some(report) = report_arg(params) else {
         return jsonrpc_error(
             id,
             -32602,
-            "report lint requires arguments.report and arguments.trace_events",
+            "report lint requires arguments.report",
             json!({"side_effect_executed": false}),
         );
     };
 
+    let trace_events = match read_mcp_provider_trace_events() {
+        Ok(trace_events) => trace_events,
+        Err(err) => {
+            return tool_error_result(
+                id,
+                json!({
+                    "ok": false,
+                    "errors": [{
+                        "kind": "trace_store_unreadable",
+                        "message": err.to_string()
+                    }],
+                    "trace_source": "mcp_provider_event_store",
+                    "side_effect_executed": false
+                }),
+            );
+        }
+    };
     let result = lint_report_against_trace(&report, &trace_events);
     let payload = json!({
         "ok": result.ok,
         "errors": result.errors,
+        "trace_source": "mcp_provider_event_store",
+        "trace_event_count": trace_events.len(),
         "side_effect_executed": false
     });
 
@@ -991,16 +1291,29 @@ fn handle_report_render(id: Value, params: Option<&Value>) -> Value {
     );
     let outcome = enforcer.evaluate_call(&call);
     if outcome.decision != PolicyDecision::Allowed {
-        return tool_error_result(id, provider_outcome_payload(&outcome));
+        return tool_error_result(id, provider_outcome_payload(&outcome, None));
     }
 
-    let Some((report, trace_events)) = report_and_trace_args(params) else {
+    let Some(report) = report_arg(params) else {
         return jsonrpc_error(
             id,
             -32602,
-            "report render requires arguments.report and arguments.trace_events",
+            "report render requires arguments.report",
             json!({"side_effect_executed": false}),
         );
+    };
+    let trace_events = match read_mcp_provider_trace_events() {
+        Ok(trace_events) => trace_events,
+        Err(err) => {
+            return tool_error_result(
+                id,
+                json!({
+                    "error_kind": ErrorKind::ReportCitationInvalid,
+                    "message": format!("failed to read MCP provider trace store: {err}"),
+                    "side_effect_executed": false
+                }),
+            );
+        }
     };
     let format = arguments
         .get("format")
@@ -1021,33 +1334,48 @@ fn handle_report_render(id: Value, params: Option<&Value>) -> Value {
     }
 }
 
-fn report_and_trace_args(params: Option<&Value>) -> Option<(ReportDraft, Vec<TraceEvent>)> {
+fn report_arg(params: Option<&Value>) -> Option<ReportDraft> {
     let arguments = params
         .and_then(|params| params.get("arguments"))
         .unwrap_or(&Value::Null);
-    let report = serde_json::from_value(arguments.get("report")?.clone()).ok()?;
-    let trace_events = serde_json::from_value(
-        arguments
-            .get("trace_events")
+    serde_json::from_value(arguments.get("report")?.clone()).ok()
+}
+
+fn read_mcp_provider_trace_events() -> anyhow::Result<Vec<TraceEvent>> {
+    let path = state_dir_mcp().join("events.jsonl");
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let content = std::fs::read_to_string(&path)
+        .with_context(|| format!("read MCP provider events from {}", path.display()))?;
+    let mut trace_events = Vec::new();
+    for (index, line) in content.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let event: Value = serde_json::from_str(line)
+            .with_context(|| format!("parse MCP provider event line {}", index + 1))?;
+        let trace_event = event
+            .get("data")
+            .and_then(|data| data.get("trace_event"))
             .cloned()
-            .unwrap_or_else(|| json!([])),
-    )
-    .ok()?;
-    Some((report, trace_events))
+            .with_context(|| {
+                format!(
+                    "MCP provider event line {} is missing data.trace_event",
+                    index + 1
+                )
+            })?;
+        trace_events.push(serde_json::from_value(trace_event).with_context(|| {
+            format!("parse trace_event on MCP provider event line {}", index + 1)
+        })?);
+    }
+    Ok(trace_events)
 }
 
 fn find_kernel_managed_provider(provider_id: &str) -> Option<KernelProvider> {
     all_kernel_managed_providers()
         .into_iter()
         .find(|provider| provider.id == provider_id)
-}
-
-fn approval_required(provider: &KernelProvider) -> bool {
-    provider
-        .authority_requirements
-        .get("approval_required")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
 }
 
 fn parse_render_format(format: &str) -> Option<RenderFormat> {
@@ -1164,5 +1492,122 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&sandbox);
+    }
+
+    #[test]
+    fn provider_outcome_payload_adds_anomaly_for_review_blocked_external_call() {
+        let call = ProviderCall {
+            session_id: "mcp-inline".to_string(),
+            provider: "external.api.request".to_string(),
+            action: "request".to_string(),
+            arguments: json!({
+                "method": "POST",
+                "url": "https://api.example.com/callback",
+                "body": {"source": "memory"}
+            }),
+            actor_id: None,
+            authz_id: None,
+            approval_id: None,
+        };
+        let outcome = ProviderOutcome::before_side_effect(
+            PolicyDecision::RequiresReview,
+            &call,
+            "approval",
+            "approval required for test",
+            Some(ErrorKind::ApprovalInvalid),
+        );
+
+        let payload = provider_outcome_payload(&outcome, Some(&call.arguments));
+
+        assert_eq!(payload["decision"], "requires_review");
+        assert_eq!(payload["side_effect_executed"], false);
+        assert!(payload["anomaly"]["score"].is_number());
+        assert!(payload["anomaly"]["is_anomalous"].is_boolean());
+        assert!(payload["anomaly"]["reasons"].is_array());
+        assert!(payload["trace_event"]["payload"]["anomaly"]["score"].is_number());
+        assert_eq!(
+            payload["trace_event"]["payload"]["side_effect_executed"],
+            false
+        );
+    }
+
+    #[test]
+    fn append_mcp_provider_event_stores_verifiable_trace_chain() {
+        let dir = std::env::temp_dir().join(format!(
+            "runwarden-mcp-event-chain-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time")
+                .as_nanos()
+        ));
+        let path = dir.join("events.jsonl");
+
+        let first_call = ProviderCall {
+            session_id: "mcp-inline".to_string(),
+            provider: "external.api.request".to_string(),
+            action: "call".to_string(),
+            arguments: json!({"url": "http://127.0.0.1/latest/meta-data"}),
+            actor_id: None,
+            authz_id: None,
+            approval_id: None,
+        };
+        let first_outcome = ProviderOutcome::before_side_effect(
+            PolicyDecision::Denied,
+            &first_call,
+            "egress",
+            "denied for test",
+            Some(ErrorKind::EgressDenied),
+        );
+        let first_payload = append_mcp_provider_event_to_path(
+            &path,
+            &first_outcome,
+            &provider_outcome_payload(&first_outcome, None),
+        )
+        .expect("first event");
+
+        let second_call = ProviderCall {
+            session_id: "mcp-inline".to_string(),
+            provider: "external.email.send".to_string(),
+            action: "call".to_string(),
+            arguments: json!({"to": "ops@example.com"}),
+            actor_id: None,
+            authz_id: None,
+            approval_id: None,
+        };
+        let second_outcome = ProviderOutcome::before_side_effect(
+            PolicyDecision::RequiresReview,
+            &second_call,
+            "approval",
+            "approval required for test",
+            Some(ErrorKind::ApprovalInvalid),
+        );
+        let second_payload = append_mcp_provider_event_to_path(
+            &path,
+            &second_outcome,
+            &provider_outcome_payload(&second_outcome, None),
+        )
+        .expect("second event");
+
+        let first_trace: TraceEvent =
+            serde_json::from_value(first_payload["trace_event"].clone()).expect("first trace");
+        let second_trace: TraceEvent =
+            serde_json::from_value(second_payload["trace_event"].clone()).expect("second trace");
+        assert_eq!(
+            second_trace.previous_hash.as_deref(),
+            Some(first_trace.event_hash.as_str())
+        );
+
+        let content = fs::read_to_string(&path).expect("events jsonl");
+        let mut store = InMemoryTraceStore::default();
+        for line in content.lines() {
+            let event: Value = serde_json::from_str(line).expect("event json");
+            let trace: TraceEvent =
+                serde_json::from_value(event["data"]["trace_event"].clone()).expect("trace event");
+            store.append(trace);
+        }
+        store.verify_hash_chain().expect("provider trace verifies");
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

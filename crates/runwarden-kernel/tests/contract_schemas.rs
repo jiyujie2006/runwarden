@@ -120,16 +120,10 @@ fn checked_in_schema_artifacts_match_rust_contracts() {
 }
 
 #[test]
-fn active_typescript_surface_is_static_webui_only() {
+fn active_typescript_webui_surface_is_removed() {
     let root = workspace_root();
-    let workspace =
-        fs::read_to_string(root.join("pnpm-workspace.yaml")).expect("read pnpm workspace");
-    let package_entries: Vec<_> = workspace
-        .lines()
-        .filter_map(|line| line.trim().strip_prefix("- "))
-        .map(|entry| entry.trim_matches('"'))
-        .collect();
-    assert_eq!(package_entries, ["packages/webui"]);
+    assert!(!root.join("pnpm-workspace.yaml").exists());
+    assert!(!root.join("packages/webui").exists());
 }
 
 #[test]
@@ -161,6 +155,62 @@ fn artifact_paths_are_schema_restricted_to_relative_workspace_paths() {
         artifact_ref["path"]["pattern"]
             .as_str()
             .is_some_and(|pattern| pattern.contains(r"\.\."))
+    );
+}
+
+#[test]
+fn workspace_output_path_rejects_absolute_parent_and_empty_paths() {
+    let root = tempfile::tempdir().expect("root");
+
+    assert!(
+        runwarden_kernel::artifact::resolve_workspace_relative_path(root.path(), Path::new(""))
+            .is_err()
+    );
+    assert!(
+        runwarden_kernel::artifact::resolve_workspace_relative_path(
+            root.path(),
+            Path::new("/tmp/x")
+        )
+        .is_err()
+    );
+    assert!(
+        runwarden_kernel::artifact::resolve_workspace_relative_path(root.path(), Path::new("../x"))
+            .is_err()
+    );
+    assert!(
+        runwarden_kernel::artifact::resolve_workspace_relative_path(
+            root.path(),
+            Path::new("a/../x")
+        )
+        .is_err()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_output_path_allows_in_root_symlink_but_rejects_escape() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempfile::tempdir().expect("root");
+    let outside = tempfile::tempdir().expect("outside");
+    let inside = root.path().join("inside");
+    fs::create_dir(&inside).expect("inside dir");
+    symlink(&inside, root.path().join("inside-link")).expect("inside symlink");
+    symlink(outside.path(), root.path().join("outside-link")).expect("outside symlink");
+
+    assert!(
+        runwarden_kernel::artifact::resolve_workspace_relative_path(
+            root.path(),
+            Path::new("inside-link/out.txt"),
+        )
+        .is_ok()
+    );
+    assert!(
+        runwarden_kernel::artifact::resolve_workspace_relative_path(
+            root.path(),
+            Path::new("outside-link/out.txt"),
+        )
+        .is_err()
     );
 }
 

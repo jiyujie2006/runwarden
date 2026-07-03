@@ -9,15 +9,15 @@ This index is the canonical map for the contest edition.
 - [Submission Map](02-xa-202620-submission-map.md): reviewer package map.
 - [Evaluation Results](03-evaluation-results.md): scenario metrics and evidence.
 - [Contest Submission](contest/README.md): scorecard, reproduction, demo script, artifacts, and limitations.
-- [Red-Team Results](contest/redteam-results.md): deterministic proxy-probe coverage and result artifacts.
+- [Red-Team Results](contest/redteam-results.md): deterministic proxy/output probe coverage and result artifacts.
 
 ## Operate The Demo
 
-- [CLI Reference](reference/cli.md): sessions, providers, trace, reports, scenarios, demo runner, and static/live UI.
+- [CLI Reference](reference/cli.md): demo, trace, report, and check commands.
 - [CI](reference/ci.md): local and GitHub gate commands.
 - [Contest Review Outputs](reference/contest-review-outputs.md): generated evidence artifacts.
 - [MCP Reference](reference/mcp.md): exact agent-facing MCP tools and provider-call replay evidence.
-- [Reviewer Console](reference/webui-review-console.md): static and live demo console contract.
+- [Reviewer Console](reference/webui-review-console.md): Rust-served interactive and static console contract.
 - [Reviewer Console Guide](guides/reviewer-console.md): operator walkthrough.
 - [Agent Integration](reference/agent-integration.md): Runwarden-only MCP config shape and OpenCode fixture.
 - [First Scenario](reference/first-scenario.md): scenario folder contract.
@@ -36,7 +36,7 @@ This index is the canonical map for the contest edition.
 ## Contracts
 
 - [JSON Contracts](reference/json-contracts.md): Rust schema artifacts.
-- [Rust Kernel and TypeScript Interaction](reference/rust-kernel-ts-interaction.md): Rust-owned policy with presentation-only TypeScript.
+- [Rust Kernel and TypeScript Interaction](reference/rust-kernel-ts-interaction.md): Rust-owned policy with no active TypeScript policy surface.
 - [Kernel Manifest](reference/kernel-manifest.md)
 - [Assessment Manifest](reference/assessment-manifest.md)
 - [Provider Manifest](reference/provider-manifest.md)
@@ -53,6 +53,7 @@ This index is the canonical map for the contest edition.
 - [Provider Examples](../examples/providers/README.md)
 - [Report Examples](../examples/reports/README.md)
 - [Scenario Examples](../examples/scenarios/README.md)
+- [Supplemental Anomaly Scenario](../examples/scenarios/anomalous-provider-sequence/README.md)
 - [Red-Team Harness](../redteam/README.md)
 
 ## Scenario Fixtures
@@ -66,5 +67,5 @@ This index is the canonical map for the contest edition.
 ## Maintenance Rules
 
 - Security decisions stay in Rust crates.
-- TypeScript presents Rust-produced demo state and must not reimplement allow/deny policy.
+- Browser code, and any future TypeScript, may present Rust-produced demo state but must not reimplement allow/deny policy.
 - Keep this index aligned with CLI, MCP, provider, report, approval, and WebUI behavior.

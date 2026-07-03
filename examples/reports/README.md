@@ -17,7 +17,13 @@ The scenario gate requires all expected observations to appear in the final
 report:
 
 ```bash
-runwarden eval scenarios --json
+runwarden check --strict --json
 ```
+
+## Minimal Claim Examples
+
+- `provider_not_allowed` API claim: `scenarios/tool-hijack-email-api/expected/report.json`
+- `root_escape` filesystem claim: `scenarios/path-escape-file-boundary/expected/report.json`
+- review-blocked knowledge write claim: `scenarios/memory-knowledge-poisoning/expected/report.json`
 
 Maintained reference: [Evidence and Accountability](../../docs/reference/evidence-and-accountability.md).

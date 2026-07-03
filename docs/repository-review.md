@@ -10,7 +10,7 @@ documentation review oriented around the red-team range workflow.
 Reviewed surfaces:
 
 - Rust crates under `crates/`.
-- The active TypeScript package `packages/webui`.
+- The Rust-served reviewer console.
 - Scenario golden corpora, schemas, scripts, GitHub workflows, and maintained
   docs.
 
@@ -57,9 +57,8 @@ For focused local checks:
 
 ```bash
 cargo test --workspace
-pnpm test
-pnpm build
-target/debug/runwarden eval scenarios --json
+target/debug/runwarden check --strict --json
+target/debug/runwarden demo --all --output artifacts/demo --json
 ```
 
 ## Ponytail Cleanup Review
@@ -110,8 +109,6 @@ Required verification for this class of cleanup remains:
 ```bash
 cargo fmt --check
 cargo test --workspace
-pnpm test
-pnpm build
 bash scripts/pr_fast_gate.sh
 bash scripts/release_gate_local.sh
 ```
@@ -120,5 +117,5 @@ bash scripts/release_gate_local.sh
 
 - Real LLM adapters are out of scope for the default demo path; adding one must
   keep provider policy in Rust.
-- Full verification depends on local Rust, pnpm, Node, and `cargo-deny`
+- Full verification depends on local Rust, Python, and `cargo-deny`
   availability.

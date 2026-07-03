@@ -5,8 +5,7 @@ Keep security decisions in Rust crates; TypeScript packages may present,
 validate, or call contracts but must not duplicate allow/deny policy logic.
 
 Use these gates: `bash scripts/pr_fast_gate.sh`,
-`bash scripts/release_gate_local.sh`, `cargo test --workspace`, `pnpm test`,
-and `pnpm build`.
+`bash scripts/release_gate_local.sh`, and `cargo test --workspace`.
 
 Before changing provider, report, artifact, approval, or MCP behavior, read the
 matching reference page under `docs/reference/` and update it with the code

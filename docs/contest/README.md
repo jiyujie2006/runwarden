@@ -2,6 +2,24 @@
 
 Runwarden 的比赛交付入口:
 
+## Open These First
+
+1. `artifacts/demo/reviewer-console.html`
+2. `artifacts/reports/contest-report.md`
+3. `artifacts/contest-bundle/manifest.json`
+4. `artifacts/contest-bundle/redteam-results/SUMMARY.md`
+
+## Judge Route Map
+
+```text
+OpenCode agent
+  |- model call -> runwarden-llm-proxy -> input/output filter -> model_call obs_*
+  `- tool call  -> runwarden-mcp -> KernelEnforcer -> providers -> provider_call obs_*
+                                                `-> approval / deny / anomaly
+
+Reviewer console/report <- verified obs_* evidence chain
+```
+
 - [Scorecard](scorecard.md)
 - [Reproduction](reproduction.md)
 - [Demo Script](demo-script.md)

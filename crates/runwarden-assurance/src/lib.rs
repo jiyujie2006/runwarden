@@ -227,9 +227,8 @@ pub mod report {
                 && event_supports_denied_blocked_or_rejected_claim(event);
         }
         if text.contains("completed") {
-            return event.event_type.contains("completed")
-                || payload_string(&event.payload, "execution_status")
-                    .is_some_and(|status| status == "completed");
+            return payload_string(&event.payload, "execution_status")
+                .is_some_and(|status| status == "completed");
         }
         if text.contains("allowed") {
             return event

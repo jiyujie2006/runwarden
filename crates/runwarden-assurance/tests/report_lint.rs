@@ -9,7 +9,7 @@ fn trace(obs_id: &str) -> TraceEvent {
         obs_id.to_string(),
         "provider_completed".to_string(),
         Some("runwarden.input.inspect".to_string()),
-        json!({"ok": true}),
+        json!({"ok": true, "execution_status": "completed"}),
         None,
     )
 }
@@ -36,7 +36,7 @@ fn trace_events(obs_ids: &[&str]) -> Vec<TraceEvent> {
             (*obs_id).to_string(),
             "provider_completed",
             Some("runwarden.input.inspect"),
-            json!({"ok": true}),
+            json!({"ok": true, "execution_status": "completed"}),
         );
     }
     store.events_mut_for_test().to_vec()
@@ -138,6 +138,29 @@ fn report_lint_rejects_completed_claim_when_event_only_says_policy_allowed() {
         "provider_policy_evaluated",
         "runwarden.input.inspect",
         json!({"decision": "allowed", "execution_status": "not_executed"}),
+    )];
+    let report = ReportDraft::new(vec![ReportClaim::new(
+        "finding-1",
+        "Provider call completed",
+        ["obs_1"],
+    )]);
+
+    let result = lint_report_against_trace(&report, &trace_events);
+
+    assert!(!result.ok);
+    assert_eq!(
+        result.errors[0].kind,
+        ReportLintErrorKind::UnsupportedObservation
+    );
+}
+
+#[test]
+fn report_lint_rejects_completed_claim_when_completed_event_payload_failed() {
+    let trace_events = vec![trace_with_payload(
+        "obs_1",
+        "provider_completed",
+        "runwarden.input.inspect",
+        json!({"decision": "allowed", "execution_status": "failed"}),
     )];
     let report = ReportDraft::new(vec![ReportClaim::new(
         "finding-1",
@@ -449,6 +472,39 @@ fn report_lint_accepts_unstructured_review_blocked_claim_without_side_effects() 
 
     assert!(result.ok, "{result:#?}");
     assert!(result.errors.is_empty());
+}
+
+#[test]
+fn report_lint_accepts_held_for_review_claim_with_structured_support() {
+    let trace_events = vec![trace_with_payload(
+        "obs_review",
+        "provider_approval_pending",
+        "external.api.request",
+        json!({
+            "decision": "requires_review",
+            "execution_status": "not_executed",
+            "side_effect_executed": false
+        }),
+    )];
+    let report = ReportDraft::new(vec![
+        ReportClaim::new(
+            "finding-1",
+            "The memory-to-API sequence was held for review with no side effect",
+            ["obs_review"],
+        )
+        .with_support(ReportClaimSupport {
+            provider: Some("external.api.request".to_string()),
+            event_type: Some("provider_approval_pending".to_string()),
+            decision: Some("requires_review".to_string()),
+            execution_status: Some("not_executed".to_string()),
+            side_effect_executed: Some(false),
+            simulated: None,
+        }),
+    ]);
+
+    let result = lint_report_against_trace(&report, &trace_events);
+
+    assert!(result.ok, "{result:#?}");
 }
 
 #[test]

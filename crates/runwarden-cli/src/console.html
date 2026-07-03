@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Runwarden Console</title>
+  <style>
+    :root {
+      --bg: #111312;
+      --panel: #1c211f;
+      --panel-2: #242a27;
+      --text: #ecefed;
+      --muted: #9ca6a0;
+      --line: #38413c;
+      --green: #2f8f5b;
+      --red: #c94b54;
+      --amber: #d79a30;
+      --blue: #4e8ccf;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    body > header {
+      min-height: 64px;
+      padding: 14px 24px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    h1 { margin: 0; font-size: 1.2rem; font-weight: 700; letter-spacing: 0; }
+    h2 { margin: 0 0 12px; font-size: 0.95rem; color: var(--text); letter-spacing: 0; }
+    main { width: min(1200px, 100%); margin: 0 auto; padding: 20px; }
+    section { padding: 16px 0; border-bottom: 1px solid var(--line); }
+    #summary { display: flex; flex-wrap: wrap; gap: 8px; }
+    .pill {
+      min-width: 92px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 6px 10px;
+      background: var(--panel-2);
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
+    .pill strong { color: var(--text); }
+    .list { display: grid; gap: 8px; }
+    .empty { margin: 0; color: var(--muted); font-size: 0.9rem; }
+    .event {
+      border: 1px solid var(--line);
+      border-left: 4px solid var(--blue);
+      border-radius: 6px;
+      background: var(--panel);
+      padding: 12px;
+    }
+    .event-denied { border-left-color: var(--red); }
+    .event-requires_review { border-left-color: var(--amber); }
+    .event-allowed, .event-approval_granted { border-left-color: var(--green); }
+    .event-approval_denied { border-left-color: var(--red); }
+    .event > header {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+    .event-title { font-size: 0.9rem; font-weight: 700; overflow-wrap: anywhere; }
+    .badge {
+      flex: 0 0 auto;
+      border-radius: 4px;
+      padding: 3px 8px;
+      background: var(--panel-2);
+      color: var(--text);
+      font-size: 0.75rem;
+      text-transform: uppercase;
+    }
+    dl { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 4px 12px; margin: 0; }
+    dt { color: var(--muted); font-size: 0.78rem; }
+    dd { margin: 0; font-size: 0.82rem; overflow-wrap: anywhere; }
+    .reason { margin: 8px 0 0; color: var(--muted); font-size: 0.84rem; overflow-wrap: anywhere; }
+    .actions { display: flex; gap: 8px; margin-top: 10px; }
+    button {
+      min-height: 32px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 0 12px;
+      background: var(--panel-2);
+      color: var(--text);
+      cursor: pointer;
+    }
+    button[data-action="approve"] { border-color: var(--green); }
+    button[data-action="deny"] { border-color: var(--red); }
+    button:disabled { opacity: 0.55; cursor: default; }
+    #trace-verification { color: var(--muted); font-size: 0.9rem; }
+    .ok { color: var(--green); }
+    .bad { color: var(--red); }
+    @media (max-width: 680px) {
+      body > header { align-items: flex-start; flex-direction: column; }
+      main { padding: 12px; }
+      dl { grid-template-columns: 90px minmax(0, 1fr); }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Runwarden</h1>
+    <div id="summary">
+      <span class="pill">Events <strong id="event-count">0</strong></span>
+      <span class="pill">Denied <strong id="denied-count">0</strong></span>
+      <span class="pill">Review <strong id="review-count">0</strong></span>
+    </div>
+  </header>
+  <main>
+    <section>
+      <h2>Review Queue</h2>
+      <div id="review-queue" class="list"></div>
+    </section>
+    <section>
+      <h2>Security Events</h2>
+      <div id="events" class="list"></div>
+    </section>
+    <section>
+      <h2>Evidence Chain</h2>
+      <div id="trace-verification">Checking</div>
+    </section>
+  </main>
+  <script>
+    window.STATIC_EVENTS = null;
+    (function () {
+      var eventCount = 0;
+      var deniedCount = 0;
+      var reviewCount = 0;
+      var pendingSeen = Object.create(null);
+      var interactive = !Array.isArray(window.STATIC_EVENTS);
+      var eventsEl = document.getElementById('events');
+      var queueEl = document.getElementById('review-queue');
+
+      function setEmpty(el, text) {
+        if (el.children.length) return;
+        var p = document.createElement('p');
+        p.className = 'empty';
+        p.textContent = text;
+        el.appendChild(p);
+      }
+      function clearEmpty(el) {
+        var p = el.querySelector('.empty');
+        if (p) p.remove();
+      }
+      function updateSummary() {
+        document.getElementById('event-count').textContent = String(eventCount);
+        document.getElementById('denied-count').textContent = String(deniedCount);
+        document.getElementById('review-count').textContent = String(reviewCount);
+      }
+      function fact(dl, label, value) {
+        if (value === undefined || value === null || value === '') return;
+        var dt = document.createElement('dt');
+        dt.textContent = label;
+        var dd = document.createElement('dd');
+        dd.textContent = String(value);
+        dl.appendChild(dt);
+        dl.appendChild(dd);
+      }
+      function eventArticle(kind, data) {
+        var article = document.createElement('article');
+        article.className = 'event event-' + String(data.decision || kind);
+        if (data.obs_ref) article.dataset.obsRef = data.obs_ref;
+        if (data.approval_id) article.dataset.approvalId = data.approval_id;
+        var header = document.createElement('header');
+        var title = document.createElement('div');
+        title.className = 'event-title';
+        title.textContent = data.scenario ? data.scenario + ' / ' + kind : kind;
+        var badge = document.createElement('span');
+        badge.className = 'badge';
+        badge.textContent = data.decision || kind;
+        header.appendChild(title);
+        header.appendChild(badge);
+        article.appendChild(header);
+        var dl = document.createElement('dl');
+        fact(dl, 'Provider', data.provider);
+        fact(dl, 'Action', data.action);
+        fact(dl, 'Defense', data.defense_layer);
+        fact(dl, 'Error', data.error_kind);
+        fact(dl, 'Obs', data.obs_ref);
+        fact(dl, 'Approval', data.approval_id);
+        fact(dl, 'Side effect', typeof data.side_effect_executed === 'boolean' ? data.side_effect_executed : null);
+        fact(dl, 'Upstream', data.upstream_status);
+        article.appendChild(dl);
+        if (data.reason) {
+          var reason = document.createElement('p');
+          reason.className = 'reason';
+          reason.textContent = data.reason;
+          article.appendChild(reason);
+        }
+        return article;
+      }
+      function appendEvent(kind, data) {
+        clearEmpty(eventsEl);
+        eventCount++;
+        if (data.decision === 'denied') deniedCount++;
+        if (data.decision === 'requires_review') reviewCount++;
+        eventsEl.prepend(eventArticle(kind, data));
+        updateSummary();
+      }
+      function appendPending(data) {
+        var key = data.approval_id || data.obs_ref;
+        if (!key || pendingSeen[key]) return;
+        pendingSeen[key] = true;
+        clearEmpty(queueEl);
+        var article = eventArticle('provider_call', data);
+        if (interactive && data.approval_id) {
+          var actions = document.createElement('div');
+          actions.className = 'actions';
+          var approve = document.createElement('button');
+          approve.type = 'button';
+          approve.dataset.action = 'approve';
+          approve.textContent = 'Approve';
+          approve.onclick = function () { decide(data.approval_id, true, approve, deny); };
+          var deny = document.createElement('button');
+          deny.type = 'button';
+          deny.dataset.action = 'deny';
+          deny.textContent = 'Deny';
+          deny.onclick = function () { decide(data.approval_id, false, approve, deny); };
+          actions.appendChild(approve);
+          actions.appendChild(deny);
+          article.appendChild(actions);
+        }
+        queueEl.appendChild(article);
+      }
+      function removePending(data) {
+        var selector = data.approval_id ? '[data-approval-id="' + data.approval_id + '"]' : '[data-obs-ref="' + data.obs_ref + '"]';
+        var el = queueEl.querySelector(selector);
+        if (el) el.remove();
+        setEmpty(queueEl, 'No pending reviews.');
+      }
+      function decide(approvalId, approve, yes, no) {
+        yes.disabled = true;
+        no.disabled = true;
+        fetch(approve ? '/api/approve' : '/api/deny', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ approval_id: approvalId })
+        }).then(function (r) { return r.json(); }).then(function () {
+          yes.textContent = approve ? 'Approved' : yes.textContent;
+          no.textContent = approve ? no.textContent : 'Denied';
+        }).catch(function () {
+          yes.disabled = false;
+          no.disabled = false;
+        });
+      }
+      function loadPending() {
+        if (!interactive) return;
+        fetch('/api/pending').then(function (r) { return r.json(); }).then(function (body) {
+          (body.pending || []).forEach(function (approval) {
+            appendPending({
+              kind: 'provider_call',
+              provider: approval.binding && approval.binding.provider,
+              action: approval.binding && approval.binding.action,
+              decision: 'requires_review',
+              approval_id: approval.approval_id,
+              obs_ref: String(approval.approval_id || '').replace(/^webui-/, ''),
+              side_effect_executed: false,
+              reason: 'high-risk provider requires reviewer approval'
+            });
+          });
+        });
+      }
+      function verifyTrace() {
+        if (!interactive) {
+          document.getElementById('trace-verification').textContent = 'Static console';
+          return;
+        }
+        fetch('/api/trace/verify').then(function (r) { return r.json(); }).then(function (v) {
+          var el = document.getElementById('trace-verification');
+          el.textContent = '';
+          var mt = v.model_trace || {};
+          var pt = v.provider_trace || {};
+          var line1 = document.createElement('div');
+          line1.textContent = 'Model trace: ' + (mt.verified ? 'verified (' + (mt.event_count || 0) + ' events)' : (mt.error || 'not verified'));
+          line1.className = mt.verified ? 'ok' : 'bad';
+          var line2 = document.createElement('div');
+          line2.textContent = 'Provider trace: ' + (pt.verified ? 'verified (' + (pt.event_count || 0) + ' events)' : (pt.error || 'not verified'));
+          line2.className = pt.verified ? 'ok' : 'bad';
+          el.appendChild(line1);
+          el.appendChild(line2);
+        }).catch(function () {
+          document.getElementById('trace-verification').textContent = 'trace file not found';
+        });
+      }
+      setEmpty(queueEl, 'No pending reviews.');
+      setEmpty(eventsEl, 'No security events.');
+      updateSummary();
+      if (Array.isArray(window.STATIC_EVENTS)) {
+        window.STATIC_EVENTS.forEach(function (event) {
+          appendEvent(event.kind || 'provider_call', event);
+          if (event.decision === 'requires_review') appendPending(event);
+        });
+      } else {
+        var es = new EventSource('/events');
+        ['provider_call', 'model_call', 'approval_granted', 'approval_denied'].forEach(function (kind) {
+          es.addEventListener(kind, function (e) {
+            var data = JSON.parse(e.data);
+            appendEvent(kind, data);
+            if (data.decision === 'requires_review') appendPending(data);
+            if (kind === 'approval_granted' || kind === 'approval_denied') removePending(data);
+          });
+        });
+        loadPending();
+        setInterval(loadPending, 1500);
+        setInterval(verifyTrace, 1500);
+      }
+      verifyTrace();
+    })();
+  </script>
+</body>
+</html>

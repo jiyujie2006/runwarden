@@ -15,10 +15,21 @@ External capabilities are integrated as Runwarden providers, never exposed direc
   canonicalized before read/write so symlink escapes cannot leave the root
 - sandbox roots come from Runwarden-owned runtime configuration, not
   provider-call arguments
+- MCP inline provider policy installs a server-owned sandbox root, manifest
+  derived public egress host allowlist, private/local egress denial, and an
+  argument-byte budget before approval or execution
 
 ## MCP Adapters
 
-MCP adapters support `stdio`, `http`, and `sse` contracts. Stdio adapters require a trusted runtime root, exact command allowlisting, no shell-capable command, no request-supplied command arguments, bounded output, and process-tree cleanup. HTTP/SSE adapters deny hostname resolutions to private or local addresses before connecting.
+MCP adapters support `stdio`, `http`, and `sse` contracts. Adapter execution is
+valid only through `execute_mediated_external_mcp_adapter` after a kernel
+`Allowed` provider outcome for the same manifest provider. Denied or
+review-blocked outcomes return `execution_status=not_executed` and
+`side_effect_executed=false` before adapter validation or transport execution.
+Stdio adapters require a trusted runtime root, exact command allowlisting, no
+shell-capable command, no request-supplied command arguments, bounded output,
+and process-tree cleanup. HTTP/SSE adapters deny hostname resolutions to
+private or local addresses before connecting.
 
 Local filesystem reads canonicalize the requested file when it exists and
 confirm the target remains under the sandbox root before reading. Writes may
@@ -27,7 +38,7 @@ path canonicalizes inside the sandbox root; symlinked parents that resolve
 outside the root are denied before any side effect is reported.
 
 The contest package does not invoke trusted downstream network adapters during
-local replay. API and browser provider ids return simulated outcomes and
+local demo runs. API and browser provider ids return simulated outcomes and
 `obs_*` evidence. Local filesystem, email, memory, and knowledge providers use
 the same Rust-owned manifest and policy contract, then perform only bounded
 local sandbox side effects after the kernel and approval gates allow them.

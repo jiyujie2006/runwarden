@@ -8,5 +8,3 @@ if ! command -v cargo-deny >/dev/null 2>&1; then
 fi
 cargo deny check
 cargo test --workspace
-pnpm test
-pnpm build

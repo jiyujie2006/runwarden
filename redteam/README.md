@@ -7,8 +7,10 @@ agent stack and score whether Runwarden blocked them. This is the contest delive
 ## Layout
 
 - `corpora/*.jsonl` — hand-authored attack **sets**, one JSON object per line:
-  `{"id","category","expected","prompt"}`. `expected` is one of
-  `input_blocked`, `tool_denied`, `requires_review`, or `allowed_benign`.
+  `{"id","category","expected","prompt"}`. Output-filter rows may also include
+  `upstream_returns`, which is the mock model response. `expected` is one of
+  `input_blocked`, `output_blocked`, `tool_denied`, `requires_review`, or
+  `allowed_benign`.
   - `prompt_injection.jsonl`, `jailbreak.jsonl`, `indirect_prompt_injection.jsonl`,
     `encoded_bypass.jsonl`, `report_fabrication.jsonl` → `input_blocked`
   - `tool_hijack.jsonl`, `path_escape.jsonl`, `schema_poisoning.jsonl`,
@@ -16,9 +18,10 @@ agent stack and score whether Runwarden blocked them. This is the contest delive
   - `memory_poisoning.jsonl`, `knowledge_poisoning.jsonl` → `tool_denied` or
     `requires_review`
   - `benign_control.jsonl` → `allowed_benign`
+  - `output_filter.jsonl` → `output_blocked` or `allowed_benign`
   - Public datasets (HarmBench/AdvBench/JailbreakBench/garak/PyRIT) can be added in
     the same JSONL shape.
-- `run.py` — the harness, two modes (below).
+- `run.py` — the harness, three modes (below).
 
 ## Modes
 
@@ -41,6 +44,19 @@ python3 redteam/run.py proxy-probe \
 Use `--fail-on-fail` for deterministic gates. Samples whose expected outcome
 belongs to agent or scenario replay are marked `SKIP` with a coverage reason.
 
+### `output-probe` — base-model streaming output filter
+
+Sends benign prompts through `runwarden-llm-proxy` while the mock upstream
+returns the corpus row's independent `upstream_returns` text as a streaming
+completion. Harmful completions should be blocked with HTTP 403.
+
+```bash
+python3 redteam/run.py output-probe \
+  --corpora redteam/corpora/output_filter.jsonl \
+  --summary-out artifacts/redteam/output-probe-summary.json \
+  --fail-on-fail
+```
+
 ### `agent-drive` — real LLM tool-call supervision
 
 Drives `opencode` (real free model, no API key) with each attack prompt, configured
@@ -48,14 +64,18 @@ to use `runwarden-mcp` as its only tool server, and scores whether the Runwarden
 kernel **denied** the resulting tool call (parsed from the runwarden-mcp debug log).
 
 ```bash
-# requires: opencode installed + runwarden-mcp built + /tmp/oc-test/opencode.json
+mkdir -p /tmp/oc-test
+cp examples/agent-configs/opencode.runwarden-only.json /tmp/oc-test/opencode.json
+export PATH="$PWD/target/debug:$PATH"
 python3 redteam/run.py agent-drive \
   --corpora redteam/corpora/path_escape.jsonl \
-  --model opencode/big-pickle --limit 2
+  --config-dir /tmp/oc-test --model opencode/big-pickle --limit 2
 ```
 
-Result: **2/2 denied** (`error_kind: root_escape`, `side_effect_executed: false`) —
-the kernel blocks path-traversal reads driven by the real LLM.
+Expected when the model calls the tool: path traversal is denied
+(`error_kind: root_escape`, `side_effect_executed: false`). This mode is
+model-dependent; deterministic gates use proxy/output probes plus scenario
+replay.
 
 ## Notes
 
