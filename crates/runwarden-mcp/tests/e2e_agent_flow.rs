@@ -1,11 +1,20 @@
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::PathBuf,
+    sync::{Mutex, OnceLock},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
-use runwarden_kernel::evidence::TraceEvent;
 use runwarden_mcp::{handle_jsonrpc_body, validate_runwarden_only_agent_config};
 use serde_json::{Value, json};
 
 #[test]
 fn agent_only_assessment_flow_mediates_report_render_before_execution() {
+    let dir = temp_state_dir("agent-flow");
+    let _guard = cwd_lock().lock().expect("cwd lock");
+    let cwd = std::env::current_dir().expect("cwd");
+    std::env::set_current_dir(&dir).expect("set cwd");
+
     let listed =
         handle_jsonrpc_body(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#)
             .expect("tools/list");
@@ -39,27 +48,17 @@ fn agent_only_assessment_flow_mediates_report_render_before_execution() {
     ));
     assert_eq!(inspection["provider"], "runwarden.input.inspect");
     assert_eq!(inspection["side_effect_executed"], false);
-
-    let trace_events = json!([TraceEvent::sealed(
-        "obs_1".to_string(),
-        "provider_completed".to_string(),
-        Some("runwarden.input.inspect".to_string()),
-        json!({"ok": true}),
-        None,
-    )]);
+    let obs_ref = inspection["obs_ref"].as_str().expect("obs_ref");
     let report = json!({
         "claims": [
-            {"id": "finding-1", "text": "Input inspection completed", "obs_refs": ["obs_1"]}
+            {"id": "finding-1", "text": "Input inspection completed", "obs_refs": [obs_ref]}
         ]
     });
 
     let lint = tool_payload(&call_tool(
         4,
         "runwarden.report.lint",
-        json!({
-            "report": report,
-            "trace_events": trace_events
-        }),
+        json!({ "report": report }),
     ));
     assert_eq!(lint["ok"], true);
 
@@ -68,7 +67,6 @@ fn agent_only_assessment_flow_mediates_report_render_before_execution() {
         "runwarden.report.render",
         json!({
             "report": report,
-            "trace_events": trace_events,
             "format": "html"
         }),
     );
@@ -77,6 +75,8 @@ fn agent_only_assessment_flow_mediates_report_render_before_execution() {
     assert_eq!(render["decision"], "requires_review");
     assert_eq!(render["envelope"]["error_kind"], "approval_invalid");
     assert_eq!(render["side_effect_executed"], false);
+
+    std::env::set_current_dir(cwd).expect("restore cwd");
 }
 
 #[test]
@@ -269,6 +269,24 @@ fn workspace_root() -> PathBuf {
         .parent()
         .expect("workspace root")
         .to_path_buf()
+}
+
+fn temp_state_dir(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "runwarden-mcp-e2e-{name}-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos()
+    ));
+    fs::create_dir_all(&dir).expect("temp state dir");
+    dir
+}
+
+fn cwd_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
 }
 
 fn tool_names(tools: &Value) -> Vec<String> {

@@ -5,6 +5,7 @@ use std::path::{Component, Path, PathBuf};
 
 use serde_json::Value;
 use time::OffsetDateTime;
+use url::Url;
 
 use crate::authority::{ApprovalBinding, ApprovalRecord, ApprovalState, ApprovalTransitionError};
 use crate::contracts::{
@@ -594,29 +595,10 @@ fn normalize_path(path: &Path) -> PathBuf {
 }
 
 fn extract_url_host(url: &str) -> Option<String> {
-    let (_, rest) = url.split_once("://")?;
-    let authority = rest
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or_default()
-        .rsplit('@')
-        .next()
-        .unwrap_or_default();
-    if authority.is_empty() {
-        return None;
-    }
-
-    let host = if let Some(stripped) = authority.strip_prefix('[') {
-        stripped.split(']').next().unwrap_or_default()
-    } else {
-        authority.split(':').next().unwrap_or_default()
-    };
-
-    if host.is_empty() {
-        None
-    } else {
-        Some(normalize_host(host))
-    }
+    Url::parse(url)
+        .ok()
+        .and_then(|url| url.host_str().map(normalize_host))
+        .filter(|host| !host.is_empty())
 }
 
 fn normalize_host(host: &str) -> String {

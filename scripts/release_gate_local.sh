@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 scripts/dev_gate.sh
+rm -rf artifacts/demo artifacts/reports artifacts/reviewer-console.html
 rm -f artifacts/llm-proxy/trace.jsonl
 target/debug/runwarden check --strict --json
 target/debug/runwarden demo --all --output artifacts/demo --json

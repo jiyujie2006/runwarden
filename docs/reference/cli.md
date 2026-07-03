@@ -51,4 +51,5 @@ and writes `artifacts/demo/reviewer-console.html`.
 ## Output Paths
 
 Demo and report outputs must be relative workspace paths. Absolute paths,
-parent traversal, and symlink components are rejected.
+parent traversal, and symlink escapes are rejected. Symlink components are
+accepted only when canonical containment keeps the output inside the workspace.

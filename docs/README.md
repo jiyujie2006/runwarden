@@ -45,6 +45,7 @@ This index is the canonical map for the contest edition.
 ## Development
 
 - [Contest Verification](development/contest-verification.md)
+- [Contest Optimization Plan](superpowers/plans/2026-07-02-runwarden-contest-optimization.md)
 - [Repository Review](repository-review.md)
 - [Roadmap](reference/roadmap.md)
 

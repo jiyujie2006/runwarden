@@ -5,7 +5,8 @@ The contest edition does not expose `runwarden artifact *` as a primary workflow
 - paths must be relative workspace paths
 - parent traversal is rejected
 - absolute paths are rejected
-- symlink components are rejected before writing
+- symlinks are allowed only when their canonical target remains inside the
+  workspace; symlink escapes are rejected before writing
 
 Local provider filesystem tools use the same containment boundary: requested
 paths are relative to the sandbox root, existing components are canonicalized

@@ -52,8 +52,35 @@ pub struct DemoEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub side_effect_executed: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub defense_layer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub upstream_status: Option<String>,
     pub data: Value,
+}
+
+pub fn defense_layer_for(
+    provider: Option<&str>,
+    decision: Option<&str>,
+    error_kind: Option<&str>,
+) -> &'static str {
+    match error_kind {
+        Some("root_escape" | "scope_violation") => "scoped-root",
+        Some("egress_denied") => "egress",
+        Some("approval_invalid" | "approval_expired" | "approval_consumed") => "approval",
+        Some("provider_not_allowed" | "provider_unknown") => "provider-policy",
+        Some("budget_exceeded") => "budget",
+        _ if decision == Some("requires_review") => "approval",
+        _ if provider.is_some_and(|provider| provider == "runwarden.input.inspect") => {
+            "input-inspection"
+        }
+        _ if provider.is_some_and(|provider| provider.starts_with("runwarden.report.")) => {
+            "report-evidence"
+        }
+        _ if provider.is_some_and(|provider| provider.starts_with("runwarden.trace.")) => {
+            "trace-verification"
+        }
+        _ => "kernel-policy",
+    }
 }
 
 pub fn run_console_server(
@@ -159,14 +186,39 @@ async fn pending_handler(State(state): State<AppState>) -> Json<Value> {
 }
 
 async fn trace_verify_handler(State(state): State<AppState>) -> Json<Value> {
-    match read_trace(&state.trace_path) {
-        Ok(events) => Json(verify_trace_events(events)),
-        Err(err) => Json(json!({
-            "verified": false,
-            "error": err.to_string(),
-            "side_effect_executed": false
-        })),
-    }
+    // Verify LLM proxy trace (model_call events)
+    let model_result = match read_trace(&state.trace_path) {
+        Ok(events) => verify_trace_events(events),
+        Err(_) => json!({ "verified": false, "error": "trace file not found", "event_count": 0 }),
+    };
+
+    // Verify MCP provider-call trace (sealed TraceEvents inside events.jsonl)
+    let mcp_events_path = state.state_dir.join("events.jsonl");
+    let mcp_trace_events: Vec<TraceEvent> = match fs::read_to_string(&mcp_events_path) {
+        Ok(content) => content
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .filter_map(|line| {
+                let event: Value = serde_json::from_str(line).ok()?;
+                let trace_event = event.get("data")?.get("trace_event")?;
+                serde_json::from_value::<TraceEvent>(trace_event.clone()).ok()
+            })
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    let mcp_result = if mcp_trace_events.is_empty() {
+        json!({ "verified": false, "error": "no provider trace events", "event_count": 0 })
+    } else {
+        verify_trace_events(mcp_trace_events)
+    };
+
+    Json(json!({
+        "model_trace": model_result,
+        "provider_trace": mcp_result,
+        "verified": model_result["verified"].as_bool().unwrap_or(false)
+            || mcp_result["verified"].as_bool().unwrap_or(false),
+        "side_effect_executed": false
+    }))
 }
 
 fn update_approval(state: &AppState, approval_id: &str, approve: bool) -> Json<Value> {
@@ -200,6 +252,7 @@ fn update_approval(state: &AppState, approval_id: &str, approve: bool) -> Json<V
                 obs_ref: approval_id.strip_prefix("webui-").map(ToString::to_string),
                 approval_id: Some(approval.approval_id.clone()),
                 side_effect_executed: Some(false),
+                defense_layer: Some("approval".to_string()),
                 upstream_status: None,
                 data: json!(approval),
             });
@@ -292,28 +345,47 @@ fn demo_event_from_value(value: Value, fallback_kind: &str) -> DemoEvent {
         .and_then(Value::as_str)
         .unwrap_or(fallback_kind)
         .to_string();
+    let provider = value
+        .get("provider")
+        .or_else(|| payload.get("provider"))
+        .and_then(Value::as_str)
+        .map(ToString::to_string);
+    let action = value
+        .get("action")
+        .or_else(|| payload.get("action"))
+        .and_then(Value::as_str)
+        .map(ToString::to_string);
+    let decision = value
+        .get("decision")
+        .or_else(|| payload.get("decision"))
+        .and_then(Value::as_str)
+        .map(ToString::to_string);
+    let error_kind = value
+        .get("error_kind")
+        .or_else(|| payload.get("error_kind"))
+        .and_then(Value::as_str)
+        .map(ToString::to_string);
+    let defense_layer = value
+        .get("defense_layer")
+        .or_else(|| payload.get("defense_layer"))
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+        .or_else(|| {
+            (provider.is_some() || decision.is_some() || error_kind.is_some()).then(|| {
+                defense_layer_for(
+                    provider.as_deref(),
+                    decision.as_deref(),
+                    error_kind.as_deref(),
+                )
+                .to_string()
+            })
+        });
     DemoEvent {
         kind,
-        provider: value
-            .get("provider")
-            .or_else(|| payload.get("provider"))
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
-        action: value
-            .get("action")
-            .or_else(|| payload.get("action"))
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
-        decision: value
-            .get("decision")
-            .or_else(|| payload.get("decision"))
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
-        error_kind: value
-            .get("error_kind")
-            .or_else(|| payload.get("error_kind"))
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
+        provider,
+        action,
+        decision,
+        error_kind,
         reason: value
             .get("reason")
             .or_else(|| payload.get("reason"))
@@ -332,6 +404,7 @@ fn demo_event_from_value(value: Value, fallback_kind: &str) -> DemoEvent {
             .get("side_effect_executed")
             .or_else(|| payload.get("side_effect_executed"))
             .and_then(Value::as_bool),
+        defense_layer,
         upstream_status: payload
             .get("upstream_status")
             .and_then(Value::as_str)
@@ -340,12 +413,26 @@ fn demo_event_from_value(value: Value, fallback_kind: &str) -> DemoEvent {
     }
 }
 
-pub fn render_static_console(input: &Path) -> anyhow::Result<String> {
+pub fn render_static_console_for_scenarios(
+    input: &Path,
+    scenarios: &[&str],
+) -> anyhow::Result<String> {
+    let files = scenarios
+        .iter()
+        .map(|scenario| input.join(scenario).join("webui.json"))
+        .collect();
+    render_static_console_from_files(files)
+}
+
+fn render_static_console_from_files(files: Vec<PathBuf>) -> anyhow::Result<String> {
     let mut events = Vec::new();
-    for file in collect_webui_files(input)? {
+    for file in files {
         let value = read_json_value(&file)?;
         let scenario = value["scenario"].as_str().unwrap_or("unknown");
         for call in value["provider_calls"].as_array().into_iter().flatten() {
+            let provider = call.get("provider").and_then(Value::as_str);
+            let decision = call.get("decision").and_then(Value::as_str);
+            let error_kind = call.get("error_kind").and_then(Value::as_str);
             events.push(json!({
                 "kind": "provider_call",
                 "scenario": scenario,
@@ -355,6 +442,10 @@ pub fn render_static_console(input: &Path) -> anyhow::Result<String> {
                 "error_kind": call.get("error_kind"),
                 "reason": call.get("reason"),
                 "obs_ref": call.get("obs_ref"),
+                "defense_layer": call
+                    .get("defense_layer")
+                    .cloned()
+                    .unwrap_or_else(|| json!(defense_layer_for(provider, decision, error_kind))),
                 "side_effect_executed": call.get("side_effect_executed"),
                 "data": call
             }));
@@ -367,28 +458,6 @@ pub fn render_static_console(input: &Path) -> anyhow::Result<String> {
             serde_json::to_string(&events)?
         ),
     ))
-}
-
-fn collect_webui_files(input: &Path) -> anyhow::Result<Vec<PathBuf>> {
-    let mut files = Vec::new();
-    if input.is_file() {
-        files.push(input.to_path_buf());
-    } else if input.exists() {
-        let direct = input.join("webui.json");
-        if direct.exists() {
-            files.push(direct);
-        }
-        for entry in fs::read_dir(input)? {
-            let entry = entry?;
-            let candidate = entry.path().join("webui.json");
-            if candidate.exists() {
-                files.push(candidate);
-            }
-        }
-    }
-    files.sort();
-    files.dedup();
-    Ok(files)
 }
 
 fn read_json_value(path: &Path) -> anyhow::Result<Value> {
@@ -444,5 +513,10 @@ mod tests {
         assert!(approval_path(Path::new("/tmp/state"), "../webui-obs_1").is_err());
         assert!(approval_path(Path::new("/tmp/state"), "webui/obs_1").is_err());
         assert!(approval_path(Path::new("/tmp/state"), "webui.obs_1").is_err());
+    }
+
+    #[test]
+    fn console_polls_trace_verification_after_page_load() {
+        assert!(CONSOLE_HTML.contains("setInterval(verifyTrace, 1500);"));
     }
 }

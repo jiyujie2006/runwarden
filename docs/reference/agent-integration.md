@@ -12,6 +12,9 @@ The Rust MCP crate validates the checked-in safe and unsafe examples: empty
 For OpenCode, the checked config must use `type: "local"`, `command:
 ["runwarden-mcp"]`, must not set `enabled: false`, and must include a top-level
 `tools` object whose built-in tools are all set to `false`.
+The checked config also defines `runwarden-proxy/big-pickle` as the
+OpenAI-compatible model entry that routes model calls through the local LLM
+proxy at `http://127.0.0.1:8787/v1`.
 
 Agent configuration arguments and MCP tool arguments do not carry Runwarden
 session policy. Agents cannot provide provider allowlists, active-assessment

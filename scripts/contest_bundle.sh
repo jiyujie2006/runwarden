@@ -21,19 +21,32 @@ python3 redteam/run.py proxy-probe \
   --fail-on-fail
 
 BUNDLE="artifacts/contest-bundle"
+OFFICIAL_SCENARIOS=(
+  prompt-injection-file-exfil
+  tool-hijack-email-api
+  memory-knowledge-poisoning
+  environment-local-web-risk
+  path-escape-file-boundary
+)
 rm -rf "$BUNDLE"
 mkdir -p "$BUNDLE"
 
 cp README.md "$BUNDLE/README.md"
 cp SUBMISSION.md "$BUNDLE/SUBMISSION.md"
 cp -R docs "$BUNDLE/docs"
-cp -R scenarios "$BUNDLE/scenarios"
 cp -R redteam "$BUNDLE/redteam"
 cp -R schemas "$BUNDLE/schemas"
+mkdir -p "$BUNDLE/scenarios"
+for scenario in "${OFFICIAL_SCENARIOS[@]}"; do
+  cp -R "scenarios/$scenario" "$BUNDLE/scenarios/$scenario"
+done
 
 mkdir -p "$BUNDLE/reports"
 cp artifacts/reports/contest-report.md "$BUNDLE/reports/contest-report.md"
-cp -R artifacts/demo "$BUNDLE/demo"
+mkdir -p "$BUNDLE/demo"
+for scenario in "${OFFICIAL_SCENARIOS[@]}"; do
+  cp -R "artifacts/demo/$scenario" "$BUNDLE/demo/$scenario"
+done
 cp artifacts/demo/reviewer-console.html "$BUNDLE/reviewer-console.html"
 
 if [ -d artifacts/redteam ]; then
@@ -45,7 +58,20 @@ import json
 import pathlib
 
 bundle = pathlib.Path("artifacts/contest-bundle")
-scenario_count = sum(1 for p in (bundle / "scenarios").iterdir() if p.is_dir())
+official_scenarios = {
+    "prompt-injection-file-exfil",
+    "tool-hijack-email-api",
+    "memory-knowledge-poisoning",
+    "environment-local-web-risk",
+    "path-escape-file-boundary",
+}
+scenario_names = {p.name for p in (bundle / "scenarios").iterdir() if p.is_dir()}
+demo_names = {p.name for p in (bundle / "demo").iterdir() if p.is_dir()}
+if scenario_names != official_scenarios:
+    raise SystemExit(f"bundle scenarios are not the official five: {sorted(scenario_names)}")
+if demo_names != official_scenarios:
+    raise SystemExit(f"bundle demo scenarios are not the official five: {sorted(demo_names)}")
+scenario_count = len(scenario_names)
 
 summary_path = pathlib.Path("artifacts/redteam/proxy-probe-summary.json")
 summary = json.loads(summary_path.read_text(encoding="utf-8")) if summary_path.exists() else {}

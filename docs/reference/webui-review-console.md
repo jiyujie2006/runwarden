@@ -12,7 +12,8 @@ delivery only; policy decisions stay in Rust kernel/MCP/provider code.
 - `GET /events` Server-Sent Events for `model_call`, `provider_call`, and approval updates
 - `GET /api/pending` pending approval records from `.runwarden/approvals`
 - `POST /api/approve` and `POST /api/deny` state changes for existing approval records
-- `GET /api/trace/verify` hash-chain verification for the LLM proxy trace
+- `GET /api/trace/verify` hash-chain verification for the LLM proxy trace and
+  MCP provider-call trace from `.runwarden/events.jsonl`
 - `GET /healthz`
 
 MCP writes pending approval records and provider-call events under
@@ -20,14 +21,21 @@ MCP writes pending approval records and provider-call events under
 directory. For the two-terminal demo, export `RUNWARDEN_STATE_DIR` to the repo
 state directory before launching the agent.
 
+The console polls pending approvals and trace verification while interactive,
+so Evidence Chain updates after model or provider events are written.
+
 ## Static Mode
 
 `runwarden demo --all --output artifacts/demo --json` writes
 `artifacts/demo/reviewer-console.html` with scenario events embedded as JSON.
-The static page does not submit approval decisions.
+Only the five official scenario `webui.json` files generated for that run are
+embedded; stale or example scenario outputs under the same directory are not
+included. The static page does not submit approval decisions.
 
 ## Policy Boundary
 
 The browser uses DOM text APIs and `fetch`; it must not reimplement allow,
 deny, egress, provider, report, artifact, or trace verification policy.
 Denied and review-blocked state comes from Rust-produced event JSON.
+Defense-layer labels are produced by Rust event JSON (`defense_layer`) and the
+browser displays them without reclassifying provider ids.

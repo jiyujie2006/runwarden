@@ -923,6 +923,7 @@ dependencies = [
  "thiserror",
  "time",
  "toml",
+ "url",
 ]
 
 [[package]]
@@ -949,6 +950,7 @@ dependencies = [
  "runwarden-providers",
  "serde_json",
  "time",
+ "url",
 ]
 
 [[package]]

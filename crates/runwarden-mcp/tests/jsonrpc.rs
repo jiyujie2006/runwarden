@@ -6,10 +6,13 @@ use std::{
 };
 
 use runwarden_kernel::{
+    ErrorKind, PolicyDecision, ProviderCall,
     authority::{ApprovalBinding, ApprovalRecord},
-    evidence::hex_sha256,
+    evidence::{TraceEvent, hex_sha256},
+    kernel::{KernelEnforcer, KernelPolicy, ProviderRegistry},
 };
 use runwarden_mcp::{handle_jsonrpc_body, handle_jsonrpc_message, handle_stdio_payload};
+use runwarden_providers::catalog::{default_external_providers, default_first_party_providers};
 use serde_json::{Value, json};
 
 fn temp_state_dir(name: &str) -> PathBuf {
@@ -346,6 +349,47 @@ fn provider_call_holds_external_provider_for_review_without_execution() {
 }
 
 #[test]
+fn default_kernel_policy_denies_every_catalog_provider_before_side_effect() {
+    let providers: Vec<_> = default_first_party_providers()
+        .into_iter()
+        .chain(default_external_providers())
+        .collect();
+    let mut registry = ProviderRegistry::default();
+    for provider in providers.clone() {
+        registry.register(provider);
+    }
+    let mut enforcer = KernelEnforcer::new(registry, KernelPolicy::default());
+
+    for provider in providers {
+        let call = ProviderCall {
+            session_id: "default-deny-test".to_string(),
+            provider: provider.id.clone(),
+            action: "call".to_string(),
+            arguments: json!({"provider": provider.id}),
+            actor_id: Some("test-agent".to_string()),
+            authz_id: None,
+            approval_id: None,
+        };
+
+        let outcome = enforcer.evaluate_call(&call);
+
+        assert_eq!(
+            outcome.decision,
+            PolicyDecision::Denied,
+            "{}",
+            call.provider
+        );
+        assert_eq!(
+            outcome.envelope.error_kind,
+            Some(ErrorKind::ProviderNotAllowed),
+            "{}",
+            call.provider
+        );
+        assert_eq!(outcome.envelope.side_effect_executed, false);
+    }
+}
+
+#[test]
 fn provider_call_loads_disk_approval_and_consumes_it() {
     let dir = temp_state_dir("approved");
     let arguments = json!({
@@ -450,6 +494,113 @@ fn provider_call_denies_external_egress_before_review_or_execution() {
     assert_eq!(payload["envelope"]["error_kind"], "egress_denied");
     assert_eq!(payload["side_effect_executed"], false);
     assert_eq!(payload["trace_event"]["event_type"], "provider_denied");
+}
+
+#[test]
+fn provider_call_denies_approved_external_api_to_non_allowlisted_host() {
+    let dir = temp_state_dir("approved-api-egress");
+    let arguments = json!({
+        "provider": "external.api.request",
+        "url": "https://attacker.example.com/callback",
+        "method": "POST"
+    });
+    let mut approval = ApprovalRecord::new(
+        "approval-api-1",
+        ApprovalBinding {
+            session_id: "mcp-inline".to_string(),
+            provider: "external.api.request".to_string(),
+            action: "call".to_string(),
+            argument_hash: hex_sha256(&serde_json::to_vec(&arguments).expect("arguments")),
+            authz_id: None,
+            actor_id: Some("mcp-agent".to_string()),
+        },
+    );
+    approval
+        .approve("reviewer-alice", "reviewed")
+        .expect("approve");
+    let approval_dir = dir.join(".runwarden/approvals");
+    fs::create_dir_all(&approval_dir).expect("approval dir");
+    fs::write(
+        approval_dir.join("approval-api-1.json"),
+        serde_json::to_string_pretty(&approval).expect("approval json"),
+    )
+    .expect("write approval");
+
+    let _guard = cwd_lock().lock().expect("cwd lock");
+    let cwd = std::env::current_dir().expect("cwd");
+    std::env::set_current_dir(&dir).expect("set cwd");
+    let response = call_tool(118, "runwarden.provider.call", arguments);
+    std::env::set_current_dir(cwd).expect("restore cwd");
+
+    assert_eq!(response["result"]["isError"], true);
+    let payload = tool_payload(&response);
+    assert_eq!(payload["decision"], "denied");
+    assert_eq!(payload["envelope"]["error_kind"], "egress_denied");
+    assert_eq!(payload["side_effect_executed"], false);
+}
+
+#[test]
+fn provider_call_uses_server_owned_sandbox_root_for_filesystem_scope() {
+    let dir = temp_state_dir("sandbox-root");
+    let sandbox = dir.join("runwarden-sandbox");
+    fs::create_dir_all(&sandbox).expect("sandbox dir");
+    fs::write(sandbox.join("fixture.txt"), "safe fixture").expect("fixture");
+    let arguments = json!({
+        "provider": "external.mcp.filesystem.read_file",
+        "path": "fixture.txt"
+    });
+    let mut approval = ApprovalRecord::new(
+        "approval-file-read-1",
+        ApprovalBinding {
+            session_id: "mcp-inline".to_string(),
+            provider: "external.mcp.filesystem.read_file".to_string(),
+            action: "call".to_string(),
+            argument_hash: hex_sha256(&serde_json::to_vec(&arguments).expect("arguments")),
+            authz_id: None,
+            actor_id: Some("mcp-agent".to_string()),
+        },
+    );
+    approval
+        .approve("reviewer-alice", "reviewed")
+        .expect("approve");
+    let approval_dir = dir.join(".runwarden/approvals");
+    fs::create_dir_all(&approval_dir).expect("approval dir");
+    fs::write(
+        approval_dir.join("approval-file-read-1.json"),
+        serde_json::to_string_pretty(&approval).expect("approval json"),
+    )
+    .expect("write approval");
+
+    let _guard = cwd_lock().lock().expect("cwd lock");
+    let cwd = std::env::current_dir().expect("cwd");
+    std::env::set_current_dir(&dir).expect("set cwd");
+    let response = call_tool(119, "runwarden.provider.call", arguments);
+    std::env::set_current_dir(cwd).expect("restore cwd");
+
+    assert_eq!(response["result"]["isError"], false);
+    let payload = tool_payload(&response);
+    assert_eq!(payload["decision"], "allowed");
+    assert_eq!(payload["execution_status"], "completed");
+    assert_eq!(payload["output"]["content"], "safe fixture");
+    assert_eq!(payload["side_effect_executed"], true);
+}
+
+#[test]
+fn provider_call_denies_oversized_arguments_before_execution() {
+    let response = call_tool(
+        121,
+        "runwarden.provider.call",
+        json!({
+            "provider": "runwarden.input.inspect",
+            "input_text": "x".repeat(300 * 1024)
+        }),
+    );
+
+    assert_eq!(response["result"]["isError"], true);
+    let payload = tool_payload(&response);
+    assert_eq!(payload["decision"], "denied");
+    assert_eq!(payload["envelope"]["error_kind"], "budget_exceeded");
+    assert_eq!(payload["side_effect_executed"], false);
 }
 
 #[test]
@@ -640,6 +791,50 @@ fn report_lint_tool_returns_tool_error_for_uncited_claims() {
 
     let payload = tool_payload(&response);
     assert_eq!(payload["ok"], false);
+    assert_eq!(payload["side_effect_executed"], false);
+}
+
+#[test]
+fn report_lint_rejects_inline_trace_not_present_in_authoritative_mcp_store() {
+    let dir = temp_state_dir("report-inline-trace");
+    let trace_event = TraceEvent::sealed(
+        "obs_inline".to_string(),
+        "provider_completed".to_string(),
+        Some("runwarden.input.inspect".to_string()),
+        json!({
+            "decision": "allowed",
+            "execution_status": "completed",
+            "side_effect_executed": false
+        }),
+        None,
+    );
+
+    let _guard = cwd_lock().lock().expect("cwd lock");
+    let cwd = std::env::current_dir().expect("cwd");
+    std::env::set_current_dir(&dir).expect("set cwd");
+    let response = call_tool(
+        120,
+        "runwarden.report.lint",
+        json!({
+            "report": {
+                "claims": [
+                    {
+                        "id": "claim-1",
+                        "text": "Input inspection completed",
+                        "obs_refs": ["obs_inline"]
+                    }
+                ]
+            },
+            "trace_events": [trace_event]
+        }),
+    );
+    std::env::set_current_dir(cwd).expect("restore cwd");
+
+    assert!(response.get("error").is_none());
+    assert_eq!(response["result"]["isError"], true);
+    let payload = tool_payload(&response);
+    assert_eq!(payload["ok"], false);
+    assert_eq!(payload["trace_source"], "mcp_provider_event_store");
     assert_eq!(payload["side_effect_executed"], false);
 }
 

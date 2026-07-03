@@ -183,6 +183,7 @@
         var dl = document.createElement('dl');
         fact(dl, 'Provider', data.provider);
         fact(dl, 'Action', data.action);
+        fact(dl, 'Defense', data.defense_layer);
         fact(dl, 'Error', data.error_kind);
         fact(dl, 'Obs', data.obs_ref);
         fact(dl, 'Approval', data.approval_id);
@@ -275,8 +276,17 @@
         }
         fetch('/api/trace/verify').then(function (r) { return r.json(); }).then(function (v) {
           var el = document.getElementById('trace-verification');
-          el.textContent = v.verified ? 'verified (' + (v.event_count || 0) + ' events)' : 'not verified';
-          el.className = v.verified ? 'ok' : 'bad';
+          el.textContent = '';
+          var mt = v.model_trace || {};
+          var pt = v.provider_trace || {};
+          var line1 = document.createElement('div');
+          line1.textContent = 'Model trace: ' + (mt.verified ? 'verified (' + (mt.event_count || 0) + ' events)' : (mt.error || 'not verified'));
+          line1.className = mt.verified ? 'ok' : 'bad';
+          var line2 = document.createElement('div');
+          line2.textContent = 'Provider trace: ' + (pt.verified ? 'verified (' + (pt.event_count || 0) + ' events)' : (pt.error || 'not verified'));
+          line2.className = pt.verified ? 'ok' : 'bad';
+          el.appendChild(line1);
+          el.appendChild(line2);
         }).catch(function () {
           document.getElementById('trace-verification').textContent = 'trace file not found';
         });
@@ -301,6 +311,7 @@
         });
         loadPending();
         setInterval(loadPending, 1500);
+        setInterval(verifyTrace, 1500);
       }
       verifyTrace();
     })();

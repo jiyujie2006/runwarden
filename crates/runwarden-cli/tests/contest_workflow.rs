@@ -80,6 +80,13 @@ fn demo_all_writes_static_reviewer_console() {
     let output_dir = PathBuf::from("target/runwarden-contest-test/demo-all");
     let absolute_output = workspace.join(&output_dir);
     let _ = fs::remove_dir_all(&absolute_output);
+    let stale_dir = absolute_output.join("anomalous-provider-sequence");
+    fs::create_dir_all(&stale_dir).expect("stale dir");
+    fs::write(
+        stale_dir.join("webui.json"),
+        r#"{"scenario":"anomalous-provider-sequence","provider_calls":[{"provider":"external.api.request","action":"call","decision":"denied","side_effect_executed":false}]}"#,
+    )
+    .expect("stale webui");
 
     let output = Command::new(env!("CARGO_BIN_EXE_runwarden"))
         .current_dir(&workspace)
@@ -99,8 +106,74 @@ fn demo_all_writes_static_reviewer_console() {
     assert!(html.contains("STATIC_EVENTS"));
     assert!(html.contains("prompt-injection-file-exfil"));
     assert!(html.contains("requires_review"));
+    assert!(!html.contains("anomalous-provider-sequence"));
     assert!(!html.contains("insertAdjacentHTML"));
     assert!(!html.contains("innerHTML"));
+}
+
+#[cfg(unix)]
+#[test]
+fn demo_output_allows_in_workspace_symlink_and_rejects_symlink_escape() {
+    use std::os::unix::fs::symlink;
+
+    let workspace = workspace_root();
+    let base = workspace.join("target/runwarden-contest-test/symlink-output");
+    let _ = fs::remove_dir_all(&base);
+    fs::create_dir_all(&base).expect("base dir");
+
+    let inside_target = base.join("inside-target");
+    let inside_link = base.join("inside-link");
+    fs::create_dir_all(&inside_target).expect("inside target");
+    let _ = fs::remove_file(&inside_link);
+    symlink(&inside_target, &inside_link).expect("inside symlink");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_runwarden"))
+        .current_dir(&workspace)
+        .args([
+            "demo",
+            "--scenario",
+            "prompt-injection-file-exfil",
+            "--output",
+        ])
+        .arg(PathBuf::from(
+            "target/runwarden-contest-test/symlink-output/inside-link",
+        ))
+        .arg("--json")
+        .output()
+        .expect("run demo through in-root symlink");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(inside_target.join("webui.json").exists());
+
+    let outside_target =
+        std::env::temp_dir().join(format!("runwarden-output-escape-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&outside_target);
+    fs::create_dir_all(&outside_target).expect("outside target");
+    let escape_link = base.join("escape-link");
+    let _ = fs::remove_file(&escape_link);
+    symlink(&outside_target, &escape_link).expect("escape symlink");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_runwarden"))
+        .current_dir(&workspace)
+        .args([
+            "demo",
+            "--scenario",
+            "prompt-injection-file-exfil",
+            "--output",
+        ])
+        .arg(PathBuf::from(
+            "target/runwarden-contest-test/symlink-output/escape-link",
+        ))
+        .arg("--json")
+        .output()
+        .expect("run demo through escaping symlink");
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("workspace"));
 }
 
 #[test]
@@ -159,6 +232,10 @@ fn report_render_scenario_suite_outputs_contest_report() {
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
     assert!(stdout.contains("Runwarden Contest Report"));
     assert!(stdout.contains("prompt-injection-file-exfil"));
+    assert!(
+        stdout.contains("| Provider | Defense | Decision | Status | Side Effect | Obs | Reason |")
+    );
+    assert!(stdout.contains("scoped-root"));
     assert!(stdout.contains("obs_prompt_file_exfil_denied"));
 }
 

@@ -360,7 +360,7 @@ fn run_demo_command(
                 &output.join(scenario),
             )?);
         }
-        let html = server::render_static_console(&output_path)?;
+        let html = server::render_static_console_for_scenarios(&output_path, CONTEST_SCENARIOS)?;
         fs::write(output_path.join("reviewer-console.html"), html)?;
         if json_output {
             println!(
@@ -393,6 +393,15 @@ fn run_demo_interactive(
     }
     fs::remove_file(&trace_path).ok();
     fs::remove_file(state_dir.join("events.jsonl")).ok();
+
+    // Set RUNWARDEN_STATE_DIR so the MCP subprocess (spawned by opencode)
+    // writes events.jsonl and approvals to the same directory this server
+    // watches. Without this, MCP defaults to ./.runwarden relative to
+    // opencode's CWD, which is a different directory.
+    // SAFETY: single-threaded setup before spawning proxy thread and server.
+    unsafe {
+        std::env::set_var("RUNWARDEN_STATE_DIR", &state_dir);
+    }
 
     spawn_llm_proxy_thread(upstream, trace_path.clone());
 
@@ -432,6 +441,7 @@ struct ProviderCallResult {
     action: String,
     decision: String,
     execution_status: String,
+    defense_layer: String,
     side_effect_executed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     error_kind: Option<String>,
@@ -607,6 +617,12 @@ fn execute_provider_call_real(
                     .get("side_effect_executed")
                     .and_then(Value::as_bool)
                     .unwrap_or(false),
+                defense_layer: server::defense_layer_for(
+                    Some(&input.provider),
+                    Some("allowed"),
+                    None,
+                )
+                .to_string(),
                 error_kind: None,
                 reason: Some(outcome.envelope.reason.clone()),
                 obs_ref,
@@ -624,18 +640,25 @@ fn blocked_provider_result(
     decision: &str,
     obs_ref: Option<String>,
 ) -> ProviderCallResult {
+    let error_kind = outcome
+        .envelope
+        .error_kind
+        .as_ref()
+        .and_then(|kind| serde_json::to_value(kind).ok())
+        .and_then(|value| value.as_str().map(ToString::to_string));
     ProviderCallResult {
         provider: input.provider.clone(),
         action: input.action.clone(),
         decision: decision.to_string(),
         execution_status: "not_executed".to_string(),
+        defense_layer: server::defense_layer_for(
+            Some(&input.provider),
+            Some(decision),
+            error_kind.as_deref(),
+        )
+        .to_string(),
         side_effect_executed: false,
-        error_kind: outcome
-            .envelope
-            .error_kind
-            .as_ref()
-            .and_then(|kind| serde_json::to_value(kind).ok())
-            .and_then(|value| value.as_str().map(ToString::to_string)),
+        error_kind,
         reason: Some(outcome.envelope.reason.clone()),
         obs_ref,
         arguments: input.arguments.clone(),
@@ -1035,8 +1058,31 @@ fn render_scenario_suite_report(
 
     for scenario in CONTEST_SCENARIOS {
         let scenario_path = suite_path.join(scenario);
+        let provider_calls =
+            read_demo_provider_calls(&scenario_path.join("expected/provider-calls.json"))?;
         let report = read_report(&scenario_path.join("expected/report.json"))?;
         markdown.push_str(&format!("## {}\n\n", scenario));
+        markdown
+            .push_str("| Provider | Defense | Decision | Status | Side Effect | Obs | Reason |\n");
+        markdown.push_str("| --- | --- | --- | --- | --- | --- | --- |\n");
+        for call in &provider_calls {
+            let defense_layer = server::defense_layer_for(
+                Some(&call.provider),
+                Some(&call.decision),
+                call.error_kind.as_deref(),
+            );
+            markdown.push_str(&format!(
+                "| {} | {} | {} | {} | {} | {} | {} |\n",
+                markdown_cell(&call.provider),
+                defense_layer,
+                markdown_cell(&call.decision),
+                markdown_cell(&call.execution_status),
+                call.side_effect_executed,
+                markdown_cell(call.obs_ref.as_deref().unwrap_or("")),
+                markdown_cell(call.reason.as_deref().unwrap_or(""))
+            ));
+        }
+        markdown.push('\n');
         for claim in report.claims {
             markdown.push_str(&format!(
                 "- {}: {} ({})\n",
@@ -1239,29 +1285,11 @@ fn resolve_workspace_output_path(
         anyhow::bail!("{label} path must be a relative path inside the workspace");
     }
 
-    reject_symlink_components(root, requested, label)?;
     let output_path = root.join(requested);
     if !path_is_within_root(&output_path, root) {
         anyhow::bail!("{label} path must be a relative path inside the workspace");
     }
     Ok(output_path)
-}
-
-fn reject_symlink_components(root: &Path, requested: &Path, label: &str) -> anyhow::Result<()> {
-    let mut current = root.to_path_buf();
-    for component in requested.components() {
-        let std::path::Component::Normal(part) = component else {
-            anyhow::bail!("{label} path must be a relative path inside the workspace");
-        };
-        current.push(part);
-        if fs::symlink_metadata(&current)
-            .map(|metadata| metadata.file_type().is_symlink())
-            .unwrap_or(false)
-        {
-            anyhow::bail!("{label} path must not contain symlink components");
-        }
-    }
-    Ok(())
 }
 
 fn path_is_within_root(candidate: &Path, root: &Path) -> bool {
@@ -1378,4 +1406,8 @@ fn html_escape(text: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+}
+
+fn markdown_cell(text: &str) -> String {
+    text.replace('|', "\\|").replace('\n', " ")
 }

@@ -15,6 +15,9 @@ External capabilities are integrated as Runwarden providers, never exposed direc
   canonicalized before read/write so symlink escapes cannot leave the root
 - sandbox roots come from Runwarden-owned runtime configuration, not
   provider-call arguments
+- MCP inline provider policy installs a server-owned sandbox root, manifest
+  derived public egress host allowlist, private/local egress denial, and an
+  argument-byte budget before approval or execution
 
 ## MCP Adapters
 
