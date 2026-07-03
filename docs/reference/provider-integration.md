@@ -21,7 +21,15 @@ External capabilities are integrated as Runwarden providers, never exposed direc
 
 ## MCP Adapters
 
-MCP adapters support `stdio`, `http`, and `sse` contracts. Stdio adapters require a trusted runtime root, exact command allowlisting, no shell-capable command, no request-supplied command arguments, bounded output, and process-tree cleanup. HTTP/SSE adapters deny hostname resolutions to private or local addresses before connecting.
+MCP adapters support `stdio`, `http`, and `sse` contracts. Adapter execution is
+valid only through `execute_mediated_external_mcp_adapter` after a kernel
+`Allowed` provider outcome for the same manifest provider. Denied or
+review-blocked outcomes return `execution_status=not_executed` and
+`side_effect_executed=false` before adapter validation or transport execution.
+Stdio adapters require a trusted runtime root, exact command allowlisting, no
+shell-capable command, no request-supplied command arguments, bounded output,
+and process-tree cleanup. HTTP/SSE adapters deny hostname resolutions to
+private or local addresses before connecting.
 
 Local filesystem reads canonicalize the requested file when it exists and
 confirm the target remains under the sandbox root before reading. Writes may

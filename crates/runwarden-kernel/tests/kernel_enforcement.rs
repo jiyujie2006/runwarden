@@ -1,6 +1,7 @@
 use runwarden_kernel::authority::{ApprovalRecord, ApprovalState};
 use runwarden_kernel::kernel::{
     AuthzState, KernelEnforcer, KernelPolicy, ProviderRegistry, ScopedRoot,
+    provider_requires_approval,
 };
 use runwarden_kernel::manifest::{AssessmentManifest, SessionManifest};
 use runwarden_kernel::{
@@ -203,6 +204,35 @@ fn network_side_effect_requires_reviewer_approval_even_for_low_risk_provider() {
         Some(ErrorKind::ApprovalInvalid)
     );
     assert!(!outcome.envelope.side_effect_executed);
+}
+
+#[test]
+fn provider_requires_approval_covers_risk_and_side_effect_policy() {
+    assert!(!provider_requires_approval(&provider(
+        "runwarden.low",
+        ProviderRisk::Low,
+        vec![SideEffectKind::None],
+    )));
+    assert!(provider_requires_approval(&provider(
+        "runwarden.high",
+        ProviderRisk::High,
+        vec![SideEffectKind::None],
+    )));
+    assert!(provider_requires_approval(&provider(
+        "runwarden.network",
+        ProviderRisk::Low,
+        vec![SideEffectKind::Network],
+    )));
+    assert!(provider_requires_approval(&provider(
+        "runwarden.process",
+        ProviderRisk::Low,
+        vec![SideEffectKind::ProcessSpawn],
+    )));
+    assert!(provider_requires_approval(&provider(
+        "runwarden.artifact",
+        ProviderRisk::Low,
+        vec![SideEffectKind::ArtifactWrite],
+    )));
 }
 
 #[test]

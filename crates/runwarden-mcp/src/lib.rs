@@ -5,7 +5,9 @@ use runwarden_assurance::report::{
 };
 use runwarden_kernel::authority::{ApprovalBinding, ApprovalRecord, ApprovalState};
 use runwarden_kernel::evidence::{InMemoryTraceStore, TraceEvent, TraceQuery, hex_sha256};
-use runwarden_kernel::kernel::{KernelEnforcer, KernelPolicy, ProviderRegistry, ScopedRoot};
+use runwarden_kernel::kernel::{
+    KernelEnforcer, KernelPolicy, ProviderRegistry, ScopedRoot, provider_requires_approval,
+};
 use runwarden_kernel::{ErrorKind, KernelProvider, PolicyDecision, ProviderCall, ProviderOutcome};
 use runwarden_providers::catalog::{
     default_external_provider_manifests, default_external_providers, default_first_party_providers,
@@ -1203,7 +1205,7 @@ fn handle_provider_status(id: Value, params: Option<&Value>) -> Value {
             "kind": provider.kind,
             "risk": provider.risk,
             "side_effects": provider.side_effects,
-            "approval_required": approval_required(&provider),
+            "approval_required": provider_requires_approval(&provider),
             "side_effect_executed": false
         }),
     )
@@ -1348,14 +1350,6 @@ fn find_kernel_managed_provider(provider_id: &str) -> Option<KernelProvider> {
     all_kernel_managed_providers()
         .into_iter()
         .find(|provider| provider.id == provider_id)
-}
-
-fn approval_required(provider: &KernelProvider) -> bool {
-    provider
-        .authority_requirements
-        .get("approval_required")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
 }
 
 fn parse_render_format(format: &str) -> Option<RenderFormat> {

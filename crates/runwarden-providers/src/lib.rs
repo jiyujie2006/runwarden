@@ -1176,8 +1176,8 @@ pub mod external {
     use std::time::{Duration, Instant};
 
     use runwarden_kernel::{
-        ProviderClass, ProviderContract, ProviderKind, ProviderManifest, ProviderRisk,
-        SideEffectKind,
+        PolicyDecision, ProviderClass, ProviderContract, ProviderKind, ProviderManifest,
+        ProviderOutcome, ProviderRisk, SideEffectKind,
     };
     use serde::{Deserialize, Serialize};
     use serde_json::{Value, json};
@@ -1224,7 +1224,43 @@ pub mod external {
         pub request: Value,
     }
 
-    pub fn execute_external_mcp_adapter(
+    pub fn execute_mediated_external_mcp_adapter(
+        outcome: &ProviderOutcome,
+        manifest: &ProviderManifest,
+        request: &ExternalMcpAdapterRequest,
+        runtime_root: Option<&Path>,
+    ) -> Value {
+        let transport = request
+            .transport
+            .as_deref()
+            .or(manifest.transport.as_deref())
+            .unwrap_or("unknown");
+
+        if outcome.decision != PolicyDecision::Allowed {
+            return json!({
+                "provider": manifest.provider_id,
+                "transport": transport,
+                "decision": outcome.decision,
+                "execution_status": "not_executed",
+                "error_kind": outcome.envelope.error_kind,
+                "reason": outcome.envelope.reason,
+                "side_effect_executed": false
+            });
+        }
+
+        if outcome.envelope.provider != manifest.provider_id {
+            return adapter_denial(
+                &manifest.provider_id,
+                transport,
+                "provider_not_allowed",
+                "kernel outcome provider does not match external MCP manifest",
+            );
+        }
+
+        execute_external_mcp_adapter(manifest, request, runtime_root)
+    }
+
+    fn execute_external_mcp_adapter(
         manifest: &ProviderManifest,
         request: &ExternalMcpAdapterRequest,
         runtime_root: Option<&Path>,
@@ -2168,7 +2204,7 @@ pub mod catalog {
     use runwarden_kernel::kernel::ProviderRegistry;
     use runwarden_kernel::{
         KernelProvider, ProviderClass, ProviderContract, ProviderKind, ProviderManifest,
-        ProviderRisk, ProviderSchemaPin, SideEffectKind,
+        ProviderRisk, ProviderSchemaPin, SideEffectKind, provider_requires_approval,
     };
     use serde_json::{Value, json};
 
@@ -2379,11 +2415,11 @@ pub mod catalog {
         side_effects: Vec<SideEffectKind>,
         description: &str,
     ) -> KernelProvider {
-        KernelProvider {
+        let mut provider = KernelProvider {
             id: id.to_string(),
             class: ProviderClass::FirstParty,
             kind,
-            authority_requirements: authority_requirements(&risk, &side_effects),
+            authority_requirements: Value::Object(Default::default()),
             risk,
             side_effects,
             input_schema: object_schema(description),
@@ -2392,7 +2428,9 @@ pub mod catalog {
                 "description": description,
                 "obs_refs_required": true
             }),
-        }
+        };
+        provider.authority_requirements = authority_requirements(&provider);
+        provider
     }
 
     struct ExternalProviderSpec {
@@ -2458,22 +2496,10 @@ pub mod catalog {
         })
     }
 
-    fn authority_requirements(risk: &ProviderRisk, side_effects: &[SideEffectKind]) -> Value {
-        let approval_required = matches!(
-            risk,
-            ProviderRisk::High
-                | ProviderRisk::NetworkActive
-                | ProviderRisk::FileWrite
-                | ProviderRisk::CredentialUse
-                | ProviderRisk::Destructive
-                | ProviderRisk::ReportClaim
-        ) || side_effects
-            .iter()
-            .any(|side_effect| matches!(side_effect, SideEffectKind::ArtifactWrite));
-
+    fn authority_requirements(provider: &KernelProvider) -> Value {
         json!({
             "authz_required": true,
-            "approval_required": approval_required,
+            "approval_required": provider_requires_approval(provider),
             "kernel_managed": true
         })
     }

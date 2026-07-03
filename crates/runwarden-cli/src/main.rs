@@ -9,6 +9,7 @@ use runwarden_assurance::eval::{EvalThresholds, evaluate_report_assurance};
 use runwarden_assurance::report::{
     RenderFormat, ReportDraft, lint_report_against_trace, render_report,
 };
+use runwarden_kernel::artifact::resolve_workspace_relative_path;
 use runwarden_kernel::contracts::{PolicyDecision, ProviderCall, ProviderClass, ProviderOutcome};
 use runwarden_kernel::evidence::{InMemoryTraceStore, TraceEvent, TraceQuery};
 use runwarden_kernel::kernel::KernelEnforcer;
@@ -1271,49 +1272,8 @@ fn resolve_workspace_output_path(
     requested: &Path,
     label: &str,
 ) -> anyhow::Result<PathBuf> {
-    if requested.as_os_str().is_empty()
-        || requested.is_absolute()
-        || requested.components().any(|component| {
-            matches!(
-                component,
-                std::path::Component::ParentDir
-                    | std::path::Component::Prefix(_)
-                    | std::path::Component::RootDir
-            )
-        })
-    {
-        anyhow::bail!("{label} path must be a relative path inside the workspace");
-    }
-
-    let output_path = root.join(requested);
-    if !path_is_within_root(&output_path, root) {
-        anyhow::bail!("{label} path must be a relative path inside the workspace");
-    }
-    Ok(output_path)
-}
-
-fn path_is_within_root(candidate: &Path, root: &Path) -> bool {
-    let Ok(canonical_root) = root.canonicalize() else {
-        return false;
-    };
-    match candidate.canonicalize() {
-        Ok(canonical_candidate) => canonical_candidate.starts_with(&canonical_root),
-        Err(_) => canonical_existing_parent(candidate)
-            .map(|parent| parent.starts_with(&canonical_root))
-            .unwrap_or(false),
-    }
-}
-
-fn canonical_existing_parent(path: &Path) -> Option<PathBuf> {
-    let mut current = path.parent()?.to_path_buf();
-    loop {
-        if fs::symlink_metadata(&current).is_ok() {
-            return current.canonicalize().ok();
-        }
-        if !current.pop() {
-            return None;
-        }
-    }
+    resolve_workspace_relative_path(root, requested)
+        .map_err(|_| anyhow::anyhow!("{label} path must be a relative path inside the workspace"))
 }
 
 fn verify_trace_events(events: Vec<TraceEvent>) -> Value {

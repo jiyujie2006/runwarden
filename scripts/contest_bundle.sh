@@ -78,7 +78,8 @@ if scenario_names != official_scenarios:
     raise SystemExit(f"bundle scenarios are not the official five: {sorted(scenario_names)}")
 if demo_names != official_scenarios:
     raise SystemExit(f"bundle demo scenarios are not the official five: {sorted(demo_names)}")
-scenario_count = len(scenario_names)
+scenario_list = sorted(scenario_names)
+scenario_count = len(scenario_list)
 
 def load_summary(path):
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
@@ -103,6 +104,20 @@ manifest = {
     "project": "runwarden",
     "bundle_type": "contest_submission",
     "scenario_count": scenario_count,
+    "scenarios": scenario_list,
+    "scenario_summary": {
+        "summary": "demo/",
+        "entries": {
+            name: {
+                "scenario": f"scenarios/{name}/",
+                "demo": f"demo/{name}/",
+                "report": f"demo/{name}/report.json",
+                "trace": f"demo/{name}/trace.json",
+                "webui": f"demo/{name}/webui.json",
+            }
+            for name in scenario_list
+        },
+    },
     "required_artifacts": {
         "submission": "SUBMISSION.md",
         "report": "reports/contest-report.md",

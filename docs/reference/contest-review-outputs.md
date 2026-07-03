@@ -47,9 +47,11 @@ These outputs are review evidence, not installable product artifacts.
 `runwarden-llm-proxy`, runs deterministic proxy-probe and output-probe with
 `--fail-on-fail`, and writes `artifacts/contest-bundle/` with `manifest.json`,
 `SHA256SUMS`, and generated `redteam-results/SUMMARY.md`. The manifest includes
-proxy-probe and output-probe `total`/`pass`/`fail`/`skip` values when summary
-JSON exists and uses `null` values when it is missing. The generated summary
-also includes the corpus coverage matrix. The bundle copies only the five
-official scenario directories, their matching demo outputs, and other
-whitelisted submission paths. It excludes `.env`, `target/`, `node_modules/`,
-Python cache files, and internal planning docs.
+the five official scenario ids, per-scenario links to copied demo/report/trace
+outputs, required artifact paths, and proxy-probe/output-probe
+`total`/`pass`/`fail`/`skip` values when summary JSON exists. Probe fields use
+`null` values when the source summary is missing. The generated summary also
+includes the corpus coverage matrix. The bundle copies only the five official
+scenario directories, their matching demo outputs, and other whitelisted
+submission paths. It excludes `.env`, `target/`, `node_modules/`, Python cache
+files, and internal planning docs.

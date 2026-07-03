@@ -177,6 +177,50 @@ fn demo_output_allows_in_workspace_symlink_and_rejects_symlink_escape() {
 }
 
 #[test]
+fn output_path_rejections_preserve_command_labels() {
+    let workspace = workspace_root();
+
+    let demo = Command::new(env!("CARGO_BIN_EXE_runwarden"))
+        .current_dir(&workspace)
+        .args([
+            "demo",
+            "--scenario",
+            "prompt-injection-file-exfil",
+            "--output",
+            "../escape",
+            "--json",
+        ])
+        .output()
+        .expect("run demo with invalid output");
+    assert!(!demo.status.success());
+    assert!(
+        String::from_utf8_lossy(&demo.stderr)
+            .contains("demo output path must be a relative path inside the workspace")
+    );
+
+    let report = Command::new(env!("CARGO_BIN_EXE_runwarden"))
+        .current_dir(&workspace)
+        .args([
+            "report",
+            "render",
+            "--scenario-suite",
+            "scenarios",
+            "--format",
+            "markdown",
+            "--output",
+            "../contest-report.md",
+            "--json",
+        ])
+        .output()
+        .expect("run report with invalid output");
+    assert!(!report.status.success());
+    assert!(
+        String::from_utf8_lossy(&report.stderr)
+            .contains("report output path must be a relative path inside the workspace")
+    );
+}
+
+#[test]
 fn demo_interactive_serves_console_and_healthz() {
     let workspace = workspace_root();
     let mut child = Command::new(env!("CARGO_BIN_EXE_runwarden"))

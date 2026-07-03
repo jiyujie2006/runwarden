@@ -787,7 +787,7 @@ fn demo_all_output_contains_only_contest_scenarios_and_console() {
     let output_dir = PathBuf::from("target/runwarden-contest-test/demo-clean");
     let absolute_output = workspace.join(&output_dir);
     let _ = fs::remove_dir_all(&absolute_output);
-    fs::create_dir_all(absolute_output.join("live-smoke")).expect("stale dir");
+    fs::create_dir_all(absolute_output.join("stale-smoke")).expect("stale dir");
 
     let output = Command::new(env!("CARGO_BIN_EXE_runwarden"))
         .current_dir(&workspace)
@@ -802,7 +802,7 @@ fn demo_all_output_contains_only_contest_scenarios_and_console() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(!absolute_output.join("live-smoke").exists());
+    assert!(!absolute_output.join("stale-smoke").exists());
     for scenario in [
         "prompt-injection-file-exfil",
         "tool-hijack-email-api",
@@ -1639,10 +1639,10 @@ At the top of `docs/contest/artifact-index.md`, add “Open these first”:
 - [ ] **Step 4: Run documentation check**
 
 ```bash
-rg -n "live-smoke|T[B]D|T[O]DO|implement[ ]later|待[定]|占[位]|稍后实[现]" docs examples SUBMISSION.md
+rg -n "live[-]smoke|T[B]D|T[O]DO|implement[ ]later|待[定]|占[位]|稍后实[现]" docs examples SUBMISSION.md
 ```
 
-Expected: no stale live-smoke reference in judge-facing docs and no incomplete-language markers.
+Expected: no stale live smoke reference in judge-facing docs and no incomplete-language markers.
 
 - [ ] **Step 5: Commit only if requested**
 
@@ -1922,12 +1922,12 @@ Put this near the top:
 
 - [ ] **Step 3: Correct scenario wording**
 
-`prompt-injection-file-exfil` scenario expected tool path is inspect -> read review -> API denied. Do not describe it as purely `input_blocked`; that belongs to `runwarden-llm-proxy` proxy-probe.
+`prompt-injection-file-exfil` scenario expected tool path is inspect -> read review -> API denied. Do not describe it as purely model-input blocking; that belongs to `runwarden-llm-proxy` proxy-probe.
 
 - [ ] **Step 4: Run text checks**
 
 ```bash
-rg -n "prompt-injection-file-exfil.*input_blocked|live-smoke|T[B]D|T[O]DO|implement[ ]later|待[定]|占[位]|稍后实[现]" SUBMISSION.md docs examples
+rg -n "prompt-injection-file-exfil.*input[_-]blocked|live[-]smoke|T[B]D|T[O]DO|implement[ ]later|待[定]|占[位]|稍后实[现]" SUBMISSION.md docs examples
 ```
 
 Expected: no misleading scenario wording and no incomplete-language markers.

@@ -8,11 +8,10 @@ use time::OffsetDateTime;
 use url::Url;
 
 use crate::authority::{ApprovalBinding, ApprovalRecord, ApprovalState, ApprovalTransitionError};
-use crate::contracts::{
-    ErrorKind, KernelProvider, PolicyDecision, ProviderCall, ProviderOutcome, ProviderRisk,
-    SideEffectKind,
-};
+use crate::contracts::{ErrorKind, KernelProvider, PolicyDecision, ProviderCall, ProviderOutcome};
 use crate::evidence::hex_sha256;
+
+pub use crate::contracts::provider_requires_approval;
 
 #[derive(Debug, Default)]
 pub struct ProviderRegistry {
@@ -494,28 +493,6 @@ fn requires_review(
         reason,
         Some(kind),
     )
-}
-
-fn provider_requires_approval(provider: &KernelProvider) -> bool {
-    matches!(
-        provider.risk,
-        ProviderRisk::High
-            | ProviderRisk::NetworkActive
-            | ProviderRisk::FileWrite
-            | ProviderRisk::CredentialUse
-            | ProviderRisk::Destructive
-            | ProviderRisk::ReportClaim
-    ) || provider.side_effects.iter().any(|side_effect| {
-        matches!(
-            side_effect,
-            SideEffectKind::Network
-                | SideEffectKind::FileWrite
-                | SideEffectKind::ProcessSpawn
-                | SideEffectKind::CredentialUse
-                | SideEffectKind::Destructive
-                | SideEffectKind::ArtifactWrite
-        )
-    })
 }
 
 fn argument_hash(arguments: &Value) -> String {

@@ -9,7 +9,7 @@ use runwarden_kernel::{
     ErrorKind, PolicyDecision, ProviderCall,
     authority::{ApprovalBinding, ApprovalRecord},
     evidence::{TraceEvent, hex_sha256},
-    kernel::{KernelEnforcer, KernelPolicy, ProviderRegistry},
+    kernel::{KernelEnforcer, KernelPolicy, ProviderRegistry, provider_requires_approval},
 };
 use runwarden_mcp::{handle_jsonrpc_body, handle_jsonrpc_message, handle_stdio_payload};
 use runwarden_providers::catalog::{default_external_providers, default_first_party_providers};
@@ -675,6 +675,30 @@ fn provider_status_reports_external_provider_risk_and_approval_requirement() {
     assert_eq!(payload["risk"], "file_write");
     assert_eq!(payload["approval_required"], true);
     assert_eq!(payload["side_effect_executed"], false);
+}
+
+#[test]
+fn provider_status_approval_required_matches_kernel_helper() {
+    let providers = default_first_party_providers()
+        .into_iter()
+        .chain(default_external_providers());
+
+    for provider in providers {
+        let provider_id = provider.id.clone();
+        let response = call_tool(
+            24,
+            "runwarden.provider.status",
+            json!({ "provider": provider_id }),
+        );
+        let payload = tool_payload(&response);
+
+        assert_eq!(
+            payload["approval_required"].as_bool(),
+            Some(provider_requires_approval(&provider)),
+            "approval_required drift for {}",
+            provider_id
+        );
+    }
 }
 
 #[test]

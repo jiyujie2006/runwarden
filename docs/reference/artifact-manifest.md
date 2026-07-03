@@ -8,12 +8,16 @@ The contest edition does not expose `runwarden artifact *` as a primary workflow
 - symlinks are allowed only when their canonical target remains inside the
   workspace; symlink escapes are rejected before writing
 
-Local provider filesystem tools use the same containment boundary: requested
-paths are relative to the sandbox root, existing components are canonicalized
-against that root before reads or writes, and writes may only create a missing
-final file after the existing parent path is confirmed contained. The sandbox
-root is selected by Runwarden-owned runtime configuration, not provider-call
-arguments.
+The runtime helper for demo, report, and UI output paths is
+`runwarden_kernel::artifact::resolve_workspace_relative_path`. CLI callers wrap
+that Rust helper and keep command-specific error labels.
+
+Local provider filesystem tools use an analogous Rust-owned sandbox containment
+boundary, not the workspace artifact helper: requested paths are relative to
+the sandbox root, existing components are canonicalized against that root
+before reads or writes, and writes may only create a missing final file after
+the existing parent path is confirmed contained. The sandbox root is selected by
+Runwarden-owned runtime configuration, not provider-call arguments.
 
 `runwarden demo --scenario` writes scenario JSON under the requested demo output directory. `runwarden demo --all` writes all scenario outputs plus `reviewer-console.html`. `runwarden report render --scenario-suite` writes the contest report when `--output` is supplied.
 
