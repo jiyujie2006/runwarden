@@ -1,6 +1,13 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use time::OffsetDateTime;
 use uuid::Uuid;
+
+use crate::contracts::PolicyDecision;
+use crate::evidence::hex_sha256;
+use crate::operation::{OperationState, SecurityOperation, SideEffectState};
+use crate::session::AuthoritySnapshot;
+use crate::trace::{StoryEventKind, canonical_json_v1};
 
 pub const SECURITY_STORY_SCHEMA_VERSION: &str = "1.0.0";
 
@@ -183,4 +190,262 @@ pub enum EvidenceStatus {
     Verified,
     Incomplete,
     Invalid,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StoryStatus {
+    Running,
+    AwaitingApproval,
+    BlockedBeforeSideEffect,
+    CompletedWithControlledSideEffect,
+    Failed,
+    OutcomeUnknown,
+    EvidenceInvalid,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StoryProvenance {
+    Native,
+    LegacyDerived,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StoryStage {
+    Identity,
+    Attack,
+    Model,
+    ProposedTool,
+    Policy,
+    Approval,
+    Execution,
+    Evidence,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StoryStageStatus {
+    pub stage: StoryStage,
+    pub status: StageStatus,
+    pub summary: String,
+    pub observation_refs: Vec<ObservationId>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StageStatus {
+    Pending,
+    Active,
+    Completed,
+    Blocked,
+    Failed,
+    Incomplete,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StoryIdentity {
+    pub agent_id: String,
+    pub model_id: String,
+    pub actor_id: String,
+    pub reviewer_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StoryClaim {
+    pub claim_id: String,
+    pub text: String,
+    pub observation_refs: Vec<ObservationId>,
+    pub support_expectation: ReportClaimSupport,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema)]
+pub struct ReportClaimSupport {
+    pub provider: Option<String>,
+    pub event_kind: Option<StoryEventKind>,
+    pub policy_decision: Option<PolicyDecision>,
+    pub operation_state: Option<OperationState>,
+    pub side_effect_state: Option<SideEffectState>,
+    pub simulated: Option<bool>,
+}
+
+impl ReportClaimSupport {
+    fn has_expectation(&self) -> bool {
+        self.provider.is_some()
+            || self.event_kind.is_some()
+            || self.policy_decision.is_some()
+            || self.operation_state.is_some()
+            || self.side_effect_state.is_some()
+            || self.simulated.is_some()
+    }
+}
+
+impl Serialize for ReportClaimSupport {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if !self.has_expectation() {
+            return Err(<S::Error as serde::ser::Error>::custom(
+                "report claim support must contain at least one expectation",
+            ));
+        }
+
+        #[derive(Serialize)]
+        struct Support<'a> {
+            provider: &'a Option<String>,
+            event_kind: &'a Option<StoryEventKind>,
+            policy_decision: &'a Option<PolicyDecision>,
+            operation_state: &'a Option<OperationState>,
+            side_effect_state: &'a Option<SideEffectState>,
+            simulated: &'a Option<bool>,
+        }
+
+        Support {
+            provider: &self.provider,
+            event_kind: &self.event_kind,
+            policy_decision: &self.policy_decision,
+            operation_state: &self.operation_state,
+            side_effect_state: &self.side_effect_state,
+            simulated: &self.simulated,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ReportClaimSupport {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Support {
+            provider: Option<String>,
+            event_kind: Option<StoryEventKind>,
+            policy_decision: Option<PolicyDecision>,
+            operation_state: Option<OperationState>,
+            side_effect_state: Option<SideEffectState>,
+            simulated: Option<bool>,
+        }
+
+        let support = Support::deserialize(deserializer)?;
+        let support = Self {
+            provider: support.provider,
+            event_kind: support.event_kind,
+            policy_decision: support.policy_decision,
+            operation_state: support.operation_state,
+            side_effect_state: support.side_effect_state,
+            simulated: support.simulated,
+        };
+        if !support.has_expectation() {
+            return Err(serde::de::Error::custom(
+                "report claim support must contain at least one expectation",
+            ));
+        }
+        Ok(support)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SecurityStory {
+    pub schema_version: String,
+    pub story_id: StoryId,
+    pub title: String,
+    pub scenario_id: String,
+    pub attack_category: String,
+    pub run_mode: RunMode,
+    pub enforcement_mode: EnforcementMode,
+    pub provenance: StoryProvenance,
+    pub status: StoryStatus,
+    pub evidence_status: EvidenceStatus,
+    pub identity: StoryIdentity,
+    pub authority: AuthoritySnapshot,
+    pub safe_attack_preview: String,
+    pub attack_content_hash: String,
+    pub stage_statuses: Vec<StoryStageStatus>,
+    pub operations: Vec<SecurityOperation>,
+    pub event_count: u64,
+    pub report_claims: Vec<StoryClaim>,
+    pub final_outcome_summary: String,
+    pub final_event_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StoryReplayFrame {
+    pub sequence: u64,
+    pub story_version: u64,
+    pub event_hash: String,
+    pub snapshot_hash: String,
+    pub previous_frame_hash: Option<String>,
+    pub frame_hash: String,
+    #[serde(with = "time::serde::rfc3339")]
+    #[schemars(with = "String")]
+    pub recorded_at: OffsetDateTime,
+    pub story: SecurityStory,
+}
+
+impl StoryReplayFrame {
+    pub fn seal(
+        sequence: u64,
+        story_version: u64,
+        event_hash: String,
+        previous_frame_hash: Option<String>,
+        recorded_at: OffsetDateTime,
+        story: SecurityStory,
+    ) -> Result<Self, serde_json::Error> {
+        let snapshot_hash = format!(
+            "sha256:{}",
+            hex_sha256(&canonical_json_v1(&serde_json::to_value(&story)?)),
+        );
+        let mut frame = Self {
+            sequence,
+            story_version,
+            event_hash,
+            snapshot_hash,
+            previous_frame_hash,
+            frame_hash: String::new(),
+            recorded_at,
+            story,
+        };
+        frame.frame_hash = frame.expected_hash()?;
+        Ok(frame)
+    }
+
+    pub fn verify(&self) -> Result<(), String> {
+        let snapshot = serde_json::to_value(&self.story).map_err(|error| error.to_string())?;
+        let actual_snapshot = format!("sha256:{}", hex_sha256(&canonical_json_v1(&snapshot)));
+        if actual_snapshot != self.snapshot_hash {
+            return Err("replay snapshot hash mismatch".to_string());
+        }
+        if self.expected_hash().map_err(|error| error.to_string())? != self.frame_hash {
+            return Err("replay frame hash mismatch".to_string());
+        }
+        Ok(())
+    }
+
+    fn expected_hash(&self) -> Result<String, serde_json::Error> {
+        #[derive(Serialize)]
+        struct FrameMaterial<'a> {
+            sequence: u64,
+            story_version: u64,
+            event_hash: &'a str,
+            snapshot_hash: &'a str,
+            previous_frame_hash: Option<&'a str>,
+            #[serde(with = "time::serde::rfc3339")]
+            recorded_at: OffsetDateTime,
+        }
+
+        let material = FrameMaterial {
+            sequence: self.sequence,
+            story_version: self.story_version,
+            event_hash: &self.event_hash,
+            snapshot_hash: &self.snapshot_hash,
+            previous_frame_hash: self.previous_frame_hash.as_deref(),
+            recorded_at: self.recorded_at,
+        };
+        Ok(format!(
+            "sha256:{}",
+            hex_sha256(&canonical_json_v1(&serde_json::to_value(material)?)),
+        ))
+    }
 }

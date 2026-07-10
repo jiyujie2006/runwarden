@@ -30,6 +30,20 @@ Simulated replay observations must state `simulated=true` in structured
 support; they do not support plain completed or allowed claims for trusted
 external side effects.
 
+Security Story v1 represents each native report claim with typed
+`ObservationId` references and a `ReportClaimSupport` expectation. Its optional
+expectation fields are `provider`, `event_kind`, `policy_decision`,
+`operation_state`, `side_effect_state`, and `simulated`; at least one must be
+present. There is deliberately no caller-supplied `supported` boolean. The
+assurance boundary resolves every cited observation and computes support from
+the verified event semantics.
+
+Native story and operation views reject unknown JSON fields. A
+`SecurityStory` contains the current aggregate and an event count, not copied
+historical events or an embedded export signature. `StoryReplayFrame` binds the
+current aggregate snapshot and frame metadata with Canonical JSON v1 hashes;
+ordered sealed events and persistence remain separate trace/journal contracts.
+
 Scenario replay trace payloads include the provider call arguments that led to
 the cited decision so judges can inspect the attempted target without executing
 the provider.

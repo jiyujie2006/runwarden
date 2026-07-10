@@ -5,7 +5,10 @@ pub mod evidence;
 pub mod kernel;
 pub mod manifest;
 pub mod operation;
+pub mod resource;
+pub mod session;
 pub mod story;
+pub mod trace;
 
 pub use contracts::{
     ArtifactRef, DecisionEnvelope, ErrorCode, ErrorKind, ExecutionMode, ExecutionStatus,

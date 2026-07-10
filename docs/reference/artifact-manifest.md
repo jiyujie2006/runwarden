@@ -12,6 +12,14 @@ The runtime helper for demo, report, and UI output paths is
 `runwarden_kernel::artifact::resolve_workspace_relative_path`. CLI callers wrap
 that Rust helper and keep command-specific error labels.
 
+Typed artifact, receipt, and safe-operation contracts use
+`WorkspaceRelativePath`. It serializes as a string, but construction and direct
+JSON deserialization both require a non-empty, slash-separated relative path.
+Absolute paths, platform prefixes, colons, backslashes, NUL, empty components,
+and `.` or `..` components are rejected. This newtype proves lexical safety
+only; filesystem writes must still use the stable-root containment and symlink
+checks above.
+
 Local provider filesystem tools use an analogous Rust-owned sandbox containment
 boundary, not the workspace artifact helper: requested paths are relative to
 the sandbox root, existing components are canonicalized against that root

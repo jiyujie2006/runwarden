@@ -2,8 +2,54 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, JsonSchema)]
+#[serde(transparent)]
+#[schemars(with = "String")]
+pub struct WorkspaceRelativePath(String);
+
+impl WorkspaceRelativePath {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for WorkspaceRelativePath {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        if value.is_empty() {
+            return Err("workspace-relative path must not be empty".to_string());
+        }
+        if value.starts_with('/') {
+            return Err("workspace-relative path must be relative".to_string());
+        }
+        if value.contains('\\') || value.contains(':') || value.contains('\0') {
+            return Err(
+                "workspace-relative path must not contain a platform prefix, backslash, colon, or NUL"
+                    .to_string(),
+            );
+        }
+        if value
+            .split('/')
+            .any(|component| component.is_empty() || component == "." || component == "..")
+        {
+            return Err(
+                "workspace-relative path must contain only non-empty relative components"
+                    .to_string(),
+            );
+        }
+        Ok(Self(value))
+    }
+}
+
+impl<'de> Deserialize<'de> for WorkspaceRelativePath {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::try_from(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ArtifactPathError {
