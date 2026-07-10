@@ -12,7 +12,9 @@
 
 - Rust is the only authority for story status, policy status, resource claims,
   evidence status, and side-effect state.
-- Schema version is `1.0.0`; this release accepts major version `1` only.
+- `SchemaVersion::current()` writes schema version `1.0.0`; readers accept only
+  canonical three-component versions with major version `1`. The JSON wire and
+  generated schema remain strings.
 - New identifiers serialize as UUID strings and are generated with UUIDv7.
 - New event payloads contain redacted values and full-argument hashes only.
 - `SideEffectState` is authoritative in new stories; legacy booleans are
@@ -165,6 +167,64 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use uuid::Uuid;
 
 pub const SECURITY_STORY_SCHEMA_VERSION: &str = "1.0.0";
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, JsonSchema)]
+#[schemars(with = "String")]
+pub struct SchemaVersion(String);
+
+impl SchemaVersion {
+    pub fn current() -> Self {
+        Self(SECURITY_STORY_SCHEMA_VERSION.to_string())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for SchemaVersion {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        fn is_canonical_number(component: &str) -> bool {
+            !component.is_empty()
+                && component.bytes().all(|byte| byte.is_ascii_digit())
+                && (component == "0" || !component.starts_with('0'))
+                && component.parse::<u64>().is_ok()
+        }
+
+        let mut components = value.split('.');
+        let (Some(major), Some(minor), Some(patch), None) = (
+            components.next(), components.next(), components.next(), components.next(),
+        ) else {
+            return Err("schema version must contain three numeric components".to_string());
+        };
+        if !is_canonical_number(major)
+            || !is_canonical_number(minor)
+            || !is_canonical_number(patch)
+        {
+            return Err(
+                "schema version components must be canonical unsigned integers".to_string(),
+            );
+        }
+        if major != "1" {
+            return Err("schema version major must be 1".to_string());
+        }
+        Ok(Self(value))
+    }
+}
+
+impl Serialize for SchemaVersion {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for SchemaVersion {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::try_from(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
 
 macro_rules! typed_uuid {
     ($name:ident) => {
@@ -1113,7 +1173,7 @@ pub struct ReportClaimSupport {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SecurityStory {
-    pub schema_version: String,
+    pub schema_version: SchemaVersion,
     pub story_id: StoryId,
     pub title: String,
     pub scenario_id: String,
@@ -1215,6 +1275,12 @@ one in the story would create a signature cycle and make the final replay frame
 different from `story.json`. Apply `#[serde(deny_unknown_fields)]` to native v1
 story/view structs so unknown fields cannot become an unreviewed export path.
 
+`SecurityStory::schema_version` is a private-field validated `SchemaVersion`
+newtype. Normal Rust writers use `SchemaVersion::current()` and therefore emit
+`"1.0.0"`; deserialization and `TryFrom<String>` accept only canonical
+three-component major-1 values such as `"1.1.0"`. Its `JsonSchema` and JSON wire
+representation remain a string.
+
 `SecurityStory` deliberately does not embed historical events. Events are read
 through the ordered event API and exported in `events.jsonl`; each replay frame
 contains the current aggregate only, preventing historical events from being
@@ -1234,7 +1300,7 @@ Extend `story_contract.rs` with one fully populated `SecurityStory` fixture.
 Assert these observable properties:
 
 ```rust
-assert_eq!(story.schema_version, "1.0.0");
+assert_eq!(story.schema_version.as_str(), "1.0.0");
 assert_eq!(story.operations[0].resource_claim.digest(), claim_digest);
 assert_eq!(story.operations[0].side_effect_state, SideEffectState::NotAttempted);
 assert_eq!(story.evidence_status, EvidenceStatus::Pending);
@@ -1803,7 +1869,7 @@ load `artifacts` through the same fixture-building helper used by the demo,
 and assert:
 
 ```rust
-assert_eq!(story.schema_version, "1.0.0");
+assert_eq!(story.schema_version.as_str(), "1.0.0");
 assert_eq!(story.provenance, StoryProvenance::LegacyDerived);
 assert_eq!(story.evidence_status, EvidenceStatus::Incomplete);
 assert!(!story.operations.is_empty());
@@ -1842,8 +1908,8 @@ use runwarden_kernel::operation::{
 use runwarden_kernel::resource::ResourceClaim;
 use runwarden_kernel::session::AuthoritySnapshot;
 use runwarden_kernel::story::{
-    EnforcementMode, EvidenceStatus, RunMode, SecurityStory, StoryId,
-    StoryProvenance, StoryStatus, SECURITY_STORY_SCHEMA_VERSION,
+    EnforcementMode, EvidenceStatus, RunMode, SchemaVersion, SecurityStory,
+    StoryId, StoryProvenance, StoryStatus,
 };
 use serde_json::Value;
 
@@ -1871,7 +1937,7 @@ pub fn adapt_legacy_webui(
         .collect::<Result<Vec<_>>>()?;
     let status = derive_story_status(&operations);
     Ok(SecurityStory {
-        schema_version: SECURITY_STORY_SCHEMA_VERSION.to_string(),
+        schema_version: SchemaVersion::current(),
         story_id,
         title: context.title,
         scenario_id: context.scenario_id,

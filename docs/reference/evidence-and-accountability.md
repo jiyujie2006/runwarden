@@ -30,13 +30,15 @@ Simulated replay observations must state `simulated=true` in structured
 support; they do not support plain completed or allowed claims for trusted
 external side effects.
 
-Security Story v1 represents each native report claim with typed
-`ObservationId` references and a `ReportClaimSupport` expectation. Its optional
-expectation fields are `provider`, `event_kind`, `policy_decision`,
+The kernel's Security Story v1 contract represents each native report claim
+with typed `ObservationId` references and a `ReportClaimSupport` expectation.
+Its optional expectation fields are `provider`, `event_kind`, `policy_decision`,
 `operation_state`, `side_effect_state`, and `simulated`; at least one must be
-present. There is deliberately no caller-supplied `supported` boolean. The
-assurance boundary resolves every cited observation and computes support from
-the verified event semantics.
+present. There is deliberately no caller-supplied `supported` boolean. P6 adds
+the assurance consumer that resolves every cited observation and computes
+support from verified event semantics. Until that integration, the existing
+legacy assurance path consumes the legacy report support fields listed above,
+not native `StoryClaim` or `ReportClaimSupport` values.
 
 Native story and operation views reject unknown JSON fields. A
 `SecurityStory` contains the current aggregate and an event count, not copied

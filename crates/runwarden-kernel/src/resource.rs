@@ -51,6 +51,7 @@ pub enum NetworkCapability {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ExecutionLimits {
     pub wall_time_ms: u64,
     pub cpu_time_ms: u64,
@@ -60,7 +61,7 @@ pub struct ExecutionLimits {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ResourceClaim {
     File {
         root: String,

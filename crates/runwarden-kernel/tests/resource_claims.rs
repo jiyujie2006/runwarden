@@ -88,6 +88,34 @@ fn data_class_order_is_explicit() {
 }
 
 #[test]
+fn resource_claims_reject_unknown_variant_fields() {
+    assert!(
+        serde_json::from_value::<ResourceClaim>(json!({
+            "kind": "email",
+            "recipients": ["finance@example.test"],
+            "classification": "internal",
+            "caller_override": true
+        }))
+        .is_err()
+    );
+}
+
+#[test]
+fn execution_limits_reject_unknown_fields() {
+    assert!(
+        serde_json::from_value::<ExecutionLimits>(json!({
+            "wall_time_ms": 1_000,
+            "cpu_time_ms": 500,
+            "memory_bytes": 67_108_864,
+            "output_bytes": 4_096,
+            "process_count": 1,
+            "unbounded": true
+        }))
+        .is_err()
+    );
+}
+
+#[test]
 fn authority_snapshot_round_trips_typed_boundaries_and_separate_budgets() {
     let operation_id = OperationId::new();
     let snapshot = AuthoritySnapshot {

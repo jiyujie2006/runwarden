@@ -12,8 +12,8 @@ use runwarden_kernel::session::{
 use runwarden_kernel::story::{
     ApprovalId, EnforcementMode, EventId, EvidenceStatus, ExecutionLeaseId, InvocationKey,
     ObservationId, OperationId, ReportClaimSupport, RunMode, SECURITY_STORY_SCHEMA_VERSION,
-    SecurityStory, SessionId, StageStatus, StoryClaim, StoryId, StoryIdentity, StoryProvenance,
-    StoryReplayFrame, StoryStage, StoryStageStatus, StoryStatus,
+    SchemaVersion, SecurityStory, SessionId, StageStatus, StoryClaim, StoryId, StoryIdentity,
+    StoryProvenance, StoryReplayFrame, StoryStage, StoryStageStatus, StoryStatus,
 };
 use runwarden_kernel::trace::{Sha256Digest, StoryEventKind};
 use serde_json::json;
@@ -80,7 +80,7 @@ fn security_story_fixture() -> (SecurityStory, Sha256Digest) {
     };
 
     let story = SecurityStory {
-        schema_version: SECURITY_STORY_SCHEMA_VERSION.to_string(),
+        schema_version: SchemaVersion::current(),
         story_id,
         title: "Q2 report review".to_string(),
         scenario_id: "prompt-injection-file-exfil".to_string(),
@@ -309,10 +309,60 @@ fn story_contract_version_and_remaining_enums_are_frozen() {
 }
 
 #[test]
+fn schema_version_current_is_the_frozen_writer_version() {
+    let version = SchemaVersion::current();
+
+    assert_eq!(version.as_str(), "1.0.0");
+    assert_eq!(serde_json::to_value(version).unwrap(), json!("1.0.0"));
+}
+
+#[test]
+fn schema_version_reader_accepts_canonical_major_one_versions() {
+    for compatible in ["1.0.0", "1.1.0", "1.12.34"] {
+        let from_json = serde_json::from_value::<SchemaVersion>(json!(compatible)).unwrap();
+        let from_rust = SchemaVersion::try_from(compatible.to_string()).unwrap();
+
+        assert_eq!(from_json.as_str(), compatible);
+        assert_eq!(from_json, from_rust);
+    }
+}
+
+#[test]
+fn schema_version_rejects_noncanonical_or_unsupported_versions() {
+    for invalid in [
+        "",
+        "garbage",
+        "0.1.0",
+        "2.0.0",
+        "1.0",
+        "1.0.0.0",
+        ".1.0",
+        "1..0",
+        "1.0.",
+        "01.0.0",
+        "1.01.0",
+        "1.0.01",
+        "1.-1.0",
+        "1.0.0-alpha",
+        " 1.0.0",
+        "1.0.0 ",
+    ] {
+        assert!(
+            SchemaVersion::try_from(invalid.to_string()).is_err(),
+            "Rust construction must reject {invalid:?}"
+        );
+        assert!(
+            serde_json::from_value::<SchemaVersion>(json!(invalid)).is_err(),
+            "JSON deserialization must reject {invalid:?}"
+        );
+    }
+}
+
+#[test]
 fn security_story_aggregate_preserves_typed_contracts() {
     let (story, claim_digest) = security_story_fixture();
 
-    assert_eq!(story.schema_version, "1.0.0");
+    assert_eq!(story.schema_version.as_str(), "1.0.0");
     assert_eq!(story.operations[0].resource_claim.digest(), claim_digest);
     assert_eq!(
         story.operations[0].side_effect_state,

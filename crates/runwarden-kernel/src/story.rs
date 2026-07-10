@@ -11,6 +11,65 @@ use crate::trace::{StoryEventKind, canonical_json_v1};
 
 pub const SECURITY_STORY_SCHEMA_VERSION: &str = "1.0.0";
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, JsonSchema)]
+#[schemars(with = "String")]
+pub struct SchemaVersion(String);
+
+impl SchemaVersion {
+    pub fn current() -> Self {
+        Self(SECURITY_STORY_SCHEMA_VERSION.to_string())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for SchemaVersion {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        fn is_canonical_number(component: &str) -> bool {
+            !component.is_empty()
+                && component.bytes().all(|byte| byte.is_ascii_digit())
+                && (component == "0" || !component.starts_with('0'))
+                && component.parse::<u64>().is_ok()
+        }
+
+        let mut components = value.split('.');
+        let (Some(major), Some(minor), Some(patch), None) = (
+            components.next(),
+            components.next(),
+            components.next(),
+            components.next(),
+        ) else {
+            return Err("schema version must contain three numeric components".to_string());
+        };
+        if !is_canonical_number(major) || !is_canonical_number(minor) || !is_canonical_number(patch)
+        {
+            return Err(
+                "schema version components must be canonical unsigned integers".to_string(),
+            );
+        }
+        if major != "1" {
+            return Err("schema version major must be 1".to_string());
+        }
+        Ok(Self(value))
+    }
+}
+
+impl Serialize for SchemaVersion {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for SchemaVersion {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::try_from(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
 macro_rules! typed_uuid {
     ($name:ident) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, JsonSchema)]
@@ -347,7 +406,7 @@ impl<'de> Deserialize<'de> for ReportClaimSupport {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SecurityStory {
-    pub schema_version: String,
+    pub schema_version: SchemaVersion,
     pub story_id: StoryId,
     pub title: String,
     pub scenario_id: String,
