@@ -24,7 +24,7 @@ macro_rules! typed_uuid {
             type Error = String;
 
             fn try_from(value: Uuid) -> Result<Self, Self::Error> {
-                if value.get_version_num() != 7 {
+                if value.get_version_num() != 7 || value.get_variant() != uuid::Variant::RFC4122 {
                     return Err(concat!(stringify!($name), " must be UUIDv7").to_string());
                 }
                 Ok(Self(value))
@@ -86,7 +86,7 @@ impl TryFrom<&str> for ObservationId {
             .strip_prefix("obs_")
             .ok_or_else(|| "observation id must start with obs_".to_string())
             .and_then(|value| Uuid::parse_str(value).map_err(|error| error.to_string()))?;
-        if uuid.get_version_num() != 7 {
+        if uuid.get_version_num() != 7 || uuid.get_variant() != uuid::Variant::RFC4122 {
             return Err("observation id must contain UUIDv7".to_string());
         }
         Ok(Self(uuid))

@@ -23,6 +23,20 @@ fn ids_reject_non_v7_uuid_strings() {
 }
 
 #[test]
+fn typed_ids_reject_uuid_v7_with_a_non_rfc_variant() {
+    let non_rfc = "00000000-0000-7000-0000-000000000000";
+    assert!(serde_json::from_str::<StoryId>(&format!("\"{non_rfc}\"")).is_err());
+}
+
+#[test]
+fn observation_ids_reject_uuid_v7_with_a_non_rfc_variant() {
+    assert!(
+        serde_json::from_str::<ObservationId>("\"obs_00000000-0000-7000-0000-000000000000\"")
+            .is_err()
+    );
+}
+
+#[test]
 fn story_modes_and_evidence_states_use_snake_case() {
     assert_eq!(serde_json::to_value(RunMode::Recorded).unwrap(), "recorded");
     assert_eq!(
