@@ -456,6 +456,12 @@ impl KernelEnforcer {
                 ErrorKind::ApprovalConsumed,
                 "approval was already consumed",
             ),
+            ApprovalState::Leased => deny(
+                call,
+                "approval",
+                ErrorKind::ApprovalInvalid,
+                "leased approvals are rejected by legacy in-memory enforcement",
+            ),
             ApprovalState::Expired => deny(
                 call,
                 "approval",

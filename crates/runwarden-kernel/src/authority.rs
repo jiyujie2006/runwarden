@@ -7,6 +7,7 @@ use time::OffsetDateTime;
 pub enum ApprovalState {
     Pending,
     Approved,
+    Leased,
     Consumed,
     Denied,
     Expired,

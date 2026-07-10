@@ -28,6 +28,10 @@ Approval records bind a reviewer decision to one exact provider call:
 
 High-risk provider calls consume matching approved records once. File-backed calls bind SHA-256 digests after kernel path policy allows the path and verify those digests again before approval consumption or execution.
 
+`ApprovalState::Leased` is reserved for the durable execution-lease contract.
+The legacy in-memory authority path does not acquire leases and rejects records
+already in that state instead of consuming or executing them.
+
 Interactive approvals are file-backed. `runwarden demo` writes reviewer
 decisions to `.runwarden/approvals`, while `runwarden-mcp` reads the same
 directory via `RUNWARDEN_STATE_DIR` when the agent runs outside the repository

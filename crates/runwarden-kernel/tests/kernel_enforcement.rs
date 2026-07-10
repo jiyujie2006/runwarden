@@ -547,8 +547,9 @@ fn high_risk_provider_rejects_approved_but_expired_approval_before_consuming() {
 }
 
 #[test]
-fn high_risk_provider_rejects_denied_expired_and_revoked_approval_states() {
+fn high_risk_provider_rejects_leased_denied_expired_and_revoked_approval_states() {
     for (state, error_kind) in [
+        (ApprovalState::Leased, ErrorKind::ApprovalInvalid),
         (ApprovalState::Denied, ErrorKind::ApprovalInvalid),
         (ApprovalState::Expired, ErrorKind::ApprovalExpired),
         (ApprovalState::Revoked, ErrorKind::ApprovalInvalid),

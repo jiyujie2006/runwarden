@@ -84,6 +84,24 @@ fn approval_record_can_be_denied_from_pending_with_reason() {
 }
 
 #[test]
+fn leased_approvals_are_rejected_by_the_legacy_in_memory_path() {
+    let binding = ApprovalBinding {
+        session_id: "session-1".to_string(),
+        provider: "runwarden.report.render".to_string(),
+        action: "render".to_string(),
+        argument_hash: "arg-hash".to_string(),
+        authz_id: Some("authz-1".to_string()),
+        actor_id: Some("agent-1".to_string()),
+    };
+    let mut approval = ApprovalRecord::new("approval-1", binding.clone());
+    approval.state = ApprovalState::Leased;
+
+    assert_eq!(serde_json::to_value(&approval.state).unwrap(), "leased");
+    assert!(approval.consume_once(&binding).is_err());
+    assert_eq!(approval.state, ApprovalState::Leased);
+}
+
+#[test]
 fn provider_call_keeps_authority_fields_explicit() {
     let call = ProviderCall {
         session_id: "session-1".to_string(),
