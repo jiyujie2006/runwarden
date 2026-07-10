@@ -47,6 +47,8 @@ This index is the canonical map for the contest edition.
 - [Contest Verification](development/contest-verification.md)
 - [Repository Review](repository-review.md)
 - [Roadmap](reference/roadmap.md)
+- [Approved Security Story Workbench Design](superpowers/specs/2026-07-10-runwarden-contest-security-story-workbench-design.md)
+- [Long-Term Refactor Plan Index](superpowers/plans/2026-07-10-runwarden-contest-refactor-plan-index.md)
 
 ## Examples And Red-Team
 

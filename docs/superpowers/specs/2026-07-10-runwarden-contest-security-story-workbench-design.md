@@ -181,6 +181,9 @@ OpenCode
 - invoking the Rust kernel with server-owned session context;
 - durable pending-operation creation;
 - approval wait and resume;
+- `runwarden.operation.status` and `runwarden.operation.resume` for reconnecting
+  clients; resume accepts only an operation identifier and reloads the frozen
+  server-owned request;
 - provider execution through the single executor interface;
 - returning structured operation results to the MCP client.
 
@@ -395,6 +398,10 @@ An MCP provider call waits for a configurable approval window. During the wait:
 - connection loss does not silently re-execute the operation;
 - a reconnecting client can query final status by operation identifier.
 
+The agent-visible recovery surface is `runwarden.operation.status` and
+`runwarden.operation.resume`. Neither tool accepts replacement provider
+arguments, session policy, or approval material.
+
 The default contest approval window is 120 seconds.
 
 ## 9. Durable Journal
@@ -574,8 +581,10 @@ Analyst mode exposes policy checks, redacted arguments, structured events,
 hashes, causal links, scenario assertions, and report references.
 
 Live mode receives committed events over SSE. Replay mode loads a verified
-story bundle and provides play, pause, step, speed, and restart controls. Replay
-is always visibly labeled `RECORDED REPLAY`.
+story bundle and selects Rust-produced `StoryReplayFrame` snapshots keyed by
+committed event sequence. It provides play, pause, step, speed, and restart
+controls without reducing events into policy state in TypeScript. Replay is
+always visibly labeled `RECORDED REPLAY`.
 
 The live server follows cross-process SQLite writers by querying committed
 events after the last published story sequence at a 100 ms interval. SSE
@@ -730,6 +739,10 @@ The live database may retain full arguments required for execution, but the Web
 API and exported story use only redacted argument views plus hashes. Secret
 values never appear in static HTML.
 
+Full arguments are stored as private operation material, separate from the
+event table. A story event is redacted before its initial hash is calculated;
+export therefore verifies the original event chain without rewriting payloads.
+
 A story export contains:
 
 ```text
@@ -827,6 +840,12 @@ crates/runwarden-state/src/
   operations.rs
   approvals.rs
   events.rs
+
+crates/runwarden-runtime/src/
+  context.rs
+  operation.rs
+  approval.rs
+  errors.rs
 
 crates/runwarden-mcp/src/
   server.rs
@@ -985,8 +1004,9 @@ Required new test classes are:
 
 ## 21. Delivery Estimate and Parallel Work
 
-This is approximately twelve to sixteen weeks for one full-time engineer. It
-can be parallelized after the story schema is stable:
+The conservative single-team estimate is eighteen to twenty-two engineering
+weeks. Twelve to sixteen weeks is an aggressive calendar only when independent
+streams can run in parallel after the story schema is stable:
 
 - Rust journal/runtime stream;
 - WebUI stream;
