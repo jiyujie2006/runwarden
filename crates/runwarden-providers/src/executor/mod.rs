@@ -23,6 +23,7 @@ use time::OffsetDateTime;
 use zeroize::Zeroizing;
 
 const PERMIT_DOMAIN_V1: &[u8] = b"runwarden.execution-permit.hmac-sha256.v1\0";
+const CLEANUP_TOKEN_DOMAIN_V1: &[u8] = b"runwarden.cleanup-token.sha256.v1\0";
 const INVALID_ERROR_KIND: &str = "invalid_error_kind";
 const INVALID_REASON_CODE: &str = "invalid_reason_code";
 
@@ -329,6 +330,93 @@ impl ProviderExecutionResult {
         }
     }
 
+    pub(crate) fn completed(
+        output: SafeProviderOutput,
+        receipt: Option<ExecutionReceipt>,
+        actual_budget_charge: BudgetCharge,
+    ) -> Result<Self, ProviderResultBuildError> {
+        let output_hash = canonical_output_hash(&output)?;
+        Self::checked(Self {
+            execution_status: ProviderExecutionStatus::Completed,
+            side_effect_state: SideEffectState::Completed,
+            output,
+            output_hash: Some(output_hash),
+            receipt,
+            error_kind: None,
+            reason_code: None,
+            actual_budget_charge,
+        })
+    }
+
+    pub(crate) fn simulated(
+        output: SafeProviderOutput,
+        reason_code: &str,
+    ) -> Result<Self, ProviderResultBuildError> {
+        let output_hash = canonical_output_hash(&output)?;
+        Self::checked(Self {
+            execution_status: ProviderExecutionStatus::Simulated,
+            side_effect_state: SideEffectState::Simulated,
+            output,
+            output_hash: Some(output_hash),
+            receipt: None,
+            error_kind: None,
+            reason_code: Some(stable_code_or(reason_code, INVALID_REASON_CODE)),
+            actual_budget_charge: zero_budget_charge(),
+        })
+    }
+
+    pub(crate) fn failed_before_side_effect(error_kind: &str, reason_code: &str) -> Self {
+        Self {
+            execution_status: ProviderExecutionStatus::FailedBeforeSideEffect,
+            side_effect_state: SideEffectState::FailedBeforeSideEffect,
+            output: SafeProviderOutput::None,
+            output_hash: None,
+            receipt: None,
+            error_kind: Some(stable_code_or(error_kind, INVALID_ERROR_KIND)),
+            reason_code: Some(stable_code_or(reason_code, INVALID_REASON_CODE)),
+            actual_budget_charge: zero_budget_charge(),
+        }
+    }
+
+    pub(crate) fn executed_with_error(
+        error_kind: &str,
+        reason_code: &str,
+        actual_budget_charge: BudgetCharge,
+    ) -> Result<Self, ProviderResultBuildError> {
+        Self::checked(Self {
+            execution_status: ProviderExecutionStatus::ExecutedWithError,
+            side_effect_state: SideEffectState::ExecutedWithError,
+            output: SafeProviderOutput::None,
+            output_hash: None,
+            receipt: None,
+            error_kind: Some(stable_code_or(error_kind, INVALID_ERROR_KIND)),
+            reason_code: Some(stable_code_or(reason_code, INVALID_REASON_CODE)),
+            actual_budget_charge,
+        })
+    }
+
+    pub(crate) fn outcome_unknown(
+        error_kind: &str,
+        reason_code: &str,
+        reserved_budget_charge: BudgetCharge,
+    ) -> Result<Self, ProviderResultBuildError> {
+        Self::checked(Self {
+            execution_status: ProviderExecutionStatus::OutcomeUnknown,
+            side_effect_state: SideEffectState::OutcomeUnknown,
+            output: SafeProviderOutput::None,
+            output_hash: None,
+            receipt: None,
+            error_kind: Some(stable_code_or(error_kind, INVALID_ERROR_KIND)),
+            reason_code: Some(stable_code_or(reason_code, INVALID_REASON_CODE)),
+            actual_budget_charge: reserved_budget_charge,
+        })
+    }
+
+    fn checked(result: Self) -> Result<Self, ProviderResultBuildError> {
+        result.validate()?;
+        Ok(result)
+    }
+
     pub fn execution_status(&self) -> ProviderExecutionStatus {
         self.execution_status
     }
@@ -463,6 +551,30 @@ impl ProviderExecutionResult {
     }
 }
 
+fn canonical_output_hash(
+    output: &SafeProviderOutput,
+) -> Result<Sha256Digest, ProviderResultBuildError> {
+    let value =
+        serde_json::to_value(output).map_err(|_| ProviderResultBuildError::OutputEncoding)?;
+    Ok(Sha256Digest::from_bytes(&canonical_json_v1(&value)))
+}
+
+fn zero_budget_charge() -> BudgetCharge {
+    BudgetCharge {
+        calls: 0,
+        file_bytes: 0,
+        network_bytes: 0,
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ProviderResultBuildError {
+    #[error("safe provider output could not be canonically encoded")]
+    OutputEncoding,
+    #[error(transparent)]
+    Invalid(#[from] ProviderResultValidationError),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ProviderResultValidationError {
     #[error("provider result status and side-effect state are incoherent")]
@@ -506,8 +618,57 @@ pub struct ProviderExecutionOutcome {
 }
 
 pub struct CleanupToken {
-    _id: String,
-    _provider: String,
+    id: String,
+    operation_id: OperationId,
+    provider: String,
+    relative_path: WorkspaceRelativePath,
+    sha256: Sha256Digest,
+}
+
+impl CleanupToken {
+    pub(crate) fn bind(
+        operation_id: OperationId,
+        provider: String,
+        relative_path: WorkspaceRelativePath,
+        sha256: Sha256Digest,
+    ) -> Self {
+        let binding = serde_json::json!({
+            "operation_id": operation_id,
+            "provider": provider,
+            "relative_path": relative_path,
+            "sha256": sha256,
+        });
+        let mut message = CLEANUP_TOKEN_DOMAIN_V1.to_vec();
+        message.extend_from_slice(&canonical_json_v1(&binding));
+        let id = Sha256Digest::from_bytes(&message).as_str().to_owned();
+        Self {
+            id,
+            operation_id,
+            provider,
+            relative_path,
+            sha256,
+        }
+    }
+
+    pub(crate) fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub(crate) fn operation_id(&self) -> OperationId {
+        self.operation_id
+    }
+
+    pub(crate) fn provider(&self) -> &str {
+        &self.provider
+    }
+
+    pub(crate) fn relative_path(&self) -> &WorkspaceRelativePath {
+        &self.relative_path
+    }
+
+    pub(crate) fn sha256(&self) -> &Sha256Digest {
+        &self.sha256
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

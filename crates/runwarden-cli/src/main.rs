@@ -516,6 +516,9 @@ fn run_demo_scenario_real(root: &Path, scenario: &str, output: &Path) -> anyhow:
             execute_provider_call_real(&session, input, &scenario_path, &sandbox_root)?;
         let event_type = match result.decision.as_str() {
             "allowed" if result.execution_status == "simulated" => "provider_simulated_replay",
+            "allowed" if result.execution_status == "not_executed" => {
+                "provider_blocked_before_execution"
+            }
             "allowed" => "provider_completed",
             "denied" => "provider_denied",
             "requires_review" => "provider_approval_pending",
@@ -776,8 +779,15 @@ fn execute_provider_call_real(
                     None,
                 )
                 .to_string(),
-                error_kind: None,
-                reason: Some(outcome.envelope.reason.clone()),
+                error_kind: executed
+                    .get("error_kind")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                reason: executed
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .or_else(|| Some(outcome.envelope.reason.clone())),
                 obs_ref,
                 arguments: input.arguments.clone(),
                 output: executed.get("output").cloned().unwrap_or(Value::Null),
@@ -954,29 +964,19 @@ fn call_first_party_provider(
 fn call_external_provider(
     provider: &str,
     action: &str,
-    arguments: &Value,
-    sandbox_root: &Path,
+    _arguments: &Value,
+    _sandbox_root: &Path,
 ) -> Value {
-    let executed = tools::execute_external_tool(provider, action, arguments, sandbox_root);
-    let execution_status = executed
-        .get("execution_status")
-        .and_then(Value::as_str)
-        .unwrap_or("simulated");
-    let simulated = executed
-        .get("simulated")
-        .and_then(Value::as_bool)
-        .unwrap_or(true);
-    let side_effect_executed = executed
-        .get("side_effect_executed")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
     json!({
         "provider": provider,
+        "action": action,
         "decision": "allowed",
-        "execution_status": execution_status,
-        "simulated": simulated,
-        "side_effect_executed": side_effect_executed,
-        "output": executed.get("output").cloned().unwrap_or(Value::Null)
+        "execution_status": "not_executed",
+        "simulated": false,
+        "side_effect_executed": false,
+        "error_kind": "native_executor_required",
+        "reason": "legacy CLI dispatch cannot cross the native execution boundary",
+        "output": Value::Null
     })
 }
 

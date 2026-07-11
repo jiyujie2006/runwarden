@@ -474,7 +474,7 @@ fn monitor_only_simulates_valid_catalogued_proposals_without_side_effects() {
 }
 
 #[test]
-fn monitor_and_default_dispatch_cover_all_ten_typed_contest_providers() {
+fn monitor_only_dispatch_covers_all_ten_typed_contest_providers() {
     let relative_path = |value: &str| WorkspaceRelativePath::try_from(value.to_owned()).unwrap();
     let cases = vec![
         (
@@ -591,7 +591,6 @@ fn monitor_and_default_dispatch_cover_all_ten_typed_contest_providers() {
     ];
 
     let observer = MonitorOnlyObserver;
-    let (_root, issuer, executor) = executor_fixture();
     for (provider_id, action, arguments, claim, expected_effect) in cases {
         let request = request_for(&catalog_provider(provider_id), action, arguments, claim);
         let observation =
@@ -607,15 +606,6 @@ fn monitor_and_default_dispatch_cover_all_ten_typed_contest_providers() {
                 .as_ref()
                 .map(|effect| effect.effect_kind.as_str()),
             Some(expected_effect),
-            "{provider_id}"
-        );
-
-        let permit = issuer.seal(claims(&request)).unwrap();
-        let outcome = executor.execute(&permit, &request, fixed_now());
-        assert_blocked_without_output(&outcome, request.budget_charge);
-        assert_eq!(
-            outcome.result.reason_code(),
-            Some("provider_not_migrated"),
             "{provider_id}"
         );
     }
@@ -888,17 +878,37 @@ fn default_executor_uses_the_canonical_catalog_and_exact_action_dispatch() {
 }
 
 #[test]
-fn task_four_default_executor_does_not_call_unmigrated_business_tools() {
+fn default_executor_dispatches_permitted_email_through_the_private_tool() {
     let (root, issuer, executor) = executor_fixture();
     let request = catalog_email_request();
     let permit = issuer.seal(claims(&request)).unwrap();
 
     let outcome = executor.execute(&permit, &request, fixed_now());
-    assert_blocked_without_output(&outcome, request.budget_charge);
-    assert!(
-        !root.path().join("sandbox/mail").exists(),
-        "Task 5 owns the first private email implementation and receipt side effect"
+    assert_eq!(
+        outcome.result.execution_status(),
+        ProviderExecutionStatus::Completed
     );
+    assert_eq!(
+        outcome.result.side_effect_state(),
+        SideEffectState::Completed
+    );
+    assert!(matches!(
+        outcome.result.output(),
+        SafeProviderOutput::Email { .. }
+    ));
+    assert!(outcome.result.receipt().is_some());
+    outcome
+        .result
+        .validate_against(request.budget_charge)
+        .unwrap();
+    assert!(
+        root.path().join("sandbox/mail/receipts").is_dir(),
+        "the private email implementation must persist reconciliation material"
+    );
+    assert!(matches!(
+        executor.reconcile(request.operation_id),
+        ReconciliationResult::Completed(_)
+    ));
 }
 
 #[test]

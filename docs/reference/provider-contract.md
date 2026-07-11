@@ -72,11 +72,31 @@ recover the already-started operation rather than issue another capability.
 `ExecutorConfig`. The verified sandbox root, trusted runtime root, output cap,
 and timeout are private after construction and exposed only through read-only
 getters; the two canonical roots must exist, be absolute, and not overlap.
-Debug output redacts the verifier. Execution performs only canonical catalog
-lookup, permit verification, and exact provider/action/claim-family checks at
-this stage. Until private business tools migrate, every otherwise valid call
-returns `provider_not_migrated`, zero actual charge, no output, no cleanup
-token, and no side effect.
+Debug output redacts the verifier. Execution performs canonical catalog and
+permit validation before business I/O, verifies the configured roots still
+have their startup identity, then rederives the exact argument-to-claim mapping
+with a trusted logical root/namespace/classification scope. It never treats
+server-owned fields copied from the claim as configuration. The local file,
+email, memory, knowledge, and simulated-network bodies are crate-private; no
+generic public execution wrapper remains. Generic file operations also reject
+the private backing prefixes used by email, stores, and Runwarden state.
+
+Email is the first replay-reconciled business effect. Its canonical receipt
+binds operation id, complete argument hash, canonical recipients, subject and
+body hashes, and recorded time. Unique fsynced temporary files plus atomic
+`hard_link` creation ensure concurrent executors converge on one receipt.
+Exact duplicates return the same typed receipt, changed arguments return a
+zero-charge binding conflict, and malformed or internally contradictory
+receipt state returns `OutcomeUnknown` with the full reserved budget. Safe
+provider outputs never contain file contents, message plaintext, or store
+values.
+
+A bounded process registry claims each operation id across executor instances.
+Its binding includes the complete frozen request and the pinned physical roots;
+completed or uncertain tombstones do not expire with the permit. Exact replay
+returns the cached redacted result without repeating an effect, while a changed
+binding or a second physical root fails closed. This is process-local defense
+in depth; the SQLite lease and operation journal remain the durable owner.
 
 `MonitorOnlyObserver` is a separate stateless unit type, not an executor. It
 holds no permit, verifier, approval, lease, filesystem, process, network, or

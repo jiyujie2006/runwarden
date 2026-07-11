@@ -396,11 +396,16 @@ fn handle_provider_call(id: Value, params: Option<&Value>) -> Value {
 
     if let Some(approval_id) = call.approval_id.as_deref()
         && enforcer.approval_state(approval_id) == Some(ApprovalState::Consumed)
+        && payload.get("side_effect_executed").and_then(Value::as_bool) == Some(true)
     {
         persist_consumed_approval_mcp(&call, &enforcer.approval_binding_for_call(&call)).ok();
     }
     let payload = append_mcp_provider_event(&outcome, &payload).unwrap_or(payload);
-    tool_result(id, payload)
+    if payload.get("error_kind").and_then(Value::as_str) == Some("native_executor_required") {
+        tool_error_result(id, payload)
+    } else {
+        tool_result(id, payload)
+    }
 }
 
 /// Map a caller-supplied `input_source` string to an `InputSource` so the
@@ -985,31 +990,11 @@ fn analyze_anomaly(outcome: &ProviderOutcome, arguments: &Value) -> Value {
 fn external_provider_result(
     outcome: &ProviderOutcome,
     arguments: &Value,
-    sandbox_root: &Path,
+    _sandbox_root: &Path,
 ) -> Value {
-    let executed = tools::execute_external_tool(
-        &outcome.envelope.provider,
-        &outcome.envelope.action,
-        arguments,
-        sandbox_root,
-    );
-    let execution_status = executed
-        .get("execution_status")
-        .and_then(Value::as_str)
-        .unwrap_or("simulated");
-    let simulated = executed
-        .get("simulated")
-        .and_then(Value::as_bool)
-        .unwrap_or(true);
-    let side_effect_executed = executed
-        .get("side_effect_executed")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let event_type = if simulated {
-        "provider_simulated_replay"
-    } else {
-        "provider_completed"
-    };
+    let execution_status = "not_executed";
+    let simulated = false;
+    let side_effect_executed = false;
     let anomaly = analyze_anomaly(outcome, arguments);
     json!({
         "provider": &outcome.envelope.provider,
@@ -1018,16 +1003,18 @@ fn external_provider_result(
         "execution_status": execution_status,
         "simulated": simulated,
         "side_effect_executed": side_effect_executed,
+        "error_kind": "native_executor_required",
+        "reason_code": "durable_runtime_not_connected",
         "obs_ref": &outcome.observation_id,
         "trace_event": trace_event_for_provider_result(
             outcome,
-            event_type,
+            "provider_blocked_before_execution",
             execution_status,
             simulated,
             side_effect_executed,
             Some(&anomaly)
         ),
-        "output": executed.get("output").cloned().unwrap_or(Value::Null),
+        "output": Value::Null,
         "anomaly": anomaly
     })
 }
@@ -1449,7 +1436,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn external_provider_result_propagates_real_sandbox_side_effect_to_trace() {
+    fn external_provider_result_fails_closed_before_the_native_executor() {
         let sandbox = std::env::temp_dir().join(format!(
             "runwarden-mcp-side-effect-{}-{}",
             std::process::id(),
@@ -1479,19 +1466,20 @@ mod tests {
 
         let payload = external_provider_result(&outcome, &arguments, &sandbox);
 
-        assert_eq!(payload["execution_status"], "completed");
+        assert_eq!(payload["execution_status"], "not_executed");
         assert_eq!(payload["simulated"], false);
-        assert_eq!(payload["side_effect_executed"], true);
-        assert_eq!(payload["trace_event"]["event_type"], "provider_completed");
+        assert_eq!(payload["side_effect_executed"], false);
+        assert_eq!(payload["error_kind"], "native_executor_required");
+        assert_eq!(
+            payload["trace_event"]["event_type"],
+            "provider_blocked_before_execution"
+        );
         assert_eq!(
             payload["trace_event"]["payload"]["side_effect_executed"],
-            true
+            false
         );
         assert_eq!(payload["trace_event"]["payload"]["simulated"], false);
-        assert_eq!(
-            fs::read_to_string(sandbox.join("notes.txt")).expect("written file"),
-            "hello"
-        );
+        assert!(!sandbox.join("notes.txt").exists());
 
         let _ = fs::remove_dir_all(&sandbox);
     }

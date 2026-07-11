@@ -37,11 +37,12 @@ create a nonexistent final file, but only after the deepest existing parent
 path canonicalizes inside the sandbox root; symlinked parents that resolve
 outside the root are denied before any side effect is reported.
 
-The contest package does not invoke trusted downstream network adapters during
-local demo runs. API and browser provider ids return simulated outcomes and
-`obs_*` evidence. Local filesystem, email, memory, and knowledge providers use
-the same Rust-owned manifest and policy contract, then perform only bounded
-local sandbox side effects after the kernel and approval gates allow them.
+The native executor does not invoke trusted downstream network adapters for
+the contest API and browser providers; those ids return typed simulated
+outcomes. Native local filesystem, email, memory, and knowledge providers use
+the same Rust-owned catalog and typed-claim contract, then perform only bounded
+local sandbox effects after the permit gate. The compatibility demo/MCP paths
+remain disconnected from that executor and fail closed until Plan 4.
 
 ## Native SQLite Execution Gate
 
@@ -115,13 +116,47 @@ present in the least-authority claim remains bound to the approved operation.
 
 The native default executor configuration canonicalizes two non-overlapping
 existing directories: the local business-tool sandbox and the trusted runtime
-root. Output and timeout limits are positive and capped; all validated fields
-become private after construction, and verifier material is redacted. Task 4
-does not call the legacy public dispatcher or any business tool. Even a valid
-permit for one of the ten typed contest providers returns the stable
-`provider_not_migrated` result without output, cleanup material, actual budget
-charge, or side effect until private implementations and reconciliation
-receipts land.
+root. It also freezes the trusted logical filesystem root, memory namespace,
+knowledge namespace, and default classification used by extraction. Output and
+timeout limits are positive and capped; all validated fields become private
+after construction, and verifier material is redacted. After permit and
+catalog validation, the executor reruns the canonical extractor with this
+configured scope rather than values copied from the submitted claim. A claim
+for another logical root, namespace, or classification is blocked before
+business I/O.
+
+On Unix, configuration pins the device/inode identity of both canonical roots;
+every execution, reconciliation, and cleanup rejects a replaced root or a path
+that now resolves elsewhere. Filesystem, email, memory, and knowledge
+implementations are crate-private and reachable only from this executor. API
+and browser implementations contain no network client and return typed
+`Simulated` outcomes with zero actual charge.
+
+Filesystem operations use bounded reads and atomic temporary-file writes,
+reject absolute/traversing paths and symlink components, and return only byte
+counts and content hashes. The generic file provider cannot read or write the
+reserved `mail/`, `stores/`, or `.runwarden/` backing prefixes, so an approved
+file write cannot forge another provider's state. Memory and knowledge use
+separate directories and server-owned namespace hashes; values are not
+returned in evidence, and reads declare and consume bounded file-byte budget.
+Email
+stores no subject or body plaintext. It creates one canonical, fsynced receipt
+per operation with `hard_link`, binds the argument and message hashes, and
+reconciles duplicate execution from that immutable receipt. A different
+argument binding is blocked before execution; malformed or contradictory
+receipt material becomes `OutcomeUnknown` with the full reservation charged.
+Cleanup tokens name only a hash-bound temporary file below `mail/tmp` and are
+usable only by the executor after the journal result disposition is known.
+Cleanup verifies that the matching durable receipt still exists before
+removing its temporary hard link.
+
+The process registry keys replay protection by operation id across executor
+instances and roots, binds the complete request plus pinned executor roots,
+and retains completed/uncertain tombstones even after permit expiry. A renewed
+permit therefore cannot repeat a file or store write, and routing one operation
+to a different root is an integrity conflict. The registry has a fixed contest
+capacity and fails closed when full; Plan 4 adds the durable journal as the
+cross-process source of operation ownership and recovery.
 
 Monitor-only assurance is deliberately outside this executor. It has no
 delegate and never touches a configured root. A domain-separated proposal
@@ -142,11 +177,12 @@ truthful result write; uncertain post-effect recovery remains a separate
 conservative recovery path.
 
 This native gate is not yet wired into the current contest MCP/WebUI request
-path. `runwarden-mcp` still uses the documented file-backed approvals and
-legacy provider-call trace, and the existing demo adapters retain their stated
-simulation/local-sandbox behavior. Until the runtime migration lands, the
-presence of a SQLite approval or lease must not be presented as proof that the
-current MCP process invoked a provider through this gate. In particular, Task
-1 defines and tests the capability contract but does not construct permits from
-legacy `ProviderOutcome`; issuance after durable start and replay-safe executor
-dispatch land in the later runtime integration tasks.
+path. `runwarden-mcp` still uses the documented file-backed approval and trace
+surfaces for compatibility, but it now fails closed for external provider
+execution with `native_executor_required`; the CLI legacy scenario dispatcher
+does the same. Neither path calls a local tool, claims a side effect, nor
+persists approval consumption while the durable runtime is disconnected. The
+old public generic business-tool dispatcher has been removed. Until the Plan 4
+runtime migration lands, the presence of a SQLite approval, a file-backed
+approval, or a policy `Allowed` decision must not be presented as proof that
+the current MCP/CLI process invoked a provider through the native executor.

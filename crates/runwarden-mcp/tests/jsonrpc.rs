@@ -400,7 +400,7 @@ fn default_kernel_policy_denies_every_catalog_provider_before_side_effect() {
 }
 
 #[test]
-fn provider_call_loads_disk_approval_and_consumes_it() {
+fn provider_call_loads_disk_approval_but_does_not_consume_without_native_execution() {
     let dir = temp_state_dir("approved");
     let arguments = json!({
         "provider": "external.email.send",
@@ -436,14 +436,17 @@ fn provider_call_loads_disk_approval_and_consumes_it() {
     std::env::set_current_dir(cwd).expect("restore cwd");
 
     assert!(response.get("error").is_none());
-    assert_eq!(response["result"]["isError"], false);
+    assert_eq!(response["result"]["isError"], true);
     let payload = tool_payload(&response);
     assert_eq!(payload["decision"], "allowed");
-    assert_eq!(payload["side_effect_executed"], true);
+    assert_eq!(payload["execution_status"], "not_executed");
+    assert_eq!(payload["error_kind"], "native_executor_required");
+    assert_eq!(payload["side_effect_executed"], false);
 
     let saved =
         fs::read_to_string(approval_dir.join("approval-email-1.json")).expect("saved approval");
-    assert!(saved.contains(r#""state": "consumed""#));
+    assert!(saved.contains(r#""state": "approved""#));
+    assert!(!saved.contains(r#""state": "consumed""#));
 }
 
 #[test]
@@ -479,7 +482,7 @@ fn provider_call_honors_runwarden_state_dir_for_events_and_approvals() {
 }
 
 #[test]
-fn provider_call_after_consumed_webui_approval_creates_new_pending_review() {
+fn provider_call_keeps_webui_approval_unconsumed_while_native_runtime_is_disconnected() {
     let dir = temp_state_dir("consumed-retry");
     let arguments = json!({
         "provider": "external.email.send",
@@ -513,31 +516,26 @@ fn provider_call_after_consumed_webui_approval_creates_new_pending_review() {
     .expect("write approved approval");
 
     let allowed = call_tool(218, "runwarden.provider.call", arguments.clone());
-    assert_eq!(allowed["result"]["isError"], false);
+    assert_eq!(allowed["result"]["isError"], true);
     let allowed_payload = tool_payload(&allowed);
     assert_eq!(allowed_payload["decision"], "allowed");
-    assert_eq!(allowed_payload["side_effect_executed"], true);
-    let consumed: ApprovalRecord =
-        serde_json::from_str(&fs::read_to_string(&first_path).expect("consumed approval"))
-            .expect("consumed approval json");
-    assert_eq!(consumed.state, ApprovalState::Consumed);
+    assert_eq!(allowed_payload["execution_status"], "not_executed");
+    assert_eq!(allowed_payload["error_kind"], "native_executor_required");
+    assert_eq!(allowed_payload["side_effect_executed"], false);
+    let still_approved: ApprovalRecord =
+        serde_json::from_str(&fs::read_to_string(&first_path).expect("approved approval"))
+            .expect("approved approval json");
+    assert_eq!(still_approved.state, ApprovalState::Approved);
 
     let second = call_tool(219, "runwarden.provider.call", arguments);
     std::env::set_current_dir(cwd).expect("restore cwd");
 
     assert_eq!(second["result"]["isError"], true);
     let second_payload = tool_payload(&second);
-    assert_eq!(second_payload["decision"], "requires_review");
-    let second_approval_id = second_payload["approval_id"]
-        .as_str()
-        .expect("second approval id");
-    assert_ne!(second_approval_id, first_approval_id);
-    let second_record: ApprovalRecord = serde_json::from_str(
-        &fs::read_to_string(approval_dir.join(format!("{second_approval_id}.json")))
-            .expect("second pending approval"),
-    )
-    .expect("second approval json");
-    assert_eq!(second_record.state, ApprovalState::Pending);
+    assert_eq!(second_payload["decision"], "allowed");
+    assert_eq!(second_payload["error_kind"], "native_executor_required");
+    assert_eq!(second_payload["side_effect_executed"], false);
+    assert_eq!(fs::read_dir(&approval_dir).unwrap().count(), 1);
 }
 
 #[test]
@@ -644,7 +642,7 @@ fn provider_call_denies_approved_external_api_to_non_allowlisted_host() {
 }
 
 #[test]
-fn provider_call_uses_server_owned_sandbox_root_for_filesystem_scope() {
+fn provider_call_never_reads_server_owned_sandbox_before_native_execution() {
     let dir = temp_state_dir("sandbox-root");
     let sandbox = dir.join("runwarden-sandbox");
     fs::create_dir_all(&sandbox).expect("sandbox dir");
@@ -681,12 +679,13 @@ fn provider_call_uses_server_owned_sandbox_root_for_filesystem_scope() {
     let response = call_tool(119, "runwarden.provider.call", arguments);
     std::env::set_current_dir(cwd).expect("restore cwd");
 
-    assert_eq!(response["result"]["isError"], false);
+    assert_eq!(response["result"]["isError"], true);
     let payload = tool_payload(&response);
     assert_eq!(payload["decision"], "allowed");
-    assert_eq!(payload["execution_status"], "completed");
-    assert_eq!(payload["output"]["content"], "safe fixture");
-    assert_eq!(payload["side_effect_executed"], true);
+    assert_eq!(payload["execution_status"], "not_executed");
+    assert_eq!(payload["error_kind"], "native_executor_required");
+    assert!(payload["output"].is_null());
+    assert_eq!(payload["side_effect_executed"], false);
 }
 
 #[test]

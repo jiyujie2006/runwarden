@@ -43,11 +43,15 @@ the demo. Copy `examples/agent-configs/opencode.runwarden-only.json` to
 `$XDG_CONFIG_HOME/opencode/opencode.json` and confirm `opencode debug config
 --pure` lists only `runwarden` under `mcp`.
 
-`runwarden demo --scenario <name> --output <dir> --json` executes the scenario
-provider calls through the Rust kernel and provider layer, then writes
+`runwarden demo --scenario <name> --output <dir> --json` evaluates scenario
+provider calls through the legacy Rust kernel projection, then writes
 `trace.json`, `provider-calls.json`, `denials.json`, `report.json`,
 `metrics.json`, `webui.json`, and the redacted, explicitly incomplete
-`story.json` legacy projection.
+`story.json` legacy projection. First-party inspection still runs in process.
+External calls fail closed as `native_executor_required` until the durable
+Plan 4 runtime connects policy, approval, execution lease, permit, native
+executor, and result journal; the CLI never falls back to the removed public
+business-tool dispatcher.
 
 `runwarden demo --all --output artifacts/demo --json` runs all five scenarios
 and writes exactly one `story.json` per official scenario plus

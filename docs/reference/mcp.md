@@ -50,21 +50,25 @@ Unknown tools, raw tools, and removed tools such as `runwarden.session.create_fr
   provider-call event under `RUNWARDEN_STATE_DIR` when set, otherwise
   `.runwarden` under the MCP process working directory. On retry, MCP loads
   matching approved records from `.runwarden/approvals`, attaches the approval
-  id before kernel evaluation, and persists the consumed state after allow.
-  Denied approval records do not allow the call.
+  id before kernel evaluation, and persists consumed state only after a
+  provider reports a real side effect. Denied approval records do not allow the
+  call.
 - Those `.runwarden/approvals` records and the MCP
   `.runwarden/events.jsonl` provider envelopes are legacy runtime authority
   until the planned MCP migration. They are not interchangeable with native
   SQLite approvals/events. The native journal's verified JSONL compatibility
   bytes contain one `StoryEvent` per line and do not make this legacy MCP file
   authoritative for native execution leases or recovery.
-- Allowed API and browser outcomes
-  are replay-simulated and return `event_type=provider_simulated_replay`,
-  `execution_status=simulated`, `simulated=true`, and
-  `side_effect_executed=false`. Allowed local sandbox filesystem, email,
-  memory, and knowledge providers report truthful local execution status and
-  side-effect flags after kernel policy permits them. Denied and
-  review-blocked calls always return `side_effect_executed=false`.
+- The compatibility MCP process does not yet own the native SQLite
+  lease/start/permit chain. A legacy policy `Allowed` result for an external
+  provider therefore fails closed with `isError: true`,
+  `error_kind=native_executor_required`,
+  `reason_code=durable_runtime_not_connected`,
+  `execution_status=not_executed`, and `side_effect_executed=false`. It does
+  not call filesystem, email, memory, knowledge, API, or browser code and does
+  not persist approval consumption. Denied and review-blocked calls likewise
+  remain pre-effect. `runwarden.input.inspect` remains an in-process
+  first-party inspection path.
 - Provider-call results include `obs_ref` plus a sealed `trace_event` payload
   whose `obs_id` starts with `obs_*`. Provider-call events appended to
   `.runwarden/events.jsonl` chain each `trace_event.previous_hash` to the prior

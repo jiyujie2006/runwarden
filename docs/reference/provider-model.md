@@ -30,19 +30,28 @@ poisoning, report fabrication, audit tampering, and false compliance claims.
 
 High-risk, network-active, file-writing, credential, destructive, report-claim, and artifact-writing providers require approval before trusted side effects.
 
-In contest demo runs, provider calls from scenario fixtures are evaluated by
-the Rust kernel and then executed only when allowed. API and browser providers
-remain simulated after Rust policy allows the call. The simulation result is
-still emitted as provider evidence, and `event_type=provider_simulated_replay`,
-`execution_status=simulated`, `simulated=true`, and
+Native provider execution occurs only after the Rust policy, durable lease,
+execution-start, and authenticated permit gates allow it. API and browser
+providers remain simulated at that boundary; `execution_status=simulated` and
 `side_effect_executed=false` mean no trusted external effect was performed.
+The legacy scenario and MCP adapters do not currently reach this boundary and
+therefore block external execution as described below.
 
-Local sandbox providers for filesystem, email, memory, and knowledge may
-perform bounded local side effects after Rust policy and any required approval
-allow the call. Those outcomes report `simulated=false`,
-`execution_status=completed`, and `side_effect_executed=true` only when the
-local effect actually happened. Review-blocked and denied external providers
-always report `side_effect_executed=false`.
+The native executor implements bounded local filesystem, email, memory, and
+knowledge effects after an authenticated execution permit. Filesystem output
+is byte/hash metadata, email output is an immutable receipt hash, and store
+output is a key hash plus version; sensitive plaintext is not copied into
+provider evidence. Memory and knowledge reads declare `FileRead` because their
+bounded local backing files consume the file-byte reservation. API and browser
+remain typed simulations and never open a socket. Review-blocked and denied
+operations always remain pre-effect.
+
+The compatibility MCP and CLI paths do not yet mint native permits. They now
+return `native_executor_required`, `execution_status=not_executed`, and
+`side_effect_executed=false` for external providers instead of calling a
+legacy local dispatcher. Plan 4 connects durable policy, approval, lease,
+execution-start, permit issuance, executor dispatch, and result persistence as
+one operation.
 
 Reviewable local-business evidence is kept in the scenario fixtures:
 `tool-hijack-email-api` shows email review and API denial,

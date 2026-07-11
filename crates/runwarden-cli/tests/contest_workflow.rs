@@ -453,7 +453,7 @@ fn demo_interactive_serves_console_and_healthz() {
 }
 
 #[test]
-fn demo_interactive_approval_http_to_mcp_retry_closed_loop() {
+fn demo_interactive_approval_retry_fails_closed_until_native_runtime_connects() {
     let _guard = demo_lock().lock().expect("demo lock");
     let workspace = workspace_root();
     let state_dir = workspace.join(".runwarden");
@@ -517,9 +517,11 @@ fn demo_interactive_approval_http_to_mcp_retry_closed_loop() {
 
     let second = call_mcp_tool(902, "runwarden.provider.call", arguments);
     let second_payload = mcp_tool_payload(&second);
-    assert_eq!(second["result"]["isError"], false);
+    assert_eq!(second["result"]["isError"], true);
     assert_eq!(second_payload["decision"], "allowed");
-    assert_eq!(second_payload["side_effect_executed"], true);
+    assert_eq!(second_payload["execution_status"], "not_executed");
+    assert_eq!(second_payload["error_kind"], "native_executor_required");
+    assert_eq!(second_payload["side_effect_executed"], false);
 
     let saved = fs::read_to_string(
         state_dir
@@ -527,7 +529,8 @@ fn demo_interactive_approval_http_to_mcp_retry_closed_loop() {
             .join(format!("{approval_id}.json")),
     )
     .expect("saved approval");
-    assert!(saved.contains(r#""state": "consumed""#));
+    assert!(saved.contains(r#""state": "approved""#));
+    assert!(!saved.contains(r#""state": "consumed""#));
 
     let trace = http_json(&listen_addr, "GET", "/api/trace/verify", None);
     assert_eq!(trace["provider_trace"]["verified"], true);
