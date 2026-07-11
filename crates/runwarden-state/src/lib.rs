@@ -6,7 +6,9 @@
 
 mod approvals;
 mod events;
+mod legacy_jsonl;
 mod operations;
+mod recovery;
 mod sessions;
 pub mod snapshots;
 mod store;
@@ -21,6 +23,7 @@ pub use events::{CommittedStoryEvent, NewStoryEvent};
 pub use operations::{
     CreateOperationOutcome, NewOperation, PrivateOperationMaterial, RecordPolicyInput,
 };
+pub use recovery::RecoveryCandidate;
 pub use sessions::SessionRecord;
 pub use store::{StateStore, StoreDiagnostics};
 pub use stories::{ActiveDemo, DemoActivation, StoryStatusUpdate};

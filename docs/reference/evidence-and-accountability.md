@@ -97,6 +97,13 @@ when that output variant supplies one. Full provider arguments remain only in
 private operation material and are absent from approvals, leases, events,
 frames, and errors.
 
+Crash recovery advances this same chain. Releasing an unstarted lease records
+`execution_lease_released`, or `execution_lease_expired` when its reviewed
+approval has also expired. A started execution that cannot prove a durable
+provider result records `outcome_unknown`; it claims no output or receipt and
+commits the complete reservation. Recovery candidate reads verify the entire
+story but expose only operation/version and lease identity/expiry metadata.
+
 Every approval, lease, start, and result mutation first verifies the existing
 story evidence and then advances the story event/frame chain atomically. A
 failed binding check, stale version, exhausted budget, changed active instance,
@@ -113,6 +120,10 @@ monitor-observation payloads; state-owning operation, policy, approval,
 execution, and evidence-verification payloads must accompany their dedicated
 Rust transaction. Duplicate event or observation ids conflict without opening
 a sequence gap, and timestamps cannot move the story clock backwards.
+Stores targeting the same journal coordinate full-chain append verification
+inside one process, while SQLite `BEGIN IMMEDIATE` plus a bounded pre-input
+retry remains the cross-process serialization authority. No transaction,
+event, frame, or provider side effect is retried after input consumption.
 
 Resumable `events_after` and `replay_frames` reads accept only limits from 1 to
 10,000 and return rows strictly after the supplied sequence. They verify the
@@ -125,6 +136,11 @@ These native journal events are distinct from the current legacy MCP
 `events.jsonl` and file-backed approval flow. Until runtime/MCP integration is
 complete, documentation and contest evidence must identify which source
 produced an observation rather than treating the two stores as interchangeable.
+`StateStore::export_legacy_jsonl` returns a deterministic newline-terminated
+native `StoryEvent` stream only after verifying the complete story, event, and
+frame chains in one transaction. It accepts no path and never reads private
+operation material. Despite its compatibility name, its rows are not the
+legacy MCP provider envelopes described below.
 
 Scenario replay trace payloads include the provider call arguments that led to
 the cited decision so judges can inspect the attempted target without executing

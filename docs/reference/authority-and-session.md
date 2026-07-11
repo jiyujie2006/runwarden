@@ -104,6 +104,16 @@ result and terminal event. A proven `NotExecuted` or
 reservation. Once execution has started, later session
 deactivation does not prevent truthful result persistence.
 
+Crash recovery preserves the same boundary without granting a second
+execution. An expired lease with no start event can release its retained budget
+reservation and restore its direct-policy or still-live reviewed pre-state; an
+expired reviewed approval instead expires the approval and operation together.
+Only expired `Executing` operations appear as minimal recovery candidates, and
+Runwarden never retries them automatically. If no trustworthy result can be
+reconciled, exact lease/version CAS records `OutcomeUnknown` immediately and
+conservatively commits the full reservation. This truthful recovery path does
+not require the crashed instance or session to remain active.
+
 `ApprovalView` is a typed, display-safe projection carried by a
 `SecurityOperation`. It can expose the typed approval and lease identifiers,
 state, binding digest, reviewer metadata, and expiry, but it is not itself an
@@ -118,3 +128,5 @@ path binds session/provider/action/argument/authz/actor fields and must not be
 described as having acquired a native SQLite execution lease until the runtime,
 MCP, and WebUI migration is complete. The legacy in-memory authority path
 rejects `ApprovalState::Leased` rather than treating it as an ordinary approval.
+The complete storage, recovery, and compatibility boundaries are specified in
+[Native Operation Journal](operation-journal.md).

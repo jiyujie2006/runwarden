@@ -52,6 +52,12 @@ Unknown tools, raw tools, and removed tools such as `runwarden.session.create_fr
   matching approved records from `.runwarden/approvals`, attaches the approval
   id before kernel evaluation, and persists the consumed state after allow.
   Denied approval records do not allow the call.
+- Those `.runwarden/approvals` records and the MCP
+  `.runwarden/events.jsonl` provider envelopes are legacy runtime authority
+  until the planned MCP migration. They are not interchangeable with native
+  SQLite approvals/events. The native journal's verified JSONL compatibility
+  bytes contain one `StoryEvent` per line and do not make this legacy MCP file
+  authoritative for native execution leases or recovery.
 - Allowed API and browser outcomes
   are replay-simulated and return `event_type=provider_simulated_replay`,
   `execution_status=simulated`, `simulated=true`, and

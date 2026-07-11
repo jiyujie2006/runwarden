@@ -28,6 +28,8 @@ This index is the canonical map for the contest edition.
 - [Security Risk Analysis Report](security-risk-analysis-report.md): LLM application attack analysis, red-team evidence, and Runwarden supervision prototype notes.
 - [Agent Tool Boundary](concepts/agent-tool-boundary.md): why agents receive Runwarden instead of raw tools.
 - [Authority and Session](reference/authority-and-session.md): session allowlists and approval records.
+- [Native Operation Journal](reference/operation-journal.md): SQLite ownership,
+  execution leases, crash recovery, budgets, and verified JSONL compatibility.
 - [Provider Model](reference/provider-model.md): first-party and demo/external providers.
 - [Provider Integration](reference/provider-integration.md): mediated external adapter requirements.
 - [Provider Contract](reference/provider-contract.md): manifest-derived enforcement contract.

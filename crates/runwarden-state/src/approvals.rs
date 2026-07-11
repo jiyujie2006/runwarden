@@ -282,6 +282,7 @@ struct StoredReservation {
     session_id: SessionId,
     charge: BudgetCharge,
     state: ReservationState,
+    updated_at: OffsetDateTime,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -1209,7 +1210,7 @@ fn validate_live_session_for_approval(
     Ok(())
 }
 
-fn validate_mutation_time(
+pub(crate) fn validate_mutation_time(
     current: OffsetDateTime,
     now: OffsetDateTime,
     action: &'static str,
@@ -1255,7 +1256,7 @@ fn require_approval_version(
     }
 }
 
-fn require_operation_version(
+pub(crate) fn require_operation_version(
     operation: &SecurityOperation,
     expected: u64,
 ) -> Result<(), JournalError> {
@@ -1566,6 +1567,107 @@ fn load_budget_usage_tx(
     })
 }
 
+fn validate_budget_reservation_aggregate_tx(
+    connection: &Connection,
+    budget: &StoredBudgetUsage,
+) -> Result<(), JournalError> {
+    let rows = {
+        let mut statement = connection.prepare(
+            r#"SELECT charge_json, state
+               FROM budget_reservations
+               WHERE story_id = ?1 AND session_id = ?2
+               ORDER BY lease_id"#,
+        )?;
+        statement
+            .query_map(
+                params![budget.story_id.to_string(), budget.session_id.to_string()],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )?
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    let zero = BudgetCharge {
+        calls: 0,
+        file_bytes: 0,
+        network_bytes: 0,
+    };
+    let mut reserved = zero;
+    let mut committed = zero;
+    for (charge_json, raw_state) in rows {
+        match ReservationState::parse(&raw_state)? {
+            ReservationState::Reserved => {
+                let charge: BudgetCharge =
+                    persisted_json(&charge_json, "budget reservation charge")?;
+                if canonical_json(&charge)? != charge_json {
+                    return Err(JournalError::Integrity(
+                        "budget reservation charge is not canonical".to_owned(),
+                    ));
+                }
+                checked_add_budget_charge(&mut reserved, charge, "reserved")?;
+            }
+            ReservationState::Committed => {
+                let settled: SettledBudgetCharge =
+                    persisted_json(&charge_json, "settled budget reservation charge")?;
+                if canonical_json(&settled)? != charge_json {
+                    return Err(JournalError::Integrity(
+                        "settled budget reservation charge is not canonical".to_owned(),
+                    ));
+                }
+                require_charge_within(settled.actual, settled.reserved)?;
+                checked_add_budget_charge(&mut committed, settled.actual, "committed")?;
+            }
+            ReservationState::Released => {
+                let charge: BudgetCharge =
+                    persisted_json(&charge_json, "released budget reservation charge")?;
+                if canonical_json(&charge)? != charge_json {
+                    return Err(JournalError::Integrity(
+                        "released budget reservation charge is not canonical".to_owned(),
+                    ));
+                }
+            }
+        }
+    }
+    if reserved.calls != budget.usage.calls_reserved
+        || reserved.file_bytes != budget.usage.file_bytes_reserved
+        || reserved.network_bytes != budget.usage.network_bytes_reserved
+        || committed.calls != budget.usage.calls_committed
+        || committed.file_bytes != budget.usage.file_bytes_committed
+        || committed.network_bytes != budget.usage.network_bytes_committed
+    {
+        return Err(JournalError::Integrity(
+            "budget usage counters disagree with durable reservation totals".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn verify_budget_reservation_aggregate_tx(
+    connection: &Connection,
+    session_id: SessionId,
+) -> Result<(), JournalError> {
+    let budget = load_budget_usage_tx(connection, session_id)?;
+    validate_budget_reservation_aggregate_tx(connection, &budget)
+}
+
+fn checked_add_budget_charge(
+    total: &mut BudgetCharge,
+    charge: BudgetCharge,
+    state: &'static str,
+) -> Result<(), JournalError> {
+    total.calls = total
+        .calls
+        .checked_add(charge.calls)
+        .ok_or_else(|| JournalError::Integrity(format!("{state} call budget overflowed")))?;
+    total.file_bytes = total
+        .file_bytes
+        .checked_add(charge.file_bytes)
+        .ok_or_else(|| JournalError::Integrity(format!("{state} file budget overflowed")))?;
+    total.network_bytes = total
+        .network_bytes
+        .checked_add(charge.network_bytes)
+        .ok_or_else(|| JournalError::Integrity(format!("{state} network budget overflowed")))?;
+    Ok(())
+}
+
 fn next_reserved_component(
     label: &'static str,
     reserved: u64,
@@ -1603,6 +1705,7 @@ fn reserve_budget_tx(
             "budget usage does not match the leased operation context".to_owned(),
         ));
     }
+    validate_budget_reservation_aggregate_tx(connection, &budget)?;
     if budget.usage.version != expected_version {
         return Err(JournalError::Conflict {
             entity: "budget",
@@ -1753,6 +1856,7 @@ fn load_reservation_tx(
         session_id: persisted_string(session_id, "reservation session id")?,
         charge,
         state,
+        updated_at,
     })
 }
 
@@ -1783,12 +1887,20 @@ fn settle_budget_tx(
         });
     }
     require_charge_within(actual, reservation.charge)?;
+    if now < reservation.updated_at {
+        return Err(JournalError::InvalidTransition {
+            entity: "budget_reservation_time",
+            from: format_time(reservation.updated_at)?,
+            to: format_time(now)?,
+        });
+    }
     let budget = load_budget_usage_tx(connection, reservation.session_id)?;
     if budget.story_id != reservation.story_id {
         return Err(JournalError::Integrity(
             "budget reservation story disagrees with budget usage".to_owned(),
         ));
     }
+    validate_budget_reservation_aggregate_tx(connection, &budget)?;
     let calls_reserved = budget
         .usage
         .calls_reserved
@@ -1860,13 +1972,14 @@ fn settle_budget_tx(
         r#"UPDATE budget_reservations
            SET charge_json = ?1, state = 'committed', updated_at = ?2
            WHERE lease_id = ?3 AND story_id = ?4 AND session_id = ?5
-             AND state = 'reserved'"#,
+             AND state = 'reserved' AND updated_at = ?6"#,
         params![
             settled,
             format_time(now)?,
             reservation.lease_id.to_string(),
             reservation.story_id.to_string(),
             reservation.session_id.to_string(),
+            format_time(reservation.updated_at)?,
         ],
     )?;
     if affected != 1 {
@@ -1880,7 +1993,188 @@ fn settle_budget_tx(
     Ok(())
 }
 
-fn decode_execution_lease_tx(
+/// Release an unconsumed execution reservation while retaining its durable
+/// lease identifier. Recovery is deliberately narrower than normal result
+/// settlement: no committed counter is advanced because provider execution
+/// has not started.
+pub(crate) fn release_execution_budget_tx(
+    connection: &Connection,
+    lease: &ExecutionLease,
+    now: OffsetDateTime,
+) -> Result<(), JournalError> {
+    let reservation = load_reservation_tx(connection, lease.lease_id)?;
+    if reservation.state != ReservationState::Reserved
+        || reservation.story_id != lease.story_id
+        || reservation.session_id != lease.session_id
+        || reservation.charge != lease.budget_charge
+    {
+        return Err(JournalError::Integrity(
+            "released execution lease does not match its active budget reservation".to_owned(),
+        ));
+    }
+    if now < reservation.updated_at {
+        return Err(JournalError::InvalidTransition {
+            entity: "budget_reservation_time",
+            from: format_time(reservation.updated_at)?,
+            to: format_time(now)?,
+        });
+    }
+    let budget = load_budget_usage_tx(connection, reservation.session_id)?;
+    if budget.story_id != reservation.story_id || budget.session_id != reservation.session_id {
+        return Err(JournalError::Integrity(
+            "budget reservation story disagrees with budget usage".to_owned(),
+        ));
+    }
+    validate_budget_reservation_aggregate_tx(connection, &budget)?;
+    let calls_reserved = budget
+        .usage
+        .calls_reserved
+        .checked_sub(reservation.charge.calls)
+        .ok_or_else(|| JournalError::Integrity("reserved call budget underflowed".to_owned()))?;
+    let file_bytes_reserved = budget
+        .usage
+        .file_bytes_reserved
+        .checked_sub(reservation.charge.file_bytes)
+        .ok_or_else(|| JournalError::Integrity("reserved file budget underflowed".to_owned()))?;
+    let network_bytes_reserved = budget
+        .usage
+        .network_bytes_reserved
+        .checked_sub(reservation.charge.network_bytes)
+        .ok_or_else(|| JournalError::Integrity("reserved network budget underflowed".to_owned()))?;
+    let next_version = budget
+        .usage
+        .version
+        .checked_add(1)
+        .ok_or_else(|| JournalError::Integrity("budget version overflowed u64".to_owned()))?;
+    let affected = connection.execute(
+        r#"UPDATE budget_usage
+           SET version = ?1, calls_reserved = ?2, file_bytes_reserved = ?3,
+               network_bytes_reserved = ?4
+           WHERE session_id = ?5 AND story_id = ?6 AND version = ?7"#,
+        params![
+            sqlite_u64(next_version, "budget version")?,
+            sqlite_u64(calls_reserved, "reserved calls")?,
+            sqlite_u64(file_bytes_reserved, "reserved file bytes")?,
+            sqlite_u64(network_bytes_reserved, "reserved network bytes")?,
+            reservation.session_id.to_string(),
+            reservation.story_id.to_string(),
+            sqlite_u64(budget.usage.version, "budget version")?,
+        ],
+    )?;
+    if affected != 1 {
+        let actual = load_budget_usage_tx(connection, reservation.session_id)?;
+        return Err(JournalError::Conflict {
+            entity: "budget",
+            id: reservation.session_id.to_string(),
+            expected: budget.usage.version,
+            actual: actual.usage.version,
+        });
+    }
+    let affected = connection.execute(
+        r#"UPDATE budget_reservations
+           SET state = 'released', updated_at = ?1
+           WHERE lease_id = ?2 AND story_id = ?3 AND session_id = ?4
+             AND state = 'reserved' AND updated_at = ?5"#,
+        params![
+            format_time(now)?,
+            reservation.lease_id.to_string(),
+            reservation.story_id.to_string(),
+            reservation.session_id.to_string(),
+            format_time(reservation.updated_at)?,
+        ],
+    )?;
+    if affected != 1 {
+        let current = load_reservation_tx(connection, reservation.lease_id)?;
+        return Err(JournalError::InvalidTransition {
+            entity: "budget_reservation",
+            from: current.state.as_str().to_owned(),
+            to: ReservationState::Released.as_str().to_owned(),
+        });
+    }
+    Ok(())
+}
+
+/// Conservatively account for a provider call whose durable outcome could not
+/// be recorded. Every reserved unit is treated as committed.
+pub(crate) fn commit_unknown_execution_budget_tx(
+    connection: &Connection,
+    lease: &ExecutionLease,
+    now: OffsetDateTime,
+) -> Result<(), JournalError> {
+    let reservation = load_reservation_tx(connection, lease.lease_id)?;
+    if reservation.state != ReservationState::Reserved
+        || reservation.story_id != lease.story_id
+        || reservation.session_id != lease.session_id
+        || reservation.charge != lease.budget_charge
+    {
+        return Err(JournalError::Integrity(
+            "unknown execution does not match its active budget reservation".to_owned(),
+        ));
+    }
+    settle_budget_tx(connection, reservation, reservation.charge, now)
+}
+
+/// Restore the approval half of an unstarted lease. Direct policy approvals
+/// have no row; reviewed approvals are reusable only while their original
+/// expiry remains live.
+pub(crate) fn restore_unstarted_approval_tx(
+    connection: &Connection,
+    operation: &SecurityOperation,
+    lease: &ExecutionLease,
+    now: OffsetDateTime,
+) -> Result<OperationState, JournalError> {
+    let Some(approval_id) = lease.approval_id else {
+        if load_approval_for_operation_tx(connection, operation.operation_id)?.is_some() {
+            return Err(JournalError::Integrity(
+                "direct execution lease gained an approval row".to_owned(),
+            ));
+        }
+        return Ok(OperationState::PolicyEvaluated);
+    };
+    let approval = load_approval_by_id_tx(connection, approval_id)?;
+    require_exact_approval_lease(&approval, lease, ApprovalState::Leased)?;
+    let (approval_state, operation_state) = if now >= approval.record.expires_at {
+        (ApprovalState::Expired, OperationState::Expired)
+    } else {
+        (ApprovalState::Approved, OperationState::Approved)
+    };
+    let next_version = approval
+        .record
+        .version
+        .checked_add(1)
+        .ok_or_else(|| JournalError::Integrity("approval version overflowed u64".to_owned()))?;
+    let affected = connection.execute(
+        r#"UPDATE approvals
+           SET state = ?1, lease_id = NULL, lease_owner = NULL,
+               lease_expires_at = NULL, version = ?2, updated_at = ?3
+           WHERE approval_id = ?4 AND operation_id = ?5
+             AND state = 'leased' AND version = ?6
+             AND lease_id = ?7 AND lease_owner = ?8
+             AND lease_expires_at = ?9"#,
+        params![
+            enum_text(&approval_state)?,
+            sqlite_u64(next_version, "approval version")?,
+            format_time(now)?,
+            approval_id.to_string(),
+            operation.operation_id.to_string(),
+            sqlite_u64(approval.record.version, "approval version")?,
+            lease.lease_id.to_string(),
+            lease.lease_owner.as_str(),
+            format_time(lease.expires_at)?,
+        ],
+    )?;
+    if affected != 1 {
+        return approval_lease_cas_error(
+            connection,
+            approval_id,
+            approval.record.version,
+            "restore_unstarted_lease",
+        );
+    }
+    Ok(operation_state)
+}
+
+pub(crate) fn decode_execution_lease_tx(
     connection: &Connection,
     operation: &SecurityOperation,
 ) -> Result<ExecutionLease, JournalError> {
@@ -1955,6 +2249,13 @@ fn decode_execution_lease_tx(
             "operation lease has no matching active budget reservation".to_owned(),
         ));
     }
+    let story = load_story_record(connection, operation.story_id)?;
+    if reservation.updated_at > story.updated_at {
+        return Err(JournalError::Integrity(
+            "operation reservation timestamp is ahead of the story clock".to_owned(),
+        ));
+    }
+    verify_budget_reservation_aggregate_tx(connection, operation.session_id)?;
     let stored_approval = load_approval_for_operation_tx(connection, operation.operation_id)?;
     let approval_id = match pre_lease_state {
         OperationState::PolicyEvaluated => {
@@ -2052,7 +2353,7 @@ fn require_exact_approval_lease(
     Ok(())
 }
 
-fn has_execution_started_tx(
+pub(crate) fn has_execution_started_tx(
     connection: &Connection,
     operation: &SecurityOperation,
 ) -> Result<bool, JournalError> {
@@ -2221,7 +2522,7 @@ fn validate_execution_result(input: &ExecutionResultInput) -> Result<(), Journal
     Ok(())
 }
 
-fn append_provider_event(
+pub(crate) fn append_provider_event(
     transaction: &Transaction<'_>,
     operation: &SecurityOperation,
     execution_status: &str,
@@ -2623,7 +2924,7 @@ fn operation_cas_error<T>(
     }
 }
 
-fn operation_transition_cas_error<T>(
+pub(crate) fn operation_transition_cas_error<T>(
     connection: &Connection,
     operation_id: OperationId,
     expected: u64,

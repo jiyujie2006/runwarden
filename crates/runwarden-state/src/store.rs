@@ -1,6 +1,8 @@
+use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
 use rusqlite::{Connection, ErrorCode, OpenFlags, TransactionBehavior, params};
@@ -10,6 +12,7 @@ use crate::JournalError;
 const DATABASE_NAME: &str = "runwarden.db";
 const MIGRATION_V1: &str = include_str!("../migrations/0001_story_journal.sql");
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+static APPEND_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> = OnceLock::new();
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoreDiagnostics {
@@ -81,6 +84,23 @@ impl StateStore {
 
     pub(crate) fn harden_files(&self) -> Result<(), JournalError> {
         harden_database_files(&self.state_dir)
+    }
+
+    /// Coordinate expensive full-chain append verification between stores in
+    /// this process. SQLite remains the cross-process authority; this lock
+    /// prevents same-process writers from starving one another at BEGIN
+    /// IMMEDIATE while each winner verifies the complete chain.
+    pub(crate) fn append_lock(&self) -> Result<Arc<Mutex<()>>, JournalError> {
+        let registry = APPEND_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+        let mut locks = registry.lock().map_err(|_| {
+            JournalError::Integrity("story append lock registry was poisoned".to_owned())
+        })?;
+        if let Some(lock) = locks.get(&self.state_dir).and_then(Weak::upgrade) {
+            return Ok(lock);
+        }
+        let lock = Arc::new(Mutex::new(()));
+        locks.insert(self.state_dir.clone(), Arc::downgrade(&lock));
+        Ok(lock)
     }
 }
 

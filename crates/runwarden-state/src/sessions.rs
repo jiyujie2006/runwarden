@@ -3,6 +3,7 @@ use runwarden_kernel::story::{SessionId, StoryId};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use time::OffsetDateTime;
 
+use crate::approvals::verify_budget_reservation_aggregate_tx;
 use crate::stories::{load_story_record, validate_digest, validate_nonempty};
 use crate::{
     JournalError, StateStore, canonical_json, format_time, persisted_json, persisted_string,
@@ -116,6 +117,7 @@ impl StateStore {
     ) -> Result<BudgetUsageSnapshot, JournalError> {
         let connection = self.connection()?;
         let session = load_session_record(&connection, session_id)?;
+        verify_budget_reservation_aggregate_tx(&connection, session_id)?;
         let raw: Option<RawBudgetRow> = connection
             .query_row(
                 r#"SELECT story_id, version, calls_reserved, calls_committed,

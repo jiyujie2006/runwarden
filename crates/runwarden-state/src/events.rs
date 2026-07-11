@@ -44,6 +44,10 @@ impl StateStore {
             });
         }
 
+        let append_lock = self.append_lock()?;
+        let _append_guard = append_lock.lock().map_err(|_| {
+            JournalError::Integrity("story append coordinator was poisoned".to_owned())
+        })?;
         let connection = self.connection()?;
         let transaction = begin_public_append_transaction(&connection)?;
         // Public callers may append only to a chain whose complete current
@@ -386,7 +390,7 @@ fn checked_read_limit(limit: u64) -> Result<usize, JournalError> {
 fn begin_public_append_transaction(
     connection: &Connection,
 ) -> Result<Transaction<'_>, JournalError> {
-    const MAX_BEGIN_ATTEMPTS: usize = 4;
+    const MAX_BEGIN_ATTEMPTS: usize = 12;
 
     for attempt in 0..MAX_BEGIN_ATTEMPTS {
         match Transaction::new_unchecked(connection, TransactionBehavior::Immediate) {
@@ -398,7 +402,7 @@ fn begin_public_append_transaction(
                         Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
                     ) =>
             {
-                std::thread::yield_now();
+                std::thread::sleep(std::time::Duration::from_millis(10));
             }
             Err(error) => return Err(error.into()),
         }
