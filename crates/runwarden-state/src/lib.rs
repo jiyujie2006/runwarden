@@ -4,10 +4,17 @@
 //! still compiles on other targets, but [`StateStore::open`] fails closed with
 //! [`JournalError::Permission`] there.
 
+mod events;
+mod operations;
 mod sessions;
+pub mod snapshots;
 mod store;
 mod stories;
 
+pub use events::{CommittedStoryEvent, NewStoryEvent};
+pub use operations::{
+    CreateOperationOutcome, NewOperation, PrivateOperationMaterial, RecordPolicyInput,
+};
 pub use sessions::SessionRecord;
 pub use store::{StateStore, StoreDiagnostics};
 pub use stories::{ActiveDemo, DemoActivation, StoryStatusUpdate};

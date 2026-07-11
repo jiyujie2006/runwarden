@@ -141,6 +141,13 @@ impl StateStore {
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let stored = load_story_record(&transaction, input.story_id)?;
+        if stored.story.event_count != 0 {
+            return Err(JournalError::InvalidTransition {
+                entity: "story_after_event",
+                from: stored.story.event_count.to_string(),
+                to: "unframed_status_update".to_owned(),
+            });
+        }
         if stored.version != input.expected_version {
             return Err(JournalError::Conflict {
                 entity: "story",
@@ -466,7 +473,7 @@ fn story_exists(connection: &Connection, story_id: StoryId) -> Result<bool, Jour
         .map_err(Into::into)
 }
 
-fn validate_story_contract(story: &SecurityStory) -> Result<(), JournalError> {
+pub(crate) fn validate_story_contract(story: &SecurityStory) -> Result<(), JournalError> {
     if story.schema_version != runwarden_kernel::story::SchemaVersion::current() {
         return Err(JournalError::Integrity(
             "story schema version is not the current frozen version".to_owned(),
