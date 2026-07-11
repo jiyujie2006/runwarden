@@ -11,6 +11,4 @@ ignore = true
 
 [bans]
 multiple-versions = "warn"
-skip = [
-  { crate = "wit-bindgen@0.51.0", reason = "getrandom 0.4 carries target-specific WASI preview2/preview3 transitive dependencies until upstream converges on one wit-bindgen line" },
-]
+skip = []

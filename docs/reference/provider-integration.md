@@ -72,6 +72,16 @@ binding, consumes a reviewed approval once, moves the operation to `Executing`,
 and commits `provider_execution_started`. A provider executor may be called
 only after this method returns successfully.
 
+The provider crate now contains the state-independent half of that boundary:
+`ProviderExecutionRequest`, HMAC-sealed `ExecutionPermit`, safe result and
+cleanup contracts, and the `ProviderExecutor` trait. Requests retain private
+arguments without a debug or serialization surface and carry canonical
+argument/resource, policy, provider-contract, and reserved-budget bindings.
+The process key comes from `getrandom`, is shared only by the Rust issuer and
+verifier, and is zeroized after the final handle drops. The permit API is not
+an MCP/CLI input and does not accept agent-selected authority, time, budget, or
+approval material.
+
 Result persistence then requires executing state, the exact lease identity and
 expected operation version, and a verified start event. Only coherent
 Completed or Failed provider-result/side-effect combinations are accepted.
@@ -88,4 +98,7 @@ path. `runwarden-mcp` still uses the documented file-backed approvals and
 legacy provider-call trace, and the existing demo adapters retain their stated
 simulation/local-sandbox behavior. Until the runtime migration lands, the
 presence of a SQLite approval or lease must not be presented as proof that the
-current MCP process invoked a provider through this gate.
+current MCP process invoked a provider through this gate. In particular, Task
+1 defines and tests the capability contract but does not construct permits from
+legacy `ProviderOutcome`; issuance after durable start and replay-safe executor
+dispatch land in the later runtime integration tasks.
