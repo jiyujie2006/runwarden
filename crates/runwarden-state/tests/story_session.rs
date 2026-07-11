@@ -440,6 +440,42 @@ fn session_tampering_and_duplicates_fail_without_replacement() {
 }
 
 #[test]
+fn noncanonical_story_time_and_out_of_lifetime_heartbeat_fail_closed() {
+    let temp = tempfile::tempdir().unwrap();
+    let state_dir = temp.path().join("state");
+    let store = StateStore::open(&state_dir).unwrap();
+    let story = story_fixture();
+    store.create_story(&story).unwrap();
+    store.create_session(&session_fixture(&story)).unwrap();
+    store
+        .activate_demo(&activation_fixture(&story, "time-check"))
+        .unwrap();
+
+    let connection = Connection::open(state_dir.join("runwarden.db")).unwrap();
+    connection
+        .execute(
+            "UPDATE active_instances SET heartbeat_at = ?1 WHERE singleton = 1",
+            params![format_time_for_test(story.authority.expires_at)],
+        )
+        .unwrap();
+    assert!(matches!(
+        store.active_demo(),
+        Err(JournalError::Integrity(_))
+    ));
+
+    connection
+        .execute(
+            "UPDATE stories SET created_at = ?1, updated_at = ?1 WHERE story_id = ?2",
+            params!["2026-07-11T08:00:00+08:00", story.story_id.to_string()],
+        )
+        .unwrap();
+    assert!(matches!(
+        store.story(story.story_id),
+        Err(JournalError::Integrity(_))
+    ));
+}
+
+#[test]
 fn task_two_rejects_partially_persisted_aggregates_and_duplicate_replacement() {
     let temp = tempfile::tempdir().unwrap();
     let store = StateStore::open(temp.path().join("state")).unwrap();
@@ -514,4 +550,8 @@ fn checked_versions_and_forward_only_transitions_leave_state_unchanged() {
         Err(JournalError::InvalidTransition { .. })
     ));
     assert_eq!(store.story(story.story_id).unwrap(), terminal);
+}
+
+fn format_time_for_test(value: OffsetDateTime) -> String {
+    value.format(&Rfc3339).unwrap()
 }

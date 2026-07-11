@@ -351,6 +351,11 @@ impl StateStore {
                 "stored active instance heartbeat is not normalized UTC RFC3339".to_owned(),
             ));
         }
+        if heartbeat_at >= session.record.expires_at {
+            return Err(JournalError::Integrity(
+                "stored active instance heartbeat is outside the session lifetime".to_owned(),
+            ));
+        }
 
         Ok(Some(ActiveDemo {
             instance_id: raw.instance_id,
@@ -431,6 +436,11 @@ pub(crate) fn load_story_record(
 
     let created_at = persisted_time(&raw.created_at, "story created_at")?;
     let updated_at = persisted_time(&raw.updated_at, "story updated_at")?;
+    if format_time(created_at)? != raw.created_at || format_time(updated_at)? != raw.updated_at {
+        return Err(JournalError::Integrity(
+            "stored story timestamps are not normalized UTC RFC3339".to_owned(),
+        ));
+    }
     if updated_at < created_at {
         return Err(JournalError::Integrity(
             "stored story updated_at precedes created_at".to_owned(),
