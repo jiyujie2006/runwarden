@@ -187,7 +187,17 @@ impl ProviderContract {
             evidence_contract: serde_json::json!({
                 "obs_refs_required": true,
                 "downstream_identity": manifest.downstream_identity,
-                "tool_identity": manifest.tool_identity
+                "tool_identity": manifest.tool_identity,
+                "adapter_manifest": {
+                    "schema_version": manifest.schema_version,
+                    "transport": manifest.transport,
+                    "declared_permissions": manifest.declared_permissions,
+                    "allowed_origins": manifest.allowed_origins,
+                    "command_allowlist": manifest.command_allowlist,
+                    "working_root": manifest.working_root,
+                    "schema_pin_algorithm": manifest.schema_pin.algorithm,
+                    "schema_pin_digest": manifest.schema_pin.digest
+                }
             }),
             authority_requirements: Value::Object(Default::default()),
         };

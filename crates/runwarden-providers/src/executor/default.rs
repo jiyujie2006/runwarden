@@ -11,8 +11,12 @@ use runwarden_kernel::resource::{DataClass, FileAccess, MemoryAccess, ResourceCl
 use runwarden_kernel::session::BudgetCharge;
 use runwarden_kernel::story::{OperationId, SessionId, StoryId};
 use runwarden_kernel::trace::Sha256Digest;
+use runwarden_kernel::{ProviderContract, ProviderManifest};
 use time::OffsetDateTime;
 
+use crate::adapters::{
+    ExternalMcpRuntime, execute_mediated_external_mcp_adapter, validate_registration,
+};
 use crate::catalog::full_provider_registry;
 use crate::demo_tools::{
     EmailReconciliation, StoreClass, ToolError, ToolExecution, ToolExecutionState,
@@ -273,6 +277,7 @@ fn operation_registry() -> &'static Mutex<OperationRegistry> {
 pub struct DefaultProviderExecutor {
     config: ExecutorConfig,
     catalog: ProviderRegistry,
+    external_mcp_manifests: BTreeMap<String, ProviderManifest>,
 }
 
 impl DefaultProviderExecutor {
@@ -280,8 +285,58 @@ impl DefaultProviderExecutor {
         Self {
             config,
             catalog: full_provider_registry(),
+            external_mcp_manifests: BTreeMap::new(),
         }
     }
+
+    pub fn with_external_mcp(
+        mut self,
+        manifest: ProviderManifest,
+    ) -> Result<Self, ExternalMcpRegistrationError> {
+        let Some(canonical_provider) = self.catalog.get(&manifest.provider_id) else {
+            return Err(ExternalMcpRegistrationError::ProviderUnavailable);
+        };
+        if ProviderContract::from_manifest(&manifest).provider != *canonical_provider {
+            return Err(ExternalMcpRegistrationError::ProviderContractMismatch);
+        }
+        validate_registration(
+            &manifest,
+            canonical_provider,
+            &self.config.trusted_runtime_root,
+        )
+        .map_err(|reason| match reason {
+            "unsafe_stdio_egress" => ExternalMcpRegistrationError::UnsafeStdioEgress,
+            "stdio_isolation_unavailable" | "network_adapter_not_enabled" => {
+                ExternalMcpRegistrationError::IsolationUnavailable
+            }
+            "provider_contract_mismatch" => ExternalMcpRegistrationError::ProviderContractMismatch,
+            _ => ExternalMcpRegistrationError::ManifestInvalid,
+        })?;
+        if self
+            .external_mcp_manifests
+            .insert(manifest.provider_id.clone(), manifest)
+            .is_some()
+        {
+            return Err(ExternalMcpRegistrationError::DuplicateProvider);
+        }
+        Ok(self)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum ExternalMcpRegistrationError {
+    #[error("external MCP provider is not present in the canonical catalog")]
+    ProviderUnavailable,
+    #[error("external MCP manifest does not match the canonical provider contract")]
+    ProviderContractMismatch,
+    #[error("network-capable stdio adapters cannot be registered without network isolation")]
+    UnsafeStdioEgress,
+    #[error("external MCP adapter isolation is unavailable")]
+    IsolationUnavailable,
+    #[error("external MCP manifest or trusted runtime executable is invalid")]
+    ManifestInvalid,
+    #[error("external MCP provider is already registered on this executor")]
+    DuplicateProvider,
 }
 
 impl ProviderExecutor for DefaultProviderExecutor {
@@ -390,9 +445,22 @@ impl ProviderExecutor for DefaultProviderExecutor {
             return blocked("executor_state_unavailable", "operation_registry_full");
         }
 
-        let outcome = match dispatch_tool(&self.config, request, now) {
-            Ok(execution) => outcome_from_tool_execution(request, execution),
-            Err(error) => outcome_from_tool_error(request.budget_charge, error),
+        let outcome = if let Some(manifest) = self.external_mcp_manifests.get(&request.provider) {
+            let runtime = ExternalMcpRuntime {
+                permit_verifier: &self.config.permit_verifier,
+                canonical_provider,
+                trusted_runtime_root: &self.config.trusted_runtime_root,
+                now,
+            };
+            ProviderExecutionOutcome {
+                result: execute_mediated_external_mcp_adapter(manifest, permit, request, &runtime),
+                cleanup: None,
+            }
+        } else {
+            match dispatch_tool(&self.config, request, now) {
+                Ok(execution) => outcome_from_tool_execution(request, execution),
+                Err(error) => outcome_from_tool_error(request.budget_charge, error),
+            }
         };
         if matches!(
             outcome.result.execution_status(),

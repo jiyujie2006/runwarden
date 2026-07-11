@@ -46,6 +46,19 @@ bounded local backing files consume the file-byte reservation. API and browser
 remain typed simulations and never open a socket. Review-blocked and denied
 operations always remain pre-effect.
 
+At trusted executor construction time, an operator may offer an exact
+catalogued external MCP manifest to the consuming registration API.
+Registration is not agent-controlled and cannot add a provider: the complete
+manifest-derived contract must equal the Rust catalog contract, and the
+execution permit binds transport, permissions, origin allowlist, command
+allowlist, working root, and schema pin as well as
+provider/action/arguments/claim/budget. In the current build, registration
+then fails closed for every transport. File-only stdio reports
+`stdio_isolation_unavailable`; network-capable stdio is rejected; HTTP/SSE are
+not enabled. This preserves the single executor boundary without granting a
+compromised downstream process ambient Runwarden privileges. API and browser
+calls remain non-networking simulations.
+
 The compatibility MCP and CLI paths do not yet mint native permits. They now
 return `native_executor_required`, `execution_status=not_executed`, and
 `side_effect_executed=false` for external providers instead of calling a

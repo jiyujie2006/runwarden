@@ -22,14 +22,37 @@ External capabilities are integrated as Runwarden providers, never exposed direc
 ## MCP Adapters
 
 MCP adapters support `stdio`, `http`, and `sse` contracts. Adapter execution is
-valid only through `execute_mediated_external_mcp_adapter` after a kernel
-`Allowed` provider outcome for the same manifest provider. Denied or
-review-blocked outcomes return `execution_status=not_executed` and
-`side_effect_executed=false` before adapter validation or transport execution.
-Stdio adapters require a trusted runtime root, exact command allowlisting, no
-shell-capable command, no request-supplied command arguments, bounded output,
-and process-tree cleanup. HTTP/SSE adapters deny hostname resolutions to
-private or local addresses before connecting.
+valid only through `DefaultProviderExecutor` with the exact frozen
+`ExecutionPermit` and `ProviderExecutionRequest`. The transport function is
+crate-private; neither CLI, MCP, manifest-certification code, nor another crate
+can call it. The executor accepts a manifest only through consuming
+registration, only for a provider already present in the Rust catalog, and
+only when all execution-relevant manifest fields equal the canonical provider
+contract. A policy outcome, approval row, or parsed manifest is not an
+executable capability.
+
+The unique adapter function validates a permit before transport work, but the
+current contest build deliberately admits no external MCP manifest. Denied,
+expired, foreign, or substituted capabilities therefore cannot reach a
+transport, and a parsed or certified manifest is never sufficient to spawn.
+
+Stdio static admission checks require one bare command equal to the downstream
+identity, `working_root="."`, and an executable non-symlink file directly
+beneath the pinned trusted runtime root. Network- or credential-capable stdio
+is rejected first. A file-only stdio manifest then fails with
+`stdio_isolation_unavailable`: a fixed command, cleared environment, cwd,
+timeout, bounded output, and process-group kill do not confine a compromised
+child's filesystem, syscalls, daemonized descendants, or undeclared egress.
+There is no compatibility spawn path. Mandatory namespace/Landlock/seccomp and
+resource-owner integration is deferred to the certified Linux sandbox phase.
+
+HTTP and SSE likewise return `network_adapter_not_enabled` after static shape
+validation. The quarantined code accepts no request-selected transport,
+headers, command, or runtime controls, but it is not described as protocol
+support: a complete implementation still needs a server-owned endpoint,
+strict request/response correlation, a single wall-clock deadline, complete
+special-address rejection, and TLS before network activation. No current
+catalog entry can register these transports.
 
 Local filesystem reads canonicalize the requested file when it exists and
 confirm the target remains under the sandbox root before reading. Writes may
@@ -39,10 +62,13 @@ outside the root are denied before any side effect is reported.
 
 The native executor does not invoke trusted downstream network adapters for
 the contest API and browser providers; those ids return typed simulated
-outcomes. Native local filesystem, email, memory, and knowledge providers use
-the same Rust-owned catalog and typed-claim contract, then perform only bounded
-local sandbox effects after the permit gate. The compatibility demo/MCP paths
-remain disconnected from that executor and fail closed until Plan 4.
+outcomes. The catalog's network-capable stdio browser manifest is explicitly
+rejected at registration. Native local filesystem, email, memory, and
+knowledge providers use the same Rust-owned catalog and typed-claim contract,
+then perform only bounded local sandbox effects after the permit gate. The
+external registration API cannot replace those implementations until its
+mandatory isolation is installed. The compatibility demo/MCP paths remain
+disconnected from that executor and fail closed until Plan 4.
 
 ## Native SQLite Execution Gate
 

@@ -1033,6 +1033,7 @@ fn production_crates_cannot_call_legacy_or_demo_tool_execution_bypasses() {
     let provider_manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let crates_root = provider_manifest.parent().expect("workspace crates root");
     let mut violations = Vec::new();
+    let adapter_entrypoint = "execute_mediated_external_mcp_adapter";
 
     for crate_entry in fs::read_dir(crates_root).unwrap() {
         let crate_path = crate_entry.unwrap().path();
@@ -1051,6 +1052,7 @@ fn production_crates_cannot_call_legacy_or_demo_tool_execution_bypasses() {
                 "execute_external_tool(",
                 "tools::execute_external_tool",
                 "demo_tools::execute",
+                adapter_entrypoint,
             ] {
                 if source.contains(forbidden) {
                     violations.push(format!("{} names {forbidden}", source_path.display()));
@@ -1062,6 +1064,38 @@ fn production_crates_cannot_call_legacy_or_demo_tool_execution_bypasses() {
     let provider_source = include_str!("../src/lib.rs");
     if provider_source.contains("pub fn execute_external_tool") {
         violations.push("runwarden-providers still publicly exports execute_external_tool".into());
+    }
+    let default_executor = include_str!("../src/executor/default.rs");
+    if !default_executor.contains(adapter_entrypoint) {
+        violations
+            .push("DefaultProviderExecutor does not own external MCP adapter dispatch".into());
+    }
+    let provider_source_root = provider_manifest.join("src");
+    let adapter_definition = provider_source_root.join("adapters/mod.rs");
+    let default_executor_path = provider_source_root.join("executor/default.rs");
+    let mut provider_sources = Vec::new();
+    collect_rust_sources(&provider_source_root, &mut provider_sources);
+    for source_path in provider_sources {
+        let source = fs::read_to_string(&source_path).unwrap();
+        if source.contains("pub fn execute_mediated_external_mcp_adapter") {
+            violations.push(format!(
+                "{} publicly exports the external MCP adapter entrypoint",
+                source_path.display()
+            ));
+        }
+        if !source.contains(adapter_entrypoint) {
+            continue;
+        }
+        if source_path == adapter_definition {
+            if !source.contains("pub(crate) fn execute_mediated_external_mcp_adapter") {
+                violations.push("external MCP adapter entrypoint is not crate-private".into());
+            }
+        } else if source_path != default_executor_path {
+            violations.push(format!(
+                "{} names the crate-private adapter entrypoint outside DefaultProviderExecutor",
+                source_path.display()
+            ));
+        }
     }
     assert!(
         violations.is_empty(),

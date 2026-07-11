@@ -1,6 +1,12 @@
 # Provider Contract
 
-Provider contracts bind provider identity, schema pins, observed schema digest, declared risk, side effects, and enforcement requirements.
+Provider contracts bind provider identity, schema pins, observed schema digest,
+declared risk, side effects, and enforcement requirements. For an external
+adapter, the canonical contract also commits the manifest schema version,
+transport, declared permissions, allowed origins, exact command allowlist,
+working root, and schema-pin algorithm and digest. Changing any of that
+execution material changes the provider-contract hash and invalidates both
+registration and an already-issued execution permit.
 
 Contracts require:
 
@@ -12,7 +18,9 @@ Contracts require:
 - approval gates when risk or side effects require them
 - `side_effect_executed=false` for denied or review-blocked calls
 
-External MCP contracts bind execution to the manifest transport. Request transport overrides are denied unless they match exactly.
+External MCP contracts bind execution to the manifest transport. There is no
+request transport, command, argument-vector, working-directory, environment,
+header, timeout, or output-limit override surface.
 
 ## Authenticated extraction binding
 
@@ -97,6 +105,36 @@ completed or uncertain tombstones do not expire with the permit. Exact replay
 returns the cached redacted result without repeating an effect, while a changed
 binding or a second physical root fails closed. This is process-local defense
 in depth; the SQLite lease and operation journal remain the durable owner.
+
+External MCP manifests can be offered only through the consuming
+`DefaultProviderExecutor::with_external_mcp` registration method. Admission
+first requires a provider already present in the Rust catalog and exact
+equality with its manifest-derived canonical contract. The only transport
+entry point is crate-private and is named only by the default executor; public
+manifest loading and certification cannot execute an adapter. If a transport
+is admitted in a future release, the adapter must revalidate the exact permit
+before inspecting transport configuration or performing filesystem, DNS,
+socket, or process work, and the executor operation registry remains the
+replay owner.
+
+No external MCP transport is admitted in the current contest build. The stdio
+validator still requires one bare downstream command equal to the downstream
+identity, `working_root="."`, an executable non-symlink file directly under
+the pinned trusted runtime root, and no declared network or credential
+capability. It then returns `stdio_isolation_unavailable`: path trust,
+environment scrubbing, a fixed cwd, output limits, and process-group cleanup
+cannot enforce scoped-root and egress policy against a compromised downstream
+process. Re-enabling stdio requires mandatory namespaces, filesystem and
+syscall confinement, resource ownership that covers daemonization, and
+deadline-safe output collection; there is no unsandboxed fallback.
+
+HTTP and legacy SSE are also explicitly quarantined. Static validation accepts
+only canonical public plaintext-HTTP origin shapes and forbids process
+controls, but registration returns `network_adapter_not_enabled`. Activation
+requires a server-owned endpoint distinct from business arguments, complete
+MCP response correlation/state handling, one absolute DNS/connect/read
+deadline, TLS for HTTPS, and deny-by-default special-address handling. A future
+catalog entry cannot accidentally activate the current placeholders.
 
 `MonitorOnlyObserver` is a separate stateless unit type, not an executor. It
 holds no permit, verifier, approval, lease, filesystem, process, network, or

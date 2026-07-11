@@ -69,6 +69,11 @@ Unknown tools, raw tools, and removed tools such as `runwarden.session.create_fr
   not persist approval consumption. Denied and review-blocked calls likewise
   remain pre-effect. `runwarden.input.inspect` remains an in-process
   first-party inspection path.
+- `runwarden-mcp` does not construct or register the native executor's
+  crate-private downstream MCP adapters. Independently, the current native
+  adapter registration layer quarantines stdio until mandatory OS isolation
+  exists and leaves HTTP/SSE disabled. Agent-facing MCP therefore cannot turn
+  a manifest or approval into a downstream process or socket.
 - Provider-call results include `obs_ref` plus a sealed `trace_event` payload
   whose `obs_id` starts with `obs_*`. Provider-call events appended to
   `.runwarden/events.jsonl` chain each `trace_event.previous_hash` to the prior

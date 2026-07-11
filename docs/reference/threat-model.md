@@ -32,5 +32,10 @@ Runwarden mitigates these through:
 - relative output path enforcement for demo, report, and UI files
 
 External MCP HTTP/SSE adapters deny private or local IP literals and
-resolutions before connecting so downstream tool endpoints cannot be used for
-loopback or metadata-service egress.
+special-use origin shapes during static validation. They are not network-active
+in the current build: registration returns `network_adapter_not_enabled`.
+Stdio is also quarantined with `stdio_isolation_unavailable` because a trusted
+path, scrubbed environment, cwd, timeout, and process-group cleanup cannot
+confine a compromised downstream tool. There is no unsandboxed fallback;
+activation requires the mandatory Linux isolation and resource ownership
+described by the sandbox plan.

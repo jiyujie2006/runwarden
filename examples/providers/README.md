@@ -6,7 +6,10 @@ can be used behind the Runwarden boundary.
 
 ## Checked-In Examples
 
-- `external.mcp.browser.open_page.json`: external MCP browser tool manifest.
+- `external.mcp.browser.open_page.json`: exact catalog browser manifest used as
+  a fail-closed example. Its network-capable stdio transport is intentionally
+  rejected because the current build has no mandatory child-process egress
+  sandbox.
 - `kernel.toml`: example kernel/provider catalog configuration.
 
 Validate provider behavior through the active contest checks:

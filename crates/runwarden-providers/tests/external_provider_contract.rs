@@ -1,937 +1,215 @@
-use std::{
-    fs,
-    path::Path,
-    sync::{Mutex, OnceLock},
-};
-
 use runwarden_kernel::{
-    PolicyDecision, ProviderCall, ProviderClass, ProviderKind, ProviderManifest, ProviderOutcome,
-    ProviderRisk, ProviderSchemaPin, SideEffectKind,
+    ProviderClass, ProviderKind, ProviderManifest, ProviderRisk, ProviderSchemaPin, SideEffectKind,
 };
-use runwarden_providers::external::{
-    ExternalMcpAdapterRequest, certify_external_provider_manifest,
-    execute_mediated_external_mcp_adapter, load_provider_manifest,
-};
-use tempfile::tempdir;
+use runwarden_providers::catalog::default_external_provider_manifest;
+use runwarden_providers::external::{certify_external_provider_manifest, load_provider_manifest};
 
-fn json_string(value: impl AsRef<str>) -> String {
-    serde_json::to_string(value.as_ref()).expect("json string")
-}
-
-fn json_path(path: &Path) -> String {
-    json_string(path.to_string_lossy())
-}
-
-fn execute_adapter(
-    manifest: &ProviderManifest,
-    request: &ExternalMcpAdapterRequest,
-    runtime_root: Option<&Path>,
-) -> serde_json::Value {
-    static ADAPTER_EXECUTION_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    let _guard = ADAPTER_EXECUTION_LOCK
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .expect("adapter execution lock");
-    let outcome = provider_outcome(manifest, PolicyDecision::Allowed);
-    execute_mediated_external_mcp_adapter(&outcome, manifest, request, runtime_root)
-}
-
-fn provider_outcome(manifest: &ProviderManifest, decision: PolicyDecision) -> ProviderOutcome {
-    let call = ProviderCall {
-        session_id: "session-test".to_string(),
-        provider: manifest.provider_id.clone(),
-        action: manifest
-            .tool_identity
-            .clone()
-            .unwrap_or_else(|| "call".to_string()),
-        arguments: serde_json::json!({}),
-        actor_id: Some("agent-test".to_string()),
-        authz_id: Some("authz-test".to_string()),
-        approval_id: None,
-    };
-    ProviderOutcome::before_side_effect(decision, &call, "test", "test outcome", None)
-}
-
-fn stdio_manifest(working_root: &Path, command_allowlist: &[&str]) -> ProviderManifest {
-    let schema = serde_json::json!({"type": "object"});
+fn base_manifest() -> ProviderManifest {
+    let schema = serde_json::json!({"type":"object"});
     ProviderManifest {
-        schema_version: "1".to_string(),
-        provider_id: "external.mcp.browser.open_page".to_string(),
+        schema_version: "1".to_owned(),
+        provider_id: "external.mcp.fixture.call".to_owned(),
         provider_class: ProviderClass::External,
         kind: ProviderKind::Mcp,
         risk: ProviderRisk::High,
-        side_effects: vec![SideEffectKind::ProcessSpawn],
-        transport: Some("stdio".to_string()),
-        downstream_identity: Some("browser-mcp".to_string()),
-        tool_identity: Some("open_page".to_string()),
-        declared_permissions: vec!["process_spawn".to_string()],
+        side_effects: vec![SideEffectKind::FileRead, SideEffectKind::ProcessSpawn],
+        transport: Some("stdio".to_owned()),
+        downstream_identity: Some("fixture-mcp".to_owned()),
+        tool_identity: Some("call".to_owned()),
+        declared_permissions: vec!["file_read".to_owned(), "process_spawn".to_owned()],
         allowed_origins: Vec::new(),
-        command_allowlist: command_allowlist
-            .iter()
-            .map(|value| value.to_string())
-            .collect(),
-        working_root: Some(working_root.to_string_lossy().to_string()),
+        command_allowlist: vec!["fixture-mcp".to_owned()],
+        working_root: Some(".".to_owned()),
         schema_pin: ProviderSchemaPin::new(schema.clone()),
         observed_schema: schema,
     }
 }
 
-#[cfg(unix)]
-fn write_executable_script(path: &Path, content: &str) {
-    use std::os::unix::fs::PermissionsExt;
+#[test]
+fn external_mcp_manifest_certifies_identity_permissions_and_schema_pin() {
+    let manifest = base_manifest();
+    let report = certify_external_provider_manifest(&manifest);
 
-    fs::write(path, content).expect("write script");
-    let mut permissions = fs::metadata(path).expect("metadata").permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(path, permissions).expect("chmod");
+    assert!(report.passed, "{:?}", report.findings);
+    assert!(report.findings.is_empty());
+    assert_eq!(report.contract.provider.id, manifest.provider_id);
+    assert_eq!(
+        report.contract.provider.evidence_contract["adapter_manifest"]["transport"],
+        "stdio"
+    );
+    assert!(!report.side_effect_executed);
 }
 
 #[test]
-fn external_mcp_manifest_certifies_identity_permissions_and_schema_pin() {
-    let manifest = load_provider_manifest(
-        r#"{
-          "schema_version": "1",
-          "provider_id": "external.mcp.browser.open_page",
-          "provider_class": "external",
-          "kind": "mcp",
-          "risk": "network_active",
-          "side_effects": ["network"],
-          "transport": "http",
-          "downstream_identity": "browser-mcp",
-          "tool_identity": "open_page",
-          "declared_permissions": ["network"],
-          "allowed_origins": ["https://example.com"],
-          "schema_pin": {
-            "algorithm": "sha256",
-            "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-            "schema": {"type": "object"}
-          },
-          "observed_schema": {"type": "object"}
-        }"#,
-    )
-    .expect("manifest parses");
+fn manifest_loader_rejects_unknown_or_malformed_contract_data() {
+    let encoded = serde_json::to_string(&base_manifest()).unwrap();
+    let loaded = load_provider_manifest(&encoded).expect("canonical manifest parses");
+    assert_eq!(loaded.provider_id, "external.mcp.fixture.call");
+    assert!(load_provider_manifest("{not-json").is_err());
+}
 
-    assert_eq!(manifest.kind, ProviderKind::Mcp);
-    assert_eq!(manifest.risk, ProviderRisk::NetworkActive);
+#[test]
+fn checked_in_browser_manifest_matches_catalog_and_documents_fail_closed_egress() {
+    let checked_in = load_provider_manifest(include_str!(
+        "../../../examples/providers/external.mcp.browser.open_page.json"
+    ))
+    .unwrap();
+    let canonical = default_external_provider_manifest("external.mcp.browser.open_page").unwrap();
 
-    let report = certify_external_provider_manifest(&manifest);
-
-    assert!(report.passed, "{report:?}");
-    assert!(report.findings.is_empty());
-    assert_eq!(
-        report.contract.provider.id,
-        "external.mcp.browser.open_page"
+    assert_eq!(checked_in, canonical);
+    let report = certify_external_provider_manifest(&checked_in);
+    assert!(!report.passed);
+    assert!(
+        report
+            .findings
+            .contains(&"stdio_egress_controls_unsupported".to_owned())
     );
-    assert!(!report.side_effect_executed);
 }
 
 #[test]
 fn external_mcp_stdio_manifest_requires_command_allowlist_and_working_root() {
-    let manifest = load_provider_manifest(
-        r#"{
-          "schema_version": "1",
-          "provider_id": "external.mcp.browser.open_page",
-          "provider_class": "external",
-          "kind": "mcp",
-          "risk": "high",
-          "side_effects": ["process_spawn"],
-          "transport": "stdio",
-          "downstream_identity": "browser-mcp",
-          "tool_identity": "open_page",
-          "declared_permissions": ["process_spawn"],
-          "allowed_origins": [],
-          "schema_pin": {
-            "algorithm": "sha256",
-            "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-            "schema": {"type": "object"}
-          },
-          "observed_schema": {"type": "object"}
-        }"#,
-    )
-    .expect("manifest parses");
+    let mut manifest = base_manifest();
+    manifest.command_allowlist.clear();
+    manifest.working_root = None;
 
     let report = certify_external_provider_manifest(&manifest);
-
     assert!(!report.passed);
     assert!(
         report
             .findings
-            .iter()
-            .any(|finding| finding == "stdio_command_allowlist_required")
+            .contains(&"stdio_exact_command_required".to_owned())
     );
     assert!(
         report
             .findings
-            .iter()
-            .any(|finding| finding == "stdio_working_root_required")
-    );
-    assert!(!report.side_effect_executed);
-}
-
-#[test]
-fn external_mcp_stdio_manifest_rejects_network_egress_requirements() {
-    let manifest = load_provider_manifest(
-        r#"{
-          "schema_version": "1",
-          "provider_id": "external.mcp.browser.open_page",
-          "provider_class": "external",
-          "kind": "mcp",
-          "risk": "network_active",
-          "side_effects": ["network"],
-          "transport": "stdio",
-          "downstream_identity": "browser-mcp",
-          "tool_identity": "open_page",
-          "declared_permissions": ["network"],
-          "allowed_origins": ["https://example.com"],
-          "command_allowlist": ["browser-mcp"],
-          "working_root": ".",
-          "schema_pin": {
-            "algorithm": "sha256",
-            "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-            "schema": {"type": "object"}
-          },
-          "observed_schema": {"type": "object"}
-        }"#,
-    )
-    .expect("manifest parses");
-
-    let report = certify_external_provider_manifest(&manifest);
-
-    assert!(!report.passed);
-    assert!(
-        report
-            .findings
-            .iter()
-            .any(|finding| finding == "stdio_egress_controls_unsupported")
+            .contains(&"stdio_working_root_invalid".to_owned())
     );
 }
 
 #[test]
-fn external_mcp_https_transport_is_not_certified_without_trusted_adapter() {
-    let manifest = load_provider_manifest(
-        r#"{
-          "schema_version": "1",
-          "provider_id": "external.mcp.browser.open_page",
-          "provider_class": "external",
-          "kind": "mcp",
-          "risk": "network_active",
-          "side_effects": ["network"],
-          "transport": "https",
-          "downstream_identity": "browser-mcp",
-          "tool_identity": "open_page",
-          "declared_permissions": ["network"],
-          "allowed_origins": ["https://example.com"],
-          "schema_pin": {
-            "algorithm": "sha256",
-            "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-            "schema": {"type": "object"}
-          },
-          "observed_schema": {"type": "object"}
-        }"#,
-    )
-    .expect("manifest parses");
+fn external_mcp_stdio_manifest_requires_exact_non_shell_identity_and_spawn_declaration() {
+    let mut shell = base_manifest();
+    shell.command_allowlist = vec!["sh".to_owned()];
+    shell.downstream_identity = Some("sh".to_owned());
+    let mut multiple = base_manifest();
+    multiple.command_allowlist.push("second-mcp".to_owned());
+    let mut undeclared = base_manifest();
+    undeclared
+        .side_effects
+        .retain(|effect| *effect != SideEffectKind::ProcessSpawn);
+    undeclared
+        .declared_permissions
+        .retain(|permission| permission != "process_spawn");
 
-    let report = certify_external_provider_manifest(&manifest);
-
-    assert!(!report.passed);
-    assert!(
-        report
-            .findings
-            .iter()
-            .any(|finding| finding == "mcp_transport_required")
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn external_mcp_stdio_adapter_executes_framed_downstream_call() {
-    let dir = tempdir().expect("tempdir");
-    let manifest = stdio_manifest(dir.path(), &["cat"]);
-    let request = ExternalMcpAdapterRequest {
-        transport: Some("stdio".to_string()),
-        command: Some("cat".to_string()),
-        cwd: Some(dir.path().to_path_buf()),
-        request: serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "open_page",
-            "params": {"url": "https://example.com"}
-        }),
-        ..ExternalMcpAdapterRequest::default()
-    };
-
-    let result = execute_adapter(&manifest, &request, Some(dir.path()));
-
-    assert_eq!(result["decision"], "allowed");
-    assert_eq!(result["execution_status"], "completed");
-    assert_eq!(result["side_effect_executed"], true);
-    assert_eq!(result["transport"], "stdio");
-    assert!(
-        result["stdout"]
-            .as_str()
-            .expect("stdout string")
-            .contains("Content-Length:")
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn mediated_external_mcp_adapter_refuses_denied_kernel_outcome() {
-    let dir = tempdir().expect("tempdir");
-    let manifest = stdio_manifest(dir.path(), &["cat"]);
-    let request = ExternalMcpAdapterRequest {
-        transport: Some("stdio".to_string()),
-        command: Some("cat".to_string()),
-        cwd: Some(dir.path().to_path_buf()),
-        request: serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "open_page"}),
-        ..ExternalMcpAdapterRequest::default()
-    };
-    let outcome = provider_outcome(&manifest, PolicyDecision::Denied);
-
-    let result =
-        execute_mediated_external_mcp_adapter(&outcome, &manifest, &request, Some(dir.path()));
-
-    assert_eq!(result["decision"], "denied");
-    assert_eq!(result["execution_status"], "not_executed");
-    assert_eq!(result["side_effect_executed"], false);
-}
-
-#[test]
-fn external_mcp_request_transport_must_match_manifest() {
-    let dir = tempdir().expect("tempdir");
-    let manifest = stdio_manifest(dir.path(), &["cat"]);
-    let request = ExternalMcpAdapterRequest {
-        transport: Some("http".to_string()),
-        command: Some("cat".to_string()),
-        cwd: Some(dir.path().to_path_buf()),
-        url: Some("http://127.0.0.1:9/mcp".to_string()),
-        request: serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "open_page"}),
-        ..ExternalMcpAdapterRequest::default()
-    };
-
-    let result = execute_adapter(&manifest, &request, Some(dir.path()));
-
-    assert_eq!(result["decision"], "denied");
-    assert_eq!(result["execution_status"], "not_executed");
-    assert_eq!(result["error_kind"], "provider_not_allowed");
-    assert_eq!(result["side_effect_executed"], false);
-}
-
-#[test]
-fn external_mcp_manifest_transport_required_for_execution() {
-    let dir = tempdir().expect("tempdir");
-    let working_root = json_path(dir.path());
-    let manifest = load_provider_manifest(&format!(
-        r#"{{
-          "schema_version": "1",
-          "provider_id": "external.mcp.browser.open_page",
-          "provider_class": "external",
-          "kind": "mcp",
-          "risk": "high",
-          "side_effects": ["process_spawn"],
-          "downstream_identity": "browser-mcp",
-          "tool_identity": "open_page",
-          "declared_permissions": ["process_spawn"],
-          "allowed_origins": [],
-          "command_allowlist": ["cat"],
-          "working_root": {},
-          "schema_pin": {{
-            "algorithm": "sha256",
-            "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-            "schema": {{"type": "object"}}
-          }},
-          "observed_schema": {{"type": "object"}}
-        }}"#,
-        working_root
-    ))
-    .expect("manifest parses");
-    let request = ExternalMcpAdapterRequest {
-        command: Some("cat".to_string()),
-        cwd: Some(dir.path().to_path_buf()),
-        request: serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "open_page"}),
-        ..ExternalMcpAdapterRequest::default()
-    };
-
-    let result = execute_adapter(&manifest, &request, Some(dir.path()));
-
-    assert_eq!(result["decision"], "denied");
-    assert_eq!(result["execution_status"], "not_executed");
-    assert_eq!(result["error_kind"], "provider_not_allowed");
-    assert_eq!(result["side_effect_executed"], false);
-}
-
-#[test]
-fn external_mcp_stdio_rejects_request_args_before_spawn() {
-    let dir = tempdir().expect("tempdir");
-    let runtime_root = dir.path().join("runtime");
-    fs::create_dir(&runtime_root).expect("runtime root");
-    fs::write(dir.path().join("outside-secret.txt"), "outside secret").expect("outside secret");
-    let manifest = stdio_manifest(&runtime_root, &["cat"]);
-    let request = ExternalMcpAdapterRequest {
-        transport: Some("stdio".to_string()),
-        command: Some("cat".to_string()),
-        args: vec!["--config=/etc/passwd".to_string()],
-        cwd: Some(runtime_root.clone()),
-        request: serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "open_page"}),
-        ..ExternalMcpAdapterRequest::default()
-    };
-
-    let result = execute_adapter(&manifest, &request, Some(&runtime_root));
-
-    assert_eq!(result["decision"], "denied");
-    assert_eq!(result["execution_status"], "not_executed");
-    assert_eq!(result["error_kind"], "provider_not_allowed");
-    assert!(
-        result["reason"]
-            .as_str()
-            .expect("reason")
-            .contains("request-supplied command arguments")
-    );
-    assert_eq!(result["side_effect_executed"], false);
-    assert!(
-        !result
-            .get("stdout")
-            .and_then(|value| value.as_str())
-            .unwrap_or_default()
-            .contains("outside secret")
-    );
-}
-
-#[test]
-fn external_mcp_stdio_adapter_requires_trusted_runtime_root() {
-    let dir = tempdir().expect("tempdir");
-    let manifest = load_provider_manifest(
-        r#"{
-          "schema_version": "1",
-          "provider_id": "external.mcp.browser.open_page",
-          "provider_class": "external",
-          "kind": "mcp",
-          "risk": "high",
-          "side_effects": ["process_spawn"],
-          "transport": "stdio",
-          "downstream_identity": "browser-mcp",
-          "tool_identity": "open_page",
-          "declared_permissions": ["process_spawn"],
-          "allowed_origins": [],
-          "command_allowlist": ["cat"],
-          "working_root": null,
-          "schema_pin": {
-            "algorithm": "sha256",
-            "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-            "schema": {"type": "object"}
-          },
-          "observed_schema": {"type": "object"}
-        }"#,
-    )
-    .expect("manifest parses");
-    let request = ExternalMcpAdapterRequest {
-        transport: Some("stdio".to_string()),
-        command: Some("cat".to_string()),
-        cwd: Some(dir.path().to_path_buf()),
-        request: serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "open_page"}),
-        ..ExternalMcpAdapterRequest::default()
-    };
-
-    let result = execute_adapter(&manifest, &request, None);
-
-    assert_eq!(result["decision"], "denied");
-    assert_eq!(result["execution_status"], "not_executed");
-    #[cfg(unix)]
-    assert_eq!(result["error_kind"], "root_escape");
-    #[cfg(not(unix))]
-    assert_eq!(result["error_kind"], "provider_not_allowed");
-    assert_eq!(result["side_effect_executed"], false);
-}
-
-#[test]
-fn external_mcp_stdio_adapter_rejects_shell_capable_command() {
-    let dir = tempdir().expect("tempdir");
-    let manifest = stdio_manifest(dir.path(), &["sh"]);
-    let request = ExternalMcpAdapterRequest {
-        transport: Some("stdio".to_string()),
-        command: Some("sh".to_string()),
-        cwd: Some(dir.path().to_path_buf()),
-        args: vec!["-c".to_string(), "cat".to_string()],
-        request: serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "open_page"}),
-        ..ExternalMcpAdapterRequest::default()
-    };
-
-    let result = execute_adapter(&manifest, &request, Some(dir.path()));
-
-    assert_eq!(result["decision"], "denied");
-    assert_eq!(result["execution_status"], "not_executed");
-    assert_eq!(result["error_kind"], "provider_not_allowed");
-    assert_eq!(result["side_effect_executed"], false);
-}
-
-#[test]
-fn external_mcp_http_adapter_rejects_literal_private_or_local_ip_hosts_before_connecting() {
-    let cases = [
-        "http://127.0.0.1:9/mcp",
-        "http://10.0.0.1:9/mcp",
-        "http://169.254.169.254:80/mcp",
-        "http://[::1]:9/mcp",
-        "http://[fd00::1]:9/mcp",
-        "http://[::ffff:127.0.0.1]:9/mcp",
-    ];
-
-    for url in cases {
-        let origin = url.strip_suffix("/mcp").expect("case URL has /mcp suffix");
-        let manifest = load_provider_manifest(&format!(
-            r#"{{
-              "schema_version": "1",
-              "provider_id": "external.mcp.browser.open_page",
-              "provider_class": "external",
-              "kind": "mcp",
-              "risk": "network_active",
-              "side_effects": ["network"],
-              "transport": "http",
-              "downstream_identity": "browser-mcp",
-              "tool_identity": "open_page",
-              "declared_permissions": ["network"],
-              "allowed_origins": ["{origin}"],
-              "schema_pin": {{
-                "algorithm": "sha256",
-                "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-                "schema": {{"type": "object"}}
-              }},
-              "observed_schema": {{"type": "object"}}
-            }}"#
-        ))
-        .expect("manifest parses");
-        let request = ExternalMcpAdapterRequest {
-            transport: Some("http".to_string()),
-            url: Some(url.to_string()),
-            request: serde_json::json!({
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "open_page",
-                "params": {"url": "https://example.com"}
-            }),
-            ..ExternalMcpAdapterRequest::default()
-        };
-
-        let result = execute_adapter(&manifest, &request, None);
-
-        assert_eq!(result["decision"], "denied", "{url}: {result:?}");
-        assert_eq!(
-            result["execution_status"], "not_executed",
-            "{url}: {result:?}"
-        );
-        assert_eq!(result["error_kind"], "egress_denied", "{url}: {result:?}");
+    for manifest in [shell, multiple] {
+        let report = certify_external_provider_manifest(&manifest);
+        assert!(!report.passed);
         assert!(
-            !result["side_effect_executed"].as_bool().unwrap_or(true),
-            "{url}: {result:?}"
+            report
+                .findings
+                .contains(&"stdio_exact_command_required".to_owned())
+        );
+    }
+    let report = certify_external_provider_manifest(&undeclared);
+    assert!(!report.passed);
+    assert!(
+        report
+            .findings
+            .contains(&"stdio_process_spawn_declaration_required".to_owned())
+    );
+}
+
+#[test]
+fn external_mcp_stdio_manifest_rejects_network_or_credential_egress() {
+    let mut network = base_manifest();
+    network.risk = ProviderRisk::NetworkActive;
+    network.side_effects = vec![SideEffectKind::Network];
+    network.allowed_origins = vec!["https://example.com".to_owned()];
+    network.declared_permissions.push("network".to_owned());
+    let mut credential = base_manifest();
+    credential.risk = ProviderRisk::CredentialUse;
+    credential.side_effects = vec![SideEffectKind::CredentialUse];
+    credential
+        .declared_permissions
+        .push("credential_use".to_owned());
+
+    for manifest in [network, credential] {
+        let report = certify_external_provider_manifest(&manifest);
+        assert!(!report.passed);
+        assert!(
+            report
+                .findings
+                .contains(&"stdio_egress_controls_unsupported".to_owned())
         );
     }
 }
 
 #[test]
-fn external_mcp_http_adapter_rejects_dns_resolution_to_private_host() {
-    let manifest = load_provider_manifest(
-        r#"{
-          "schema_version": "1",
-          "provider_id": "external.mcp.browser.open_page",
-          "provider_class": "external",
-          "kind": "mcp",
-          "risk": "network_active",
-          "side_effects": ["network"],
-          "transport": "http",
-          "downstream_identity": "browser-mcp",
-          "tool_identity": "open_page",
-          "declared_permissions": ["network"],
-          "allowed_origins": ["http://localhost:9"],
-          "schema_pin": {
-            "algorithm": "sha256",
-            "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-            "schema": {"type": "object"}
-          },
-          "observed_schema": {"type": "object"}
-        }"#,
-    )
-    .expect("manifest parses");
-    let request = ExternalMcpAdapterRequest {
-        transport: Some("http".to_string()),
-        url: Some("http://localhost:9/mcp".to_string()),
-        request: serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "open_page",
-            "params": {"url": "https://example.com"}
-        }),
-        ..ExternalMcpAdapterRequest::default()
-    };
+fn external_mcp_https_transport_is_not_certified_without_a_tls_adapter() {
+    let mut manifest = base_manifest();
+    manifest.transport = Some("https".to_owned());
+    manifest.command_allowlist.clear();
+    manifest.working_root = None;
+    manifest.allowed_origins = vec!["https://example.com".to_owned()];
 
-    let result = execute_adapter(&manifest, &request, None);
-
-    assert_eq!(result["decision"], "denied");
-    assert_eq!(result["execution_status"], "not_executed");
-    assert_eq!(result["error_kind"], "egress_denied");
-    assert!(!result["side_effect_executed"].as_bool().unwrap_or(true));
+    let report = certify_external_provider_manifest(&manifest);
+    assert!(!report.passed);
+    assert!(
+        report
+            .findings
+            .contains(&"mcp_transport_required".to_owned())
+    );
 }
 
 #[test]
-fn external_mcp_sse_adapter_rejects_literal_private_ip_host_before_connecting() {
-    let origin = "http://127.0.0.1:9";
-    let manifest = load_provider_manifest(
-        r#"{
-          "schema_version": "1",
-          "provider_id": "external.mcp.browser.open_page",
-          "provider_class": "external",
-          "kind": "mcp",
-          "risk": "network_active",
-          "side_effects": ["network"],
-          "transport": "sse",
-          "downstream_identity": "browser-mcp",
-          "tool_identity": "open_page",
-          "declared_permissions": ["network"],
-          "allowed_origins": ["http://127.0.0.1:9"],
-          "schema_pin": {
-            "algorithm": "sha256",
-            "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-            "schema": {"type": "object"}
-          },
-          "observed_schema": {"type": "object"}
-        }"#,
-    )
-    .expect("manifest parses");
-    let request = ExternalMcpAdapterRequest {
-        transport: Some("sse".to_string()),
-        url: Some(format!("{origin}/events")),
-        ..ExternalMcpAdapterRequest::default()
-    };
+fn schema_rug_pull_and_pin_tamper_are_certification_failures() {
+    let mut observed_changed = base_manifest();
+    observed_changed.observed_schema = serde_json::json!({"type":"string"});
+    let report = certify_external_provider_manifest(&observed_changed);
+    assert!(!report.passed);
+    assert!(report.findings.contains(&"schema_rug_pull".to_owned()));
 
-    let result = execute_adapter(&manifest, &request, None);
-
-    assert_eq!(result["decision"], "denied");
-    assert_eq!(result["execution_status"], "not_executed");
-    assert_eq!(result["error_kind"], "egress_denied");
-    assert!(!result["side_effect_executed"].as_bool().unwrap_or(true));
+    let mut pin_changed = base_manifest();
+    pin_changed.schema_pin.digest = "sha256:00".to_owned();
+    let report = certify_external_provider_manifest(&pin_changed);
+    assert!(!report.passed);
+    assert!(
+        report
+            .findings
+            .contains(&"schema_pin_digest_mismatch".to_owned())
+    );
 }
 
 #[test]
-fn external_mcp_http_adapter_rejects_timeout_above_runtime_policy_before_connect() {
-    let origin = "http://127.0.0.1:9";
-    let manifest = load_provider_manifest(&format!(
-        r#"{{
-          "schema_version": "1",
-          "provider_id": "external.mcp.browser.open_page",
-          "provider_class": "external",
-          "kind": "mcp",
-          "risk": "network_active",
-          "side_effects": ["network"],
-          "transport": "http",
-          "downstream_identity": "browser-mcp",
-          "tool_identity": "open_page",
-          "declared_permissions": ["network"],
-          "allowed_origins": ["{origin}"],
-          "schema_pin": {{
-            "algorithm": "sha256",
-            "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-            "schema": {{"type": "object"}}
-          }},
-          "observed_schema": {{"type": "object"}}
-        }}"#
-    ))
-    .expect("manifest parses");
-    let request = ExternalMcpAdapterRequest {
-        transport: Some("http".to_string()),
-        url: Some(format!("{origin}/mcp")),
-        timeout_ms: Some(30_001),
-        ..ExternalMcpAdapterRequest::default()
-    };
+fn http_and_sse_certification_require_egress_without_process_controls() {
+    for transport in ["http", "sse"] {
+        let mut manifest = base_manifest();
+        manifest.transport = Some(transport.to_owned());
+        manifest.side_effects = vec![SideEffectKind::Network];
+        manifest.risk = ProviderRisk::NetworkActive;
+        manifest.allowed_origins = vec!["http://example.com".to_owned()];
+        manifest.command_allowlist.clear();
+        manifest.working_root = None;
+        let report = certify_external_provider_manifest(&manifest);
+        assert!(report.passed, "{transport}: {:?}", report.findings);
 
-    let result = execute_adapter(&manifest, &request, None);
-
-    assert_eq!(result["decision"], "denied");
-    assert_eq!(result["error_kind"], "budget_exceeded");
-    assert_eq!(result["side_effect_executed"], false);
-}
-
-#[test]
-fn external_mcp_adapter_rejects_schema_rug_pull_before_execution() {
-    let manifest = load_provider_manifest(
-        r#"{
-          "schema_version": "1",
-          "provider_id": "external.mcp.browser.open_page",
-          "provider_class": "external",
-          "kind": "mcp",
-          "risk": "network_active",
-          "side_effects": ["network"],
-          "transport": "http",
-          "downstream_identity": "browser-mcp",
-          "tool_identity": "open_page",
-          "declared_permissions": ["network"],
-          "allowed_origins": ["http://127.0.0.1:9"],
-          "schema_pin": {
-            "algorithm": "sha256",
-            "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-            "schema": {"type": "object"}
-          },
-          "observed_schema": {"type": "array"}
-        }"#,
-    )
-    .expect("manifest parses");
-    let request = ExternalMcpAdapterRequest {
-        transport: Some("http".to_string()),
-        url: Some("http://127.0.0.1:9/mcp".to_string()),
-        ..ExternalMcpAdapterRequest::default()
-    };
-
-    let result = execute_adapter(&manifest, &request, None);
-
-    assert_eq!(result["decision"], "denied");
-    assert_eq!(result["error_kind"], "schema_rug_pull");
-    assert_eq!(result["side_effect_executed"], false);
-}
-
-#[test]
-fn external_mcp_http_adapter_rejects_control_characters_in_path() {
-    let origin = "http://127.0.0.1:9";
-    let manifest = load_provider_manifest(&format!(
-        r#"{{
-          "schema_version": "1",
-          "provider_id": "external.mcp.browser.open_page",
-          "provider_class": "external",
-          "kind": "mcp",
-          "risk": "network_active",
-          "side_effects": ["network"],
-          "transport": "http",
-          "downstream_identity": "browser-mcp",
-          "tool_identity": "open_page",
-          "declared_permissions": ["network"],
-          "allowed_origins": ["{origin}"],
-          "schema_pin": {{
-            "algorithm": "sha256",
-            "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-            "schema": {{"type": "object"}}
-          }},
-          "observed_schema": {{"type": "object"}}
-        }}"#
-    ))
-    .expect("manifest parses");
-    let request = ExternalMcpAdapterRequest {
-        transport: Some("http".to_string()),
-        url: Some(format!("{origin}/mcp%0d%0aInjected: yes")),
-        ..ExternalMcpAdapterRequest::default()
-    };
-
-    let result = execute_adapter(&manifest, &request, None);
-
-    assert_eq!(result["decision"], "denied");
-    assert_eq!(result["error_kind"], "egress_denied");
-    assert_eq!(result["side_effect_executed"], false);
-}
-
-#[test]
-fn external_mcp_http_adapter_does_not_treat_signed_percent_triplets_as_control_characters() {
-    let origin = "http://127.0.0.1:9";
-    let manifest = load_provider_manifest(&format!(
-        r#"{{
-          "schema_version": "1",
-          "provider_id": "external.mcp.browser.open_page",
-          "provider_class": "external",
-          "kind": "mcp",
-          "risk": "network_active",
-          "side_effects": ["network"],
-          "transport": "http",
-          "downstream_identity": "browser-mcp",
-          "tool_identity": "open_page",
-          "declared_permissions": ["network"],
-          "allowed_origins": ["{origin}"],
-          "schema_pin": {{
-            "algorithm": "sha256",
-            "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-            "schema": {{"type": "object"}}
-          }},
-          "observed_schema": {{"type": "object"}}
-        }}"#
-    ))
-    .expect("manifest parses");
-
-    for path in ["/mcp%+A", "/mcp%+1"] {
-        let request = ExternalMcpAdapterRequest {
-            transport: Some("http".to_string()),
-            url: Some(format!("{origin}{path}")),
-            ..ExternalMcpAdapterRequest::default()
-        };
-
-        let result = execute_adapter(&manifest, &request, None);
-
-        assert_eq!(result["decision"], "denied", "{path}: {result}");
-        assert_eq!(result["error_kind"], "egress_denied", "{path}: {result}");
-        assert_eq!(
-            result["reason"], "MCP adapter URL resolved to a private or local address",
-            "{path}: {result}"
+        manifest.command_allowlist.push("forbidden".to_owned());
+        let report = certify_external_provider_manifest(&manifest);
+        assert!(!report.passed);
+        assert!(
+            report
+                .findings
+                .contains(&"network_transport_process_controls_forbidden".to_owned())
         );
-        assert_eq!(result["side_effect_executed"], false, "{path}: {result}");
+
+        manifest.command_allowlist.clear();
+        manifest.allowed_origins = vec!["http://127.0.0.1".to_owned()];
+        let report = certify_external_provider_manifest(&manifest);
+        assert!(!report.passed);
+        assert!(
+            report
+                .findings
+                .contains(&"network_transport_origin_invalid".to_owned())
+        );
     }
-}
-
-#[cfg(unix)]
-#[test]
-fn external_mcp_stdio_requires_exact_allowlisted_command() {
-    let dir = tempdir().expect("tempdir");
-    let manifest = stdio_manifest(dir.path(), &["sh"]);
-    let request = ExternalMcpAdapterRequest {
-        transport: Some("stdio".to_string()),
-        command: Some("/bin/sh".to_string()),
-        cwd: Some(dir.path().to_path_buf()),
-        ..ExternalMcpAdapterRequest::default()
-    };
-
-    let result = execute_adapter(&manifest, &request, Some(dir.path()));
-
-    assert_eq!(result["decision"], "denied");
-    assert_eq!(result["error_kind"], "provider_not_allowed");
-    assert_eq!(result["side_effect_executed"], false);
-}
-
-#[cfg(unix)]
-#[test]
-fn external_mcp_stdio_rejects_network_capable_manifest_before_spawn() {
-    let dir = tempdir().expect("tempdir");
-    let working_root = json_path(dir.path());
-    let manifest = load_provider_manifest(&format!(
-        r#"{{
-          "schema_version": "1",
-          "provider_id": "external.mcp.browser.open_page",
-          "provider_class": "external",
-          "kind": "mcp",
-          "risk": "network_active",
-          "side_effects": ["network", "process_spawn"],
-          "transport": "stdio",
-          "downstream_identity": "browser-mcp",
-          "tool_identity": "open_page",
-          "declared_permissions": ["network", "process_spawn"],
-          "allowed_origins": ["https://example.com"],
-          "command_allowlist": ["cat"],
-          "working_root": {},
-          "schema_pin": {{
-            "algorithm": "sha256",
-            "digest": "sha256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-            "schema": {{"type": "object"}}
-          }},
-          "observed_schema": {{"type": "object"}}
-        }}"#,
-        working_root
-    ))
-    .expect("manifest parses");
-    let request = ExternalMcpAdapterRequest {
-        transport: Some("stdio".to_string()),
-        command: Some("cat".to_string()),
-        cwd: Some(dir.path().to_path_buf()),
-        ..ExternalMcpAdapterRequest::default()
-    };
-
-    let result = execute_adapter(&manifest, &request, Some(dir.path()));
-
-    assert_eq!(result["decision"], "denied");
-    assert_eq!(result["error_kind"], "egress_denied");
-    assert_eq!(result["side_effect_executed"], false);
-}
-
-#[cfg(unix)]
-#[test]
-fn external_mcp_stdio_enforces_timeout_while_waiting() {
-    let dir = tempdir().expect("tempdir");
-    let script = dir.path().join("sleep-adapter");
-    write_executable_script(&script, "#!/bin/sh\ncat >/dev/null & sleep 1\n");
-    let command = script.to_string_lossy().into_owned();
-    let manifest = stdio_manifest(dir.path(), &[&command]);
-    let request = ExternalMcpAdapterRequest {
-        transport: Some("stdio".to_string()),
-        command: Some(command),
-        cwd: Some(dir.path().to_path_buf()),
-        timeout_ms: Some(10),
-        ..ExternalMcpAdapterRequest::default()
-    };
-
-    let result = execute_adapter(&manifest, &request, Some(dir.path()));
-
-    assert_eq!(result["execution_status"], "failed");
-    assert!(
-        result["reason"]
-            .as_str()
-            .expect("reason")
-            .contains("timed out"),
-        "unexpected adapter result: {result}"
-    );
-    assert_eq!(result["side_effect_executed"], true);
-}
-
-#[cfg(unix)]
-#[test]
-fn external_mcp_stdio_enforces_output_limit_while_reading() {
-    let dir = tempdir().expect("tempdir");
-    let script = dir.path().join("output-adapter");
-    write_executable_script(&script, "#!/bin/sh\ncat >/dev/null\nprintf 1234567890\n");
-    let command = script.to_string_lossy().into_owned();
-    let manifest = stdio_manifest(dir.path(), &[&command]);
-    let request = ExternalMcpAdapterRequest {
-        transport: Some("stdio".to_string()),
-        command: Some(command),
-        cwd: Some(dir.path().to_path_buf()),
-        stdout_limit_bytes: Some(4),
-        ..ExternalMcpAdapterRequest::default()
-    };
-
-    let result = execute_adapter(&manifest, &request, Some(dir.path()));
-
-    assert_eq!(result["execution_status"], "failed");
-    assert!(
-        result["reason"]
-            .as_str()
-            .expect("reason")
-            .contains("output limit")
-    );
-    assert_eq!(result["side_effect_executed"], true);
-}
-
-#[cfg(unix)]
-#[test]
-fn external_mcp_stdio_cleans_process_group_after_success() {
-    use std::thread;
-    use std::time::{Duration, Instant};
-
-    let dir = tempdir().expect("tempdir");
-    let script = dir.path().join("spawn-background-adapter");
-    write_executable_script(
-        &script,
-        "#!/bin/sh\ncat >/dev/null\nsleep 60 >/dev/null 2>/dev/null </dev/null &\necho $!\n",
-    );
-    let command = script.to_string_lossy().into_owned();
-    let manifest = stdio_manifest(dir.path(), &[&command]);
-    let request = ExternalMcpAdapterRequest {
-        transport: Some("stdio".to_string()),
-        command: Some(command),
-        cwd: Some(dir.path().to_path_buf()),
-        ..ExternalMcpAdapterRequest::default()
-    };
-
-    let result = execute_adapter(&manifest, &request, Some(dir.path()));
-
-    assert_eq!(result["decision"], "allowed");
-    assert_eq!(result["execution_status"], "completed");
-    let pid = result["stdout"]
-        .as_str()
-        .expect("stdout string")
-        .trim()
-        .parse::<i32>()
-        .expect("background pid");
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while process_exists(pid) && Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(20));
-    }
-    assert!(!process_exists(pid), "background process {pid} survived");
-}
-
-#[cfg(unix)]
-fn process_exists(pid: i32) -> bool {
-    unsafe { kill(pid, 0) == 0 }
-}
-
-#[cfg(unix)]
-unsafe extern "C" {
-    fn kill(pid: i32, sig: i32) -> i32;
 }

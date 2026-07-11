@@ -1,7 +1,9 @@
 mod default;
 mod monitor_only;
 
-pub use default::{DefaultProviderExecutor, ExecutorConfig, ExecutorConfigError};
+pub use default::{
+    DefaultProviderExecutor, ExecutorConfig, ExecutorConfigError, ExternalMcpRegistrationError,
+};
 pub use monitor_only::{
     BaselineDisposition, MonitorObservation, MonitorObserver, MonitorOnlyObserver, SimulatedEffect,
 };
