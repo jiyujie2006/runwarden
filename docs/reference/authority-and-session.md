@@ -2,6 +2,49 @@
 
 Sessions and approval records define the runtime policy envelope for provider calls.
 
+## Pure Typed Policy Evaluation
+
+`SessionContext::from_authority` constructs a typed-policy context from one
+server-owned `AuthoritySnapshot`, the canonical Rust provider registry, the
+story id, and the enforcement mode. Construction parses the policy snapshot digest and
+commits the complete authority plus each allowlisted provider contract. Policy
+evaluation rechecks those commitments, so mutating a public projection or
+substituting a same-id provider with lower risk or fewer side effects fails at
+the session or provider layer.
+
+`evaluate_proposal` is a pure Rust function. Before resource authorization it
+authenticates a process-local extraction binding for the exact provider,
+action, canonical arguments, claim, provider contract, and proposed charge.
+Changing any one of those values after extraction fails closed. It records
+exactly six ordered checks—session, provider, authorization, typed resource,
+budget, and approval—
+and marks all checks after the first terminal result as not evaluated. It does
+not read or consume an approval, reserve counters, execute a provider, or
+weaken a denial in monitor-only mode. A provider that requires approval returns
+`RequiresReview`; the durable journal remains the only component that can bind
+and consume the resulting one-shot approval.
+
+Resource authorization is variant-specific. File authority compares logical
+root, component-aware relative prefix, access, and classification; network
+authority is provider-specific and compares a canonical origin; email checks
+every sorted canonical recipient; stores bind namespace, key prefix, and
+access; code execution binds runtime, workspace, network capability, and every
+limit; input inspection binds source and classification; evidence binds the
+current story and an allowed operation; and artifact output binds a validated
+relative prefix and format. Store `key_prefix` is deliberately a byte-prefix
+for opaque key-value keys, not a filesystem-component prefix. `OpaqueLegacy`
+is never executable.
+
+The budget layer measures Canonical JSON v1 argument bytes, applies the
+per-operation code wall-time ceiling, and uses checked arithmetic over
+committed, concurrently reserved, and proposed call/file/network usage. Exact
+limits pass; overflow or one unit over fails closed. Providers derive the
+proposed charge from canonical arguments plus trusted per-call file and
+response caps before sealing it into the extraction binding; callers cannot
+substitute a smaller charge afterward. The returned usage version and
+authenticated `BudgetCharge` are observations for the later SQLite CAS
+reservation, not a reservation by themselves.
+
 ## Sessions
 
 Sessions are now internal to demo/check flows. A session derived from an

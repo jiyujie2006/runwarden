@@ -8,6 +8,8 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+getrandom.workspace = true
+hmac.workspace = true
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -17,6 +19,7 @@ time.workspace = true
 toml.workspace = true
 url.workspace = true
 uuid.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
 tempfile = "3.23"

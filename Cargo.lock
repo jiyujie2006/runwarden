@@ -962,6 +962,8 @@ dependencies = [
 name = "runwarden-kernel"
 version = "0.1.0"
 dependencies = [
+ "getrandom",
+ "hmac",
  "schemars",
  "serde",
  "serde_json",
@@ -972,6 +974,7 @@ dependencies = [
  "toml",
  "url",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

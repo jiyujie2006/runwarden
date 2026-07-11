@@ -39,7 +39,7 @@ fn call(provider: &str, arguments: serde_json::Value) -> ProviderCall {
 
 fn registry_with(provider: KernelProvider) -> ProviderRegistry {
     let mut registry = ProviderRegistry::default();
-    registry.register(provider);
+    registry.register(provider).unwrap();
     registry
 }
 

@@ -72,8 +72,10 @@ fn session_from_assessment_manifest_builds_enforcing_policy() {
     assert!(!session.manifest_hash.is_empty());
 
     let mut registry = ProviderRegistry::default();
-    registry.register(provider("runwarden.input.inspect"));
-    registry.register(provider("external.api.request"));
+    registry
+        .register(provider("runwarden.input.inspect"))
+        .unwrap();
+    registry.register(provider("external.api.request")).unwrap();
     let mut enforcer = KernelEnforcer::new(registry, session.to_kernel_policy());
 
     let allowed = enforcer.evaluate_call(&call("runwarden.input.inspect", "authz-active"));
@@ -114,7 +116,9 @@ fn session_policy_denies_revoked_authz_from_manifest() {
     assert_eq!(session.governance_state, AuthzManifestState::Revoked);
 
     let mut registry = ProviderRegistry::default();
-    registry.register(provider("runwarden.input.inspect"));
+    registry
+        .register(provider("runwarden.input.inspect"))
+        .unwrap();
     let mut enforcer = KernelEnforcer::new(registry, session.to_kernel_policy());
 
     let outcome = enforcer.evaluate_call(&call("runwarden.input.inspect", "authz-revoked"));

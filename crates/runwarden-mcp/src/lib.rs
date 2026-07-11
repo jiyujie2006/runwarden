@@ -770,7 +770,9 @@ fn last_mcp_provider_event_hash(path: &Path) -> anyhow::Result<Option<String>> {
 fn first_party_provider_registry() -> ProviderRegistry {
     let mut registry = ProviderRegistry::default();
     for provider in default_first_party_providers() {
-        registry.register(provider);
+        registry
+            .register(provider)
+            .expect("built-in first-party provider ids are unique");
     }
     registry
 }

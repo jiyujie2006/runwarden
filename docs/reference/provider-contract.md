@@ -14,6 +14,19 @@ Contracts require:
 
 External MCP contracts bind execution to the manifest transport. Request transport overrides are denied unless they match exactly.
 
+## Authenticated extraction binding
+
+Before typed policy, the authoritative Rust extractor creates a process-local
+`ResourceBindingProof`. Its key comes from the operating-system CSPRNG, remains
+in shared zeroizing memory, and is separated from the verifier installed in
+the session context. A domain-separated HMAC commits the full canonical
+provider contract, provider id, action, Canonical JSON v1 arguments, typed
+resource claim, Rust-derived reserved charge, and enforcement mode. The proof
+has no clone, debug, serialization, or public field surface. Policy recomputes
+the complete tuple and uses constant-time tag verification; all mismatches use
+one stable failure. This pre-policy proof establishes extraction provenance but
+does not authorize a side effect.
+
 ## Frozen native execution permit
 
 The native provider boundary defines an opaque, process-local
@@ -28,7 +41,8 @@ argument and resource-claim hashes, policy snapshot, provider-contract hash,
 the Rust-derived reserved `BudgetCharge`, expiry, and durable execution-start
 version. Validation authenticates the MAC with constant-time
 `Mac::verify_slice`, requires `now < expires_at`, recomputes argument and claim
-digests and the current canonical Rust catalog contract, rejects
+digests and the current canonical Rust catalog contract with the same
+domain-separated kernel helper as typed policy evaluation, rejects
 `OpaqueLegacy`, and compares every frozen binding. Stable
 provider result codes use the kernel `EventCode` vocabulary; malformed text is
 never copied into redacted result evidence. Result fields are private and the

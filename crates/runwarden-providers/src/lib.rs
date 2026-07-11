@@ -2274,7 +2274,9 @@ pub mod catalog {
     pub fn first_party_registry() -> ProviderRegistry {
         let mut registry = ProviderRegistry::default();
         for provider in default_first_party_providers() {
-            registry.register(provider);
+            registry
+                .register(provider)
+                .expect("built-in first-party provider ids are unique");
         }
         registry
     }
@@ -2406,7 +2408,9 @@ pub mod catalog {
     pub fn full_provider_registry() -> ProviderRegistry {
         let mut registry = first_party_registry();
         for provider in default_external_providers() {
-            registry.register(provider);
+            registry
+                .register(provider)
+                .expect("built-in external provider ids are unique");
         }
         registry
     }

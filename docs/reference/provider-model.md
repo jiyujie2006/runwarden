@@ -52,7 +52,7 @@ network egress.
 
 ## Typed Resource Claims
 
-The native runtime derives exactly one kernel `ResourceClaim` from an exact
+The native extractor derives exactly one kernel `ResourceClaim` from an exact
 provider id and action before policy evaluation. The provider-specific
 extractor registry maps filesystem calls to `File`, API and browser calls to
 `Network`, email to `Email`, memory and knowledge calls to `Memory`, and input
@@ -66,9 +66,19 @@ override those values. Policy-envelope and execution-control fields, unknown
 fields, missing required values, and values with the wrong JSON shape are
 rejected before a claim is created.
 
+The runtime constructor returns an authoritative extractor and a separate
+kernel verifier. Only that extractor holds the process-local signing
+capability. Its `extract_bound` operation performs strict extraction,
+conservative Rust budget derivation, and HMAC sealing as one step. The opaque
+result binds the canonical provider contract, provider id, action, complete
+arguments, typed claim, reserved charge, and enforcement mode. It has no
+clone, debug, or serialization surface. The ordinary `contest_default`
+registry remains useful for schema tests and display projections, but cannot
+mint a proof accepted by typed policy.
+
 Canonical claims use slash-separated validated relative file paths with `.`
-components removed; sorted,
-deduplicated email recipients with only the ASCII domain lowercased; uppercase
+components removed; sorted, deduplicated email recipients with only the ASCII
+domain lowercased; uppercase
 HTTP methods and canonical HTTP(S) origins; non-empty store keys; and a SHA-256
 commitment to inspected input bytes with the trusted `tool_input` source. A
 caller-supplied input source is rejected rather than used as provenance.

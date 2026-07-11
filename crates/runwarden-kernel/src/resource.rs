@@ -2,8 +2,32 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::artifact::WorkspaceRelativePath;
+use crate::contracts::KernelProvider;
 use crate::story::{OperationId, StoryId};
-use crate::trace::Sha256Digest;
+use crate::trace::{Sha256Digest, canonical_json_v1};
+
+const PROVIDER_CONTRACT_DOMAIN_V1: &str = "runwarden.kernel-provider-contract.v1";
+
+/// Commits to the complete kernel-owned provider contract, not only its id.
+///
+/// Policy contexts use this digest to prove that the provider evaluated for a
+/// call is the exact provider registered by the server. In particular, a
+/// caller cannot substitute a same-id provider with downgraded risk or side
+/// effects to bypass review.
+pub fn canonical_provider_contract_hash(provider: &KernelProvider) -> Sha256Digest {
+    #[derive(Serialize)]
+    struct ContractMaterial<'a> {
+        domain: &'static str,
+        provider: &'a KernelProvider,
+    }
+
+    let material = serde_json::to_value(ContractMaterial {
+        domain: PROVIDER_CONTRACT_DOMAIN_V1,
+        provider,
+    })
+    .expect("kernel provider contract serializes");
+    Sha256Digest::from_bytes(&canonical_json_v1(&material))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]

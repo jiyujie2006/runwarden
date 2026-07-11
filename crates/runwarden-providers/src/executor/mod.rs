@@ -15,7 +15,6 @@ use time::OffsetDateTime;
 use zeroize::Zeroizing;
 
 const PERMIT_DOMAIN_V1: &[u8] = b"runwarden.execution-permit.hmac-sha256.v1\0";
-const PROVIDER_CONTRACT_DOMAIN_V1: &str = "runwarden.kernel-provider-contract.v1";
 const INVALID_ERROR_KIND: &str = "invalid_error_kind";
 const INVALID_REASON_CODE: &str = "invalid_reason_code";
 
@@ -45,18 +44,7 @@ pub fn canonical_argument_hash(arguments: &Value) -> Sha256Digest {
 pub fn canonical_provider_contract_hash(
     provider: &KernelProvider,
 ) -> Result<Sha256Digest, ProviderContractHashError> {
-    #[derive(Serialize)]
-    struct ContractMaterial<'a> {
-        domain: &'static str,
-        provider: &'a KernelProvider,
-    }
-
-    let value = serde_json::to_value(ContractMaterial {
-        domain: PROVIDER_CONTRACT_DOMAIN_V1,
-        provider,
-    })
-    .map_err(|_| ProviderContractHashError::Encoding)?;
-    Ok(Sha256Digest::from_bytes(&canonical_json_v1(&value)))
+    Ok(runwarden_kernel::resource::canonical_provider_contract_hash(provider))
 }
 
 /// Process-authenticated execution capability. Its claims and tag remain

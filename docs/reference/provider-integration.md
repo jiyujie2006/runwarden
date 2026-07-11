@@ -93,6 +93,17 @@ runtime, transport, root, namespace, or classification controls fail closed.
 Unsupported provider/action pairs and unknown argument fields do not fall back
 to an opaque or guessed claim.
 
+Production native orchestration must construct the authoritative registry and
+install its separate `ResourceBindingVerifier` in the immutable session
+context. The registry keeps the matching issuer private. `extract_bound`
+derives `calls=1`, reserves the trusted per-call cap for declared file or
+artifact effects, and reserves canonical request bytes plus a trusted response
+cap for declared network effects. It then authenticates provider contract,
+provider/action, complete arguments, claim, charge, and enforcement mode with a
+domain-separated process-local HMAC. A display-only extraction, a proof from a
+different process authority, a zero or substituted charge, or any post-
+extraction value change fails before resource policy can allow the proposal.
+
 Claim canonicalizers are exported for reuse by the corresponding native
 executor. Relative file paths have `.` components removed and reject empty or
 `..` components, platform prefixes, and backslashes; email domains alone are

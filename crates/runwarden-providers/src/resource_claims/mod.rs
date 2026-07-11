@@ -6,9 +6,14 @@ mod store;
 
 use std::collections::BTreeMap;
 
-use runwarden_kernel::KernelProvider;
 use runwarden_kernel::resource::{DataClass, ResourceClaim};
-use runwarden_kernel::trace::Sha256Digest;
+use runwarden_kernel::resource_binding::{
+    ResourceBindingAuthority, ResourceBindingIssuer, ResourceBindingProof, ResourceBindingVerifier,
+};
+use runwarden_kernel::session::BudgetCharge;
+use runwarden_kernel::story::EnforcementMode;
+use runwarden_kernel::trace::{Sha256Digest, canonical_json_v1};
+use runwarden_kernel::{KernelProvider, SideEffectKind};
 use serde_json::{Map, Value};
 use thiserror::Error;
 
@@ -88,6 +93,44 @@ pub struct ResourceExtractionContext {
     pub default_classification: DataClass,
 }
 
+/// Trusted per-call reservation ceilings supplied by server configuration.
+///
+/// A provider argument can neither set nor reduce these values. File-like
+/// effects reserve the complete file ceiling because reads and generated
+/// artifacts are not known before the side effect. Network effects reserve
+/// the canonical request bytes plus the complete bounded response ceiling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BudgetDerivationLimits {
+    pub max_file_bytes_per_call: u64,
+    pub max_network_response_bytes_per_call: u64,
+}
+
+/// One extractor-produced claim, conservative charge, and process-authenticated
+/// proof over their exact provider/action/argument/mode tuple.
+///
+/// This type deliberately implements neither `Clone`, `Debug`, nor serde
+/// traits. Callers can inspect the bound values but cannot construct or replace
+/// the opaque proof.
+pub struct BoundResourceClaim {
+    claim: ResourceClaim,
+    binding: ResourceBindingProof,
+    budget_charge: BudgetCharge,
+}
+
+impl BoundResourceClaim {
+    pub fn claim(&self) -> &ResourceClaim {
+        &self.claim
+    }
+
+    pub fn binding(&self) -> &ResourceBindingProof {
+        &self.binding
+    }
+
+    pub fn budget_charge(&self) -> &BudgetCharge {
+        &self.budget_charge
+    }
+}
+
 pub trait ResourceExtractor: Send + Sync {
     fn extract(
         &self,
@@ -130,6 +173,12 @@ pub enum ResourceExtractionError {
     InvalidStoreKey,
     #[error("trusted extraction context field is invalid: {field}")]
     InvalidContext { field: &'static str },
+    #[error("authoritative resource binding is unavailable")]
+    BindingAuthorityUnavailable,
+    #[error("resource binding could not be authenticated")]
+    BindingSealFailed,
+    #[error("budget derivation failed: {0}")]
+    BudgetDerivation(#[from] BudgetDerivationError),
 }
 
 impl ResourceExtractionError {
@@ -150,6 +199,35 @@ impl ResourceExtractionError {
             Self::InvalidHttpMethod => "invalid_http_method",
             Self::InvalidStoreKey => "invalid_store_key",
             Self::InvalidContext { .. } => "invalid_context",
+            Self::BindingAuthorityUnavailable => "binding_authority_unavailable",
+            Self::BindingSealFailed => "binding_seal_failed",
+            Self::BudgetDerivation(error) => error.code(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum BudgetDerivationError {
+    #[error("provider arguments must be a JSON object")]
+    ArgumentsNotObject,
+    #[error("reserved field is not allowed: {field}")]
+    ReservedField { field: String },
+    #[error("provider action is invalid")]
+    InvalidAction,
+    #[error("trusted budget derivation limit is invalid: {limit}")]
+    InvalidTrustedLimit { limit: &'static str },
+    #[error("budget derivation arithmetic overflowed")]
+    ArithmeticOverflow,
+}
+
+impl BudgetDerivationError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::ArgumentsNotObject => "arguments_not_object",
+            Self::ReservedField { .. } => "reserved_field",
+            Self::InvalidAction => "invalid_action",
+            Self::InvalidTrustedLimit { .. } => "invalid_trusted_limit",
+            Self::ArithmeticOverflow => "budget_arithmetic_overflow",
         }
     }
 }
@@ -157,10 +235,26 @@ impl ResourceExtractionError {
 pub struct ResourceExtractorRegistry {
     extractors: BTreeMap<String, Box<dyn ResourceExtractor>>,
     canonical_provider_digests: BTreeMap<String, Sha256Digest>,
+    binding_issuer: Option<ResourceBindingIssuer>,
 }
 
 impl ResourceExtractorRegistry {
+    /// Constructs the non-authoritative extractor used by schema tests and
+    /// reviewer-facing display projections. It cannot mint execution proofs.
     pub fn contest_default() -> Self {
+        Self::contest_registry(None)
+    }
+
+    /// Constructs the trusted runtime extractor and returns its separate
+    /// verifier capability for installation in the kernel session context.
+    pub fn contest_authoritative()
+    -> Result<(Self, ResourceBindingVerifier), ResourceExtractionError> {
+        let (issuer, verifier) = ResourceBindingAuthority::generate()
+            .map_err(|_| ResourceExtractionError::BindingAuthorityUnavailable)?;
+        Ok((Self::contest_registry(Some(issuer)), verifier))
+    }
+
+    fn contest_registry(binding_issuer: Option<ResourceBindingIssuer>) -> Self {
         let mut extractors: BTreeMap<String, Box<dyn ResourceExtractor>> = BTreeMap::new();
         register(
             &mut extractors,
@@ -223,9 +317,12 @@ impl ResourceExtractorRegistry {
         Self {
             extractors,
             canonical_provider_digests,
+            binding_issuer,
         }
     }
 
+    /// Extracts a canonical display/test claim without execution provenance.
+    /// Production policy evaluation must use [`Self::extract_bound`].
     pub fn extract(
         &self,
         provider: &KernelProvider,
@@ -250,12 +347,131 @@ impl ResourceExtractorRegistry {
         }
         extractor.extract(provider, action, arguments, context)
     }
+
+    /// Performs exact canonical extraction, derives a conservative reservation,
+    /// and seals the complete tuple as one authoritative operation.
+    pub fn extract_bound(
+        &self,
+        provider: &KernelProvider,
+        action: &str,
+        arguments: &Value,
+        context: &ResourceExtractionContext,
+        limits: &BudgetDerivationLimits,
+        enforcement_mode: EnforcementMode,
+    ) -> Result<BoundResourceClaim, ResourceExtractionError> {
+        let issuer = self
+            .binding_issuer
+            .as_ref()
+            .ok_or(ResourceExtractionError::BindingAuthorityUnavailable)?;
+        let claim = self.extract(provider, action, arguments, context)?;
+        let budget_charge = derive_budget_charge(provider, action, arguments, limits)?;
+        let binding = issuer
+            .seal(
+                provider,
+                action,
+                arguments,
+                &claim,
+                &budget_charge,
+                enforcement_mode,
+            )
+            .map_err(|_| ResourceExtractionError::BindingSealFailed)?;
+        Ok(BoundResourceClaim {
+            claim,
+            binding,
+            budget_charge,
+        })
+    }
 }
 
 impl Default for ResourceExtractorRegistry {
     fn default() -> Self {
         Self::contest_default()
     }
+}
+
+/// Derives the only charge that may be bound to an executable provider claim.
+///
+/// The calculation is intentionally based on typed provider side-effect
+/// declarations. It never reads a caller-supplied charge, and it uses checked
+/// arithmetic for every size conversion and addition.
+pub fn derive_budget_charge(
+    provider: &KernelProvider,
+    action: &str,
+    arguments: &Value,
+    limits: &BudgetDerivationLimits,
+) -> Result<BudgetCharge, BudgetDerivationError> {
+    validate_budget_action(action)?;
+    validate_budget_arguments(arguments)?;
+
+    let has_file_effect = provider.side_effects.iter().any(|effect| {
+        matches!(
+            effect,
+            SideEffectKind::FileRead | SideEffectKind::FileWrite | SideEffectKind::ArtifactWrite
+        )
+    });
+    let has_network_effect = provider
+        .side_effects
+        .iter()
+        .any(|effect| matches!(effect, SideEffectKind::Network));
+
+    let file_bytes = if has_file_effect {
+        if limits.max_file_bytes_per_call == 0 {
+            return Err(BudgetDerivationError::InvalidTrustedLimit {
+                limit: "max_file_bytes_per_call",
+            });
+        }
+        limits.max_file_bytes_per_call
+    } else {
+        0
+    };
+
+    let network_bytes = if has_network_effect {
+        if limits.max_network_response_bytes_per_call == 0 {
+            return Err(BudgetDerivationError::InvalidTrustedLimit {
+                limit: "max_network_response_bytes_per_call",
+            });
+        }
+        let request_bytes = u64::try_from(canonical_json_v1(arguments).len())
+            .map_err(|_| BudgetDerivationError::ArithmeticOverflow)?;
+        request_bytes
+            .checked_add(limits.max_network_response_bytes_per_call)
+            .ok_or(BudgetDerivationError::ArithmeticOverflow)?
+    } else {
+        0
+    };
+
+    Ok(BudgetCharge {
+        calls: 1,
+        file_bytes,
+        network_bytes,
+    })
+}
+
+fn validate_budget_action(action: &str) -> Result<(), BudgetDerivationError> {
+    if action.is_empty()
+        || action.len() > 128
+        || !action.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b':' | b'/' | b'@' | b'_' | b'-')
+        })
+    {
+        return Err(BudgetDerivationError::InvalidAction);
+    }
+    Ok(())
+}
+
+fn validate_budget_arguments(arguments: &Value) -> Result<(), BudgetDerivationError> {
+    let object = arguments
+        .as_object()
+        .ok_or(BudgetDerivationError::ArgumentsNotObject)?;
+    if let Some(field) = object
+        .keys()
+        .find(|field| RESERVED_FIELDS.contains(&field.as_str()))
+    {
+        return Err(BudgetDerivationError::ReservedField {
+            field: safe_field_label(field),
+        });
+    }
+    Ok(())
 }
 
 fn register<E>(

@@ -366,7 +366,7 @@ fn default_kernel_policy_denies_every_catalog_provider_before_side_effect() {
         .collect();
     let mut registry = ProviderRegistry::default();
     for provider in providers.clone() {
-        registry.register(provider);
+        registry.register(provider).unwrap();
     }
     let mut enforcer = KernelEnforcer::new(registry, KernelPolicy::default());
 

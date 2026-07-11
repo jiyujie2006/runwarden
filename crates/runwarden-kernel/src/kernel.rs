@@ -18,9 +18,19 @@ pub struct ProviderRegistry {
     providers: BTreeMap<String, KernelProvider>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ProviderRegistryError {
+    #[error("provider id is already registered: {0}")]
+    DuplicateId(String),
+}
+
 impl ProviderRegistry {
-    pub fn register(&mut self, provider: KernelProvider) {
+    pub fn register(&mut self, provider: KernelProvider) -> Result<(), ProviderRegistryError> {
+        if self.providers.contains_key(&provider.id) {
+            return Err(ProviderRegistryError::DuplicateId(provider.id));
+        }
         self.providers.insert(provider.id.clone(), provider);
+        Ok(())
     }
 
     pub fn get(&self, id: &str) -> Option<&KernelProvider> {
