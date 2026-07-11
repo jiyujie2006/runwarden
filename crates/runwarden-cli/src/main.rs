@@ -358,6 +358,7 @@ fn run_demo_command(
         let root = find_workspace_root(env::current_dir()?)?;
         let output_path = resolve_workspace_output_path(&root, &output, "demo output")?;
         fs::create_dir_all(&output_path)?;
+        prune_stale_demo_story_files(&output_path)?;
         let mut results = Vec::new();
         for scenario in CONTEST_SCENARIOS {
             results.push(run_demo_scenario_real(
@@ -383,6 +384,33 @@ fn run_demo_command(
         return Ok(());
     }
     run_demo_interactive(upstream, port, json_output)
+}
+
+fn prune_stale_demo_story_files(output_path: &Path) -> anyhow::Result<()> {
+    for entry in fs::read_dir(output_path)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let name = entry.file_name();
+        if name
+            .to_str()
+            .is_some_and(|name| CONTEST_SCENARIOS.contains(&name))
+        {
+            continue;
+        }
+
+        let story_path = entry.path().join("story.json");
+        match fs::symlink_metadata(&story_path) {
+            Ok(metadata) if metadata.file_type().is_file() || metadata.file_type().is_symlink() => {
+                fs::remove_file(story_path)?;
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
 }
 
 fn run_demo_interactive(
@@ -466,6 +494,8 @@ fn run_demo_scenario_real(root: &Path, scenario: &str, output: &Path) -> anyhow:
     ensure_required_scenario_files(&scenario_path)?;
     let output_path = resolve_workspace_output_path(root, output, "demo output")?;
     fs::create_dir_all(&output_path)?;
+    let story_output_path =
+        resolve_workspace_output_path(root, &output.join("story.json"), "demo story output")?;
 
     let manifest_path = scenario_path.join("manifests/assessment.toml");
     let manifest_body = fs::read_to_string(&manifest_path)?;
@@ -561,10 +591,7 @@ fn run_demo_scenario_real(root: &Path, scenario: &str, output: &Path) -> anyhow:
     write_json_file(&output_path.join("report.json"), &webui["report"])?;
     write_json_file(&output_path.join("metrics.json"), &webui["metrics"])?;
     write_json_file(&output_path.join("webui.json"), &webui)?;
-    write_json_file(
-        &output_path.join("story.json"),
-        &serde_json::to_value(&story)?,
-    )?;
+    write_json_file(&story_output_path, &serde_json::to_value(&story)?)?;
 
     Ok(json!({
         "scenario": scenario,

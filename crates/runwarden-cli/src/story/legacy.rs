@@ -103,11 +103,16 @@ fn adapt_operation(
         .get("output")
         .map(hash_value)
         .unwrap_or_else(|| hash_value(&Value::Null));
-    let (provider, action) = safe_provider_action(
+    let (provider, action, known_safe_pair) = safe_provider_action(
         call.get("provider").and_then(Value::as_str),
         call.get("action").and_then(Value::as_str),
     );
-    let disposition = legacy_disposition(decision, execution_status, side_effect_executed);
+    let disposition = legacy_disposition(
+        decision,
+        execution_status,
+        side_effect_executed,
+        known_safe_pair,
+    );
 
     Ok(SecurityOperation {
         operation_id: OperationId::new(),
@@ -156,51 +161,57 @@ fn legacy_disposition(
     decision: &str,
     execution_status: &str,
     side_effect_executed: bool,
+    known_safe_pair: bool,
 ) -> LegacyDisposition {
-    match (decision, execution_status, side_effect_executed) {
-        ("denied", "not_executed", false) => LegacyDisposition {
+    match (
+        decision,
+        execution_status,
+        side_effect_executed,
+        known_safe_pair,
+    ) {
+        ("denied", "not_executed", false, _) => LegacyDisposition {
             operation_state: OperationState::Denied,
             side_effect_state: SideEffectState::BlockedBeforeExecution,
             provider_status: ProviderExecutionStatus::NotExecuted,
             error_kind: Some("legacy_policy_denied"),
             reason_code: "legacy_denied",
         },
-        ("requires_review", "not_executed", false) => LegacyDisposition {
+        ("requires_review", "not_executed", false, _) => LegacyDisposition {
             operation_state: OperationState::AwaitingApproval,
             side_effect_state: SideEffectState::NotAttempted,
             provider_status: ProviderExecutionStatus::NotExecuted,
             error_kind: None,
             reason_code: "legacy_requires_review",
         },
-        ("allowed", "completed", false) => LegacyDisposition {
+        ("allowed", "completed", false, _) => LegacyDisposition {
             operation_state: OperationState::ObservedOnly,
             side_effect_state: SideEffectState::NotAttempted,
             provider_status: ProviderExecutionStatus::Completed,
             error_kind: None,
             reason_code: "legacy_observed_without_side_effect",
         },
-        ("allowed", "simulated", false) => LegacyDisposition {
+        ("allowed", "simulated", false, _) => LegacyDisposition {
             operation_state: OperationState::ObservedOnly,
             side_effect_state: SideEffectState::Simulated,
             provider_status: ProviderExecutionStatus::Simulated,
             error_kind: None,
             reason_code: "legacy_simulated",
         },
-        ("allowed", "completed", true) => LegacyDisposition {
+        ("allowed", "completed", true, true) => LegacyDisposition {
             operation_state: OperationState::Completed,
             side_effect_state: SideEffectState::Completed,
             provider_status: ProviderExecutionStatus::Completed,
             error_kind: None,
             reason_code: "legacy_completed_with_side_effect",
         },
-        ("allowed", "failed", false) => LegacyDisposition {
+        ("allowed", "failed", false, _) => LegacyDisposition {
             operation_state: OperationState::Failed,
             side_effect_state: SideEffectState::FailedBeforeSideEffect,
             provider_status: ProviderExecutionStatus::FailedBeforeSideEffect,
             error_kind: Some("legacy_execution_failed"),
             reason_code: "legacy_failed_before_side_effect",
         },
-        ("allowed", "executed_with_error", true) => LegacyDisposition {
+        ("allowed", "executed_with_error", true, true) => LegacyDisposition {
             operation_state: OperationState::Failed,
             side_effect_state: SideEffectState::ExecutedWithError,
             provider_status: ProviderExecutionStatus::ExecutedWithError,
@@ -220,22 +231,26 @@ fn legacy_disposition(
 fn safe_provider_action(
     provider: Option<&str>,
     action: Option<&str>,
-) -> (&'static str, &'static str) {
+) -> (&'static str, &'static str, bool) {
     match (provider, action) {
         (Some("runwarden.input.inspect"), Some("inspect")) => {
-            ("runwarden.input.inspect", "inspect")
+            ("runwarden.input.inspect", "inspect", true)
         }
         (Some("external.mcp.browser.open_page"), Some("open_page")) => {
-            ("external.mcp.browser.open_page", "open_page")
+            ("external.mcp.browser.open_page", "open_page", true)
         }
-        (Some("external.api.request"), Some("request")) => ("external.api.request", "request"),
-        (Some("external.knowledge.write"), Some("write")) => ("external.knowledge.write", "write"),
-        (Some("external.memory.write"), Some("write")) => ("external.memory.write", "write"),
+        (Some("external.api.request"), Some("request")) => {
+            ("external.api.request", "request", true)
+        }
+        (Some("external.knowledge.write"), Some("write")) => {
+            ("external.knowledge.write", "write", true)
+        }
+        (Some("external.memory.write"), Some("write")) => ("external.memory.write", "write", true),
         (Some("external.mcp.filesystem.read_file"), Some("read_file")) => {
-            ("external.mcp.filesystem.read_file", "read_file")
+            ("external.mcp.filesystem.read_file", "read_file", true)
         }
-        (Some("external.email.send"), Some("send")) => ("external.email.send", "send"),
-        _ => (REDACTED_PROVIDER, REDACTED_ACTION),
+        (Some("external.email.send"), Some("send")) => ("external.email.send", "send", true),
+        _ => (REDACTED_PROVIDER, REDACTED_ACTION, false),
     }
 }
 

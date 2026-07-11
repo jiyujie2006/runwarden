@@ -40,8 +40,12 @@ Runwarden-owned runtime configuration, not provider-call arguments.
 `story.json` projection under the requested demo output directory. `runwarden
 demo --all` writes one story for each of the five official scenarios plus
 `reviewer-console.html`. The existing output-directory containment check also
-protects each sibling story write. `runwarden report render --scenario-suite`
-writes the contest report when `--output` is supplied.
+protects each sibling story write, and the story leaf receives a separate
+containment check before writing. `--all` removes only direct stale
+`story.json` file/symlink leaves from immediate ordinary nonofficial child
+directories; it neither follows child symlink directories nor removes other
+files or directories. `runwarden report render --scenario-suite` writes the
+contest report when `--output` is supplied.
 
 `runwarden demo` serves the interactive console from Rust and writes reviewer
 approval state under `.runwarden/approvals`.

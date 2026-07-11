@@ -52,13 +52,15 @@ Legacy operation state mapping is deliberately conservative:
 | `requires_review`, `not_executed`, `false` | `awaiting_approval` | `not_attempted` |
 | `allowed`, `completed`, `false` | `observed_only` | `not_attempted` |
 | `allowed`, `simulated`, `false` | `observed_only` | `simulated` |
-| `allowed`, `completed`, `true` | `completed` | `completed` |
+| Exact known-safe pair plus `allowed`, `completed`, `true` | `completed` | `completed` |
 | `allowed`, `failed`, `false` | `failed` | `failed_before_side_effect` |
-| `allowed`, `executed_with_error`, `true` | `failed` | `executed_with_error` |
+| Exact known-safe pair plus `allowed`, `executed_with_error`, `true` | `failed` | `executed_with_error` |
 | Any unknown or contradictory tuple | `outcome_unknown` | `outcome_unknown` |
 
-Only the tuple with `side_effect_executed = true` becomes a completed
-side-effect operation. A legacy `completed` label without a side effect is not
+Only an exact hardcoded provider/action pair with a compatible tuple and
+`side_effect_executed = true` may affirm execution of a side effect. Unknown or
+redacted pairs that claim `completed` or `executed_with_error` become
+`OutcomeUnknown`. A legacy `completed` label without a side effect is not
 promoted to `OperationState::Completed`.
 
 ## Legacy Authority And Identity
@@ -81,5 +83,12 @@ empty, and the story remains `Incomplete`.
 `runwarden demo --scenario ... --output <dir>` writes `story.json` beside the
 legacy `webui.json` and other retained contest artifacts. `runwarden demo
 --all` produces one story for each of the five official scenarios. The output
-directory uses the same workspace-relative containment and symlink checks as
-the other demo artifacts.
+directory and the `story.json` leaf are each checked through the same
+workspace-relative containment boundary, so a pre-existing leaf symlink cannot
+redirect the story outside the workspace.
+
+Before an `--all` run, the CLI removes only a direct `story.json` regular file
+or symlink leaf from each immediate, ordinary nonofficial child directory. A
+symlink leaf is unlinked without following its target. The CLI does not delete
+child directories, arbitrary sibling files, nested story files, or anything
+under a child that is itself a symlink directory.

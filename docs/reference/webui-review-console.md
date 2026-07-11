@@ -36,6 +36,10 @@ Each official scenario directory also receives a sibling `story.json`. It is
 the Rust adapter's redacted `LegacyDerived` projection and remains
 `EvidenceStatus::Incomplete`; the current static console continues to embed
 the retained legacy `webui.json` until the story-native console migration.
+To keep the generated story set exact, `--all` unlinks only direct
+`story.json` file/symlink leaves in immediate ordinary nonofficial child
+directories. It preserves those directories, all other files, nested stories,
+and every child symlink directory without following it.
 
 ## Policy Boundary
 

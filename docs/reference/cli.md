@@ -51,7 +51,10 @@ provider calls through the Rust kernel and provider layer, then writes
 
 `runwarden demo --all --output artifacts/demo --json` runs all five scenarios
 and writes exactly one `story.json` per official scenario plus
-`artifacts/demo/reviewer-console.html`.
+`artifacts/demo/reviewer-console.html`. Before the run it removes only direct
+stale `story.json` file or symlink leaves from immediate ordinary nonofficial
+child directories; it preserves directories, other files, nested stories, and
+child symlink directories.
 
 ## Trace Commands
 
@@ -64,3 +67,5 @@ and writes exactly one `story.json` per official scenario plus
 Demo and report outputs must be relative workspace paths. Absolute paths,
 parent traversal, and symlink escapes are rejected. Symlink components are
 accepted only when canonical containment keeps the output inside the workspace.
+Demo story writes additionally validate the `story.json` leaf, preventing an
+existing leaf symlink from redirecting bytes outside the workspace.

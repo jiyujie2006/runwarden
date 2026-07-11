@@ -269,10 +269,14 @@ fn raw_legacy_fields_are_hashed_but_never_copied_into_the_story() {
 
 #[test]
 fn operation_state_mapping_is_conservative_and_marks_contradictions_unknown() {
-    let call = |decision: &str, execution_status: &str, side_effect_executed: bool| {
+    let call = |provider: &str,
+                action: &str,
+                decision: &str,
+                execution_status: &str,
+                side_effect_executed: bool| {
         json!({
-            "provider": "runwarden.input.inspect",
-            "action": "inspect",
+            "provider": provider,
+            "action": action,
             "decision": decision,
             "execution_status": execution_status,
             "side_effect_executed": side_effect_executed,
@@ -281,14 +285,14 @@ fn operation_state_mapping_is_conservative_and_marks_contradictions_unknown() {
         })
     };
     let input = json!({"provider_calls": [
-        call("denied", "not_executed", false),
-        call("requires_review", "not_executed", false),
-        call("allowed", "completed", false),
-        call("allowed", "simulated", false),
-        call("allowed", "completed", true),
-        call("allowed", "failed", false),
-        call("allowed", "executed_with_error", true),
-        call("denied", "completed", true)
+        call("runwarden.input.inspect", "inspect", "denied", "not_executed", false),
+        call("runwarden.input.inspect", "inspect", "requires_review", "not_executed", false),
+        call("runwarden.input.inspect", "inspect", "allowed", "completed", false),
+        call("runwarden.input.inspect", "inspect", "allowed", "simulated", false),
+        call("external.email.send", "send", "allowed", "completed", true),
+        call("runwarden.input.inspect", "inspect", "allowed", "failed", false),
+        call("external.email.send", "send", "allowed", "executed_with_error", true),
+        call("runwarden.input.inspect", "inspect", "denied", "completed", true)
     ]});
     let story = adapt_legacy_webui(&input, trusted_context("state-table")).expect("legacy story");
 
@@ -330,6 +334,40 @@ fn operation_state_mapping_is_conservative_and_marks_contradictions_unknown() {
                 .iter()
                 .all(|check| check.observation_ref.is_none())
     }));
+}
+
+#[test]
+fn unknown_provider_action_pair_cannot_claim_a_completed_side_effect() {
+    let input = json!({"provider_calls": [
+        {
+            "provider": "unknown.side.effect",
+            "action": "complete",
+            "decision": "allowed",
+            "execution_status": "completed",
+            "side_effect_executed": true,
+            "arguments": {"target": "opaque"},
+            "output": {"receipt": "opaque"}
+        },
+        {
+            "provider": "unknown.side.effect",
+            "action": "error_after_execution",
+            "decision": "allowed",
+            "execution_status": "executed_with_error",
+            "side_effect_executed": true,
+            "arguments": {"target": "opaque"},
+            "output": {"error": "opaque"}
+        }
+    ]});
+
+    let story = adapt_legacy_webui(&input, trusted_context("unknown-completion"))
+        .expect("unknown legacy pair adapts conservatively");
+    assert!(story.operations.iter().all(|operation| {
+        operation.provider == "legacy.redacted_provider"
+            && operation.action == "redacted_action"
+            && operation.state == OperationState::OutcomeUnknown
+            && operation.side_effect_state == SideEffectState::OutcomeUnknown
+    }));
+    assert_eq!(story.status, StoryStatus::OutcomeUnknown);
 }
 
 #[test]

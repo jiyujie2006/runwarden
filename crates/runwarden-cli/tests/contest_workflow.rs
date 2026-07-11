@@ -144,6 +144,11 @@ fn demo_all_writes_exact_official_stories_and_static_reviewer_console() {
         r#"{"scenario":"anomalous-provider-sequence","provider_calls":[{"provider":"external.api.request","action":"call","decision":"denied","side_effect_executed":false}]}"#,
     )
     .expect("stale webui");
+    fs::write(stale_dir.join("story.json"), r#"{"stale":true}"#).expect("stale story");
+    fs::write(stale_dir.join("keep.txt"), "keep").expect("unrelated stale file");
+    let nested_stale = stale_dir.join("nested");
+    fs::create_dir_all(&nested_stale).expect("nested stale dir");
+    fs::write(nested_stale.join("story.json"), r#"{"nested":true}"#).expect("nested stale story");
 
     let output = Command::new(env!("CARGO_BIN_EXE_runwarden"))
         .current_dir(&workspace)
@@ -170,6 +175,7 @@ fn demo_all_writes_exact_official_stories_and_static_reviewer_console() {
     let story_directories = fs::read_dir(&absolute_output)
         .expect("demo output directory")
         .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|file_type| file_type.is_dir()))
         .filter(|entry| entry.path().join("story.json").is_file())
         .map(|entry| entry.file_name().to_string_lossy().to_string())
         .collect::<BTreeSet<_>>();
@@ -180,6 +186,13 @@ fn demo_all_writes_exact_official_stories_and_static_reviewer_console() {
             .map(ToString::to_string)
             .collect::<BTreeSet<_>>()
     );
+    assert!(!stale_dir.join("story.json").exists());
+    assert!(stale_dir.join("webui.json").exists());
+    assert_eq!(
+        fs::read_to_string(stale_dir.join("keep.txt")).unwrap(),
+        "keep"
+    );
+    assert!(nested_stale.join("story.json").exists());
     for scenario in CONTEST_SCENARIOS {
         let story: SecurityStory = serde_json::from_str(
             &fs::read_to_string(absolute_output.join(scenario).join("story.json"))
@@ -190,6 +203,73 @@ fn demo_all_writes_exact_official_stories_and_static_reviewer_console() {
         assert_eq!(story.provenance, StoryProvenance::LegacyDerived);
         assert_eq!(story.evidence_status, EvidenceStatus::Incomplete);
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn demo_all_story_pruning_does_not_follow_symlink_directories() {
+    use std::os::unix::fs::symlink;
+
+    let workspace = workspace_root();
+    let output_dir = PathBuf::from("target/runwarden-contest-test/demo-all-prune-symlink");
+    let absolute_output = workspace.join(&output_dir);
+    let _ = fs::remove_dir_all(&absolute_output);
+    fs::create_dir_all(&absolute_output).expect("demo output");
+    let outside = tempfile::tempdir().expect("outside directory");
+    let outside_story = outside.path().join("story.json");
+    fs::write(&outside_story, "outside-story").expect("outside story");
+    symlink(outside.path(), absolute_output.join("stale-link")).expect("stale directory link");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_runwarden"))
+        .current_dir(&workspace)
+        .args(["demo", "--all", "--output"])
+        .arg(&output_dir)
+        .arg("--json")
+        .output()
+        .expect("run all demos");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(fs::read_to_string(outside_story).unwrap(), "outside-story");
+    assert!(absolute_output.join("stale-link").is_symlink());
+}
+
+#[cfg(unix)]
+#[test]
+fn demo_all_story_pruning_unlinks_stale_story_leaf_without_touching_target() {
+    use std::os::unix::fs::symlink;
+
+    let workspace = workspace_root();
+    let output_dir = PathBuf::from("target/runwarden-contest-test/demo-all-prune-leaf-link");
+    let absolute_output = workspace.join(&output_dir);
+    let _ = fs::remove_dir_all(&absolute_output);
+    let stale_dir = absolute_output.join("stale-normal-directory");
+    fs::create_dir_all(&stale_dir).expect("stale normal directory");
+    let outside = tempfile::tempdir().expect("outside directory");
+    let outside_story = outside.path().join("story.json");
+    fs::write(&outside_story, "outside-story").expect("outside story");
+    let stale_story_link = stale_dir.join("story.json");
+    symlink(&outside_story, &stale_story_link).expect("stale story leaf link");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_runwarden"))
+        .current_dir(&workspace)
+        .args(["demo", "--all", "--output"])
+        .arg(&output_dir)
+        .arg("--json")
+        .output()
+        .expect("run all demos");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(fs::symlink_metadata(&stale_story_link).is_err());
+    assert_eq!(fs::read_to_string(outside_story).unwrap(), "outside-story");
+    assert!(stale_dir.is_dir());
 }
 
 #[cfg(unix)]
@@ -257,6 +337,42 @@ fn demo_output_allows_in_workspace_symlink_and_rejects_symlink_escape() {
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("workspace"));
     assert!(!outside_target.join("story.json").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn demo_story_leaf_symlink_escape_is_rejected_without_touching_outside_file() {
+    use std::os::unix::fs::symlink;
+
+    let workspace = workspace_root();
+    let output_dir = PathBuf::from("target/runwarden-contest-test/story-leaf-symlink");
+    let absolute_output = workspace.join(&output_dir);
+    let _ = fs::remove_dir_all(&absolute_output);
+    fs::create_dir_all(&absolute_output).expect("demo output");
+    let outside = tempfile::tempdir().expect("outside directory");
+    let outside_story = outside.path().join("outside-story.json");
+    fs::write(&outside_story, "outside-original").expect("outside story");
+    symlink(&outside_story, absolute_output.join("story.json")).expect("story leaf symlink");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_runwarden"))
+        .current_dir(&workspace)
+        .args([
+            "demo",
+            "--scenario",
+            "prompt-injection-file-exfil",
+            "--output",
+        ])
+        .arg(&output_dir)
+        .arg("--json")
+        .output()
+        .expect("run demo with escaping story leaf");
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("story output path"));
+    assert_eq!(
+        fs::read_to_string(outside_story).expect("outside story unchanged"),
+        "outside-original"
+    );
 }
 
 #[test]
