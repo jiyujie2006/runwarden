@@ -377,6 +377,10 @@ fn schema_version_rejects_noncanonical_or_unsupported_versions() {
         "1.0.18446744073709551616",
         " 1.0.0",
         "1.0.0 ",
+        "1.0.0\n",
+        "1.0.0\r",
+        "1.0.0\u{2028}",
+        "1.0.0\u{2029}",
     ] {
         assert!(
             SchemaVersion::try_from(invalid.to_string()).is_err(),

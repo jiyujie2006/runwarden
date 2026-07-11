@@ -53,7 +53,7 @@ impl JsonSchema for SchemaVersion {
                 min_length: Some(5),
                 max_length: Some(43),
                 pattern: Some(format!(
-                    r"^1\.{U64_DECIMAL_SCHEMA_COMPONENT}\.{U64_DECIMAL_SCHEMA_COMPONENT}$"
+                    r"^1\.{U64_DECIMAL_SCHEMA_COMPONENT}\.{U64_DECIMAL_SCHEMA_COMPONENT}(?![\s\S])"
                 )),
             })),
             ..Default::default()
@@ -122,7 +122,7 @@ macro_rules! typed_uuid {
         pub struct $name(
             #[schemars(
                 length(equal = 36),
-                regex(pattern = r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+                regex(pattern = r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?![\s\S])")
             )]
             Uuid,
         );
@@ -195,7 +195,7 @@ pub struct ObservationId(
         with = "String",
         length(equal = 40),
         regex(
-            pattern = r"^obs_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            pattern = r"^obs_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?![\s\S])"
         )
     )]
     Uuid,

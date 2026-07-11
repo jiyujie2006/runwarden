@@ -221,6 +221,10 @@ fn event_codes_validate_construction_and_deserialization() {
         "contains space".to_string(),
         "non-ascii-é".to_string(),
         "x".repeat(129),
+        "allowed\n".to_string(),
+        "allowed\r".to_string(),
+        "allowed\u{2028}".to_string(),
+        "allowed\u{2029}".to_string(),
     ] {
         assert!(EventCode::try_from(invalid.clone()).is_err());
         assert!(serde_json::from_value::<EventCode>(json!(invalid)).is_err());

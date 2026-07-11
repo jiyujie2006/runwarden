@@ -54,7 +54,11 @@ pub enum StoryEventKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(try_from = "String", into = "String")]
 pub struct EventCode(
-    #[schemars(length(min = 1, max = 128), regex(pattern = r"^[A-Za-z0-9.:/@_-]+$"))] String,
+    #[schemars(
+        length(min = 1, max = 128),
+        regex(pattern = r"^[A-Za-z0-9.:/@_-]+(?![\s\S])")
+    )]
+    String,
 );
 
 impl TryFrom<String> for EventCode {
@@ -88,7 +92,7 @@ impl EventCode {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, JsonSchema)]
 pub struct Sha256Digest(
-    #[schemars(length(equal = 71), regex(pattern = r"^sha256:[0-9a-f]{64}$"))] String,
+    #[schemars(length(equal = 71), regex(pattern = r"^sha256:[0-9a-f]{64}(?![\s\S])"))] String,
 );
 
 impl TryFrom<String> for Sha256Digest {

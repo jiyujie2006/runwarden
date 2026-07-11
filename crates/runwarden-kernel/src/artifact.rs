@@ -9,7 +9,9 @@ use thiserror::Error;
 pub struct WorkspaceRelativePath(
     #[schemars(
         length(min = 1),
-        regex(pattern = r"^(?!\.{1,2}(?:/|$))[^/\\:\x00]+(?:/(?!\.{1,2}(?:/|$))[^/\\:\x00]+)*$")
+        regex(
+            pattern = r"^(?!\.{1,2}(?:/|(?![\s\S])))[^/\\:\x00\r\n\u2028\u2029]+(?:/(?!\.{1,2}(?:/|(?![\s\S])))[^/\\:\x00\r\n\u2028\u2029]+)*(?![\s\S])"
+        )
     )]
     String,
 );
@@ -30,9 +32,15 @@ impl TryFrom<String> for WorkspaceRelativePath {
         if value.starts_with('/') {
             return Err("workspace-relative path must be relative".to_string());
         }
-        if value.contains('\\') || value.contains(':') || value.contains('\0') {
+        if value.contains('\\')
+            || value.contains(':')
+            || value.contains('\0')
+            || value
+                .chars()
+                .any(|character| matches!(character, '\r' | '\n' | '\u{2028}' | '\u{2029}'))
+        {
             return Err(
-                "workspace-relative path must not contain a platform prefix, backslash, colon, or NUL"
+                "workspace-relative path must not contain a platform prefix, backslash, colon, NUL, or JSON line terminator"
                     .to_string(),
             );
         }

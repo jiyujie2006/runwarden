@@ -81,7 +81,7 @@
       "format": "uuid",
       "maxLength": 36,
       "minLength": 36,
-      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?![\\s\\S])"
     },
     "ApprovalState": {
       "type": "string",
@@ -99,14 +99,14 @@
       "type": "string",
       "maxLength": 128,
       "minLength": 1,
-      "pattern": "^[A-Za-z0-9.:/@_-]+$"
+      "pattern": "^[A-Za-z0-9.:/@_-]+(?![\\s\\S])"
     },
     "EventId": {
       "type": "string",
       "format": "uuid",
       "maxLength": 36,
       "minLength": 36,
-      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?![\\s\\S])"
     },
     "EvidenceStatus": {
       "type": "string",
@@ -121,14 +121,14 @@
       "type": "string",
       "maxLength": 40,
       "minLength": 40,
-      "pattern": "^obs_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+      "pattern": "^obs_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?![\\s\\S])"
     },
     "OperationId": {
       "type": "string",
       "format": "uuid",
       "maxLength": 36,
       "minLength": 36,
-      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?![\\s\\S])"
     },
     "PolicyDecision": {
       "type": "string",
@@ -143,13 +143,13 @@
       "format": "uuid",
       "maxLength": 36,
       "minLength": 36,
-      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?![\\s\\S])"
     },
     "Sha256Digest": {
       "type": "string",
       "maxLength": 71,
       "minLength": 71,
-      "pattern": "^sha256:[0-9a-f]{64}$"
+      "pattern": "^sha256:[0-9a-f]{64}(?![\\s\\S])"
     },
     "SideEffectState": {
       "type": "string",
@@ -625,7 +625,7 @@
       "format": "uuid",
       "maxLength": 36,
       "minLength": 36,
-      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?![\\s\\S])"
     }
   }
 }

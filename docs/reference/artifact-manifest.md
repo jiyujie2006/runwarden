@@ -16,11 +16,11 @@ Typed artifact, receipt, and safe-operation contracts use
 `WorkspaceRelativePath`. It serializes as a string, but construction and direct
 JSON deserialization both require a non-empty, slash-separated relative path.
 Absolute paths, platform prefixes, colons, backslashes, NUL, empty components,
-and `.` or `..` components are rejected. This newtype proves lexical safety
-only; filesystem writes must still use the stable-root containment and symlink
-checks above. The generated schema applies the dot-component checks locally to
-every slash-separated component, so a line terminator in a neighboring valid
-component cannot hide a later `.` or `..` component.
+JSON line terminators, and `.` or `..` components are rejected. This newtype
+proves lexical safety only; filesystem writes must still use the stable-root
+containment and symlink checks above. The generated schema applies the same
+line-terminator and dot-component checks to every slash-separated component
+and uses a strict ECMAScript absolute-end assertion.
 
 The frozen `StoryBundleManifest` uses the same `WorkspaceRelativePath` for each
 `BundleFileDigest`. Its detached-signature material sorts those validated paths

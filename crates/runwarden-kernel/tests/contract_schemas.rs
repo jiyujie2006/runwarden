@@ -60,12 +60,11 @@ const U64_DECIMAL_SCHEMA_COMPONENT: &str = concat!(
     "|1844674407370955161[0-5])",
 );
 const UUID_V7_SCHEMA_PATTERN: &str =
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$";
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?![\s\S])";
 const OBSERVATION_ID_SCHEMA_PATTERN: &str =
-    r"^obs_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$";
-const EVENT_CODE_SCHEMA_PATTERN: &str = r"^[A-Za-z0-9.:/@_-]+$";
-const WORKSPACE_RELATIVE_PATH_SCHEMA_PATTERN: &str =
-    r"^(?!\.{1,2}(?:/|$))[^/\\:\x00]+(?:/(?!\.{1,2}(?:/|$))[^/\\:\x00]+)*$";
+    r"^obs_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?![\s\S])";
+const EVENT_CODE_SCHEMA_PATTERN: &str = r"^[A-Za-z0-9.:/@_-]+(?![\s\S])";
+const WORKSPACE_RELATIVE_PATH_SCHEMA_PATTERN: &str = r"^(?!\.{1,2}(?:/|(?![\s\S])))[^/\\:\x00\r\n\u2028\u2029]+(?:/(?!\.{1,2}(?:/|(?![\s\S])))[^/\\:\x00\r\n\u2028\u2029]+)*(?![\s\S])";
 
 #[test]
 fn rust_contracts_generate_json_schemas() {
@@ -302,13 +301,13 @@ fn story_bundle_schema_exposes_validated_wire_boundaries() {
     assert_eq!(schema_version["maxLength"], 43);
     assert_eq!(
         schema_version["pattern"],
-        format!(r"^1\.{U64_DECIMAL_SCHEMA_COMPONENT}\.{U64_DECIMAL_SCHEMA_COMPONENT}$")
+        format!(r"^1\.{U64_DECIMAL_SCHEMA_COMPONENT}\.{U64_DECIMAL_SCHEMA_COMPONENT}(?![\s\S])")
     );
 
     let digest = &manifest["definitions"]["Sha256Digest"];
     assert_eq!(digest["minLength"], 71);
     assert_eq!(digest["maxLength"], 71);
-    assert_eq!(digest["pattern"], r"^sha256:[0-9a-f]{64}$");
+    assert_eq!(digest["pattern"], r"^sha256:[0-9a-f]{64}(?![\s\S])");
 }
 
 #[test]

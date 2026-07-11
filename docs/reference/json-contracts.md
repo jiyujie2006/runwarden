@@ -19,15 +19,17 @@ upper bound and reject larger decimal components.
 Validated workspace-relative paths and SHA-256 digests also retain their wire
 constraints in generated schemas. Paths are non-empty slash-separated relative
 paths without absolute/platform prefixes, empty, `.` or `..` components;
-component-local schema checks continue to reject dot components when a
-neighboring component contains a JSON line terminator. Digests use `sha256:`
-followed by exactly 64 lowercase hexadecimal characters.
+JSON line terminators (LF, CR, U+2028, and U+2029) are rejected anywhere in a
+path. Digests use `sha256:` followed by exactly 64 lowercase hexadecimal
+characters.
 
 Story, session, operation, event, approval, and execution-lease ids serialize
 as canonical lowercase hyphenated UUIDv7 strings with the RFC 4122 variant;
 JSON readers reject alternate textual UUID spellings. Observation ids use the
 same UUID boundary after the required `obs_` prefix. Event codes contain 1-128
 ASCII alphanumeric or `.`, `:`, `/`, `@`, `_`, and `-` characters.
+These generated ECMAScript patterns use `(?![\s\S])` for an absolute end
+assertion instead of `$`, which can match before a final JSON line terminator.
 
 `ReportClaimSupport` is a closed object. Its optional fields are nullable for
 wire compatibility, but at least one of `provider`, `event_kind`,
