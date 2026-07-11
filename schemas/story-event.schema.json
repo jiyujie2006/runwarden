@@ -78,7 +78,10 @@
   "definitions": {
     "ApprovalId": {
       "type": "string",
-      "format": "uuid"
+      "format": "uuid",
+      "maxLength": 36,
+      "minLength": 36,
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
     },
     "ApprovalState": {
       "type": "string",
@@ -93,11 +96,17 @@
       ]
     },
     "EventCode": {
-      "type": "string"
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9.:/@_-]+$"
     },
     "EventId": {
       "type": "string",
-      "format": "uuid"
+      "format": "uuid",
+      "maxLength": 36,
+      "minLength": 36,
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
     },
     "EvidenceStatus": {
       "type": "string",
@@ -110,11 +119,16 @@
     },
     "ObservationId": {
       "type": "string",
-      "format": "uuid"
+      "maxLength": 40,
+      "minLength": 40,
+      "pattern": "^obs_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
     },
     "OperationId": {
       "type": "string",
-      "format": "uuid"
+      "format": "uuid",
+      "maxLength": 36,
+      "minLength": 36,
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
     },
     "PolicyDecision": {
       "type": "string",
@@ -126,7 +140,10 @@
     },
     "SessionId": {
       "type": "string",
-      "format": "uuid"
+      "format": "uuid",
+      "maxLength": 36,
+      "minLength": 36,
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
     },
     "Sha256Digest": {
       "type": "string",
@@ -605,7 +622,10 @@
     },
     "StoryId": {
       "type": "string",
-      "format": "uuid"
+      "format": "uuid",
+      "maxLength": 36,
+      "minLength": 36,
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
     }
   }
 }

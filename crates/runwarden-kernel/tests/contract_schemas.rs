@@ -39,6 +39,34 @@ const EXPECTED_SCHEMA_FILES: [&str; 19] = [
     "trace-event.schema.json",
 ];
 
+const U64_DECIMAL_SCHEMA_COMPONENT: &str = concat!(
+    "(?:0|[1-9][0-9]{0,18}",
+    "|1[0-7][0-9]{18}",
+    "|18[0-3][0-9]{17}",
+    "|184[0-3][0-9]{16}",
+    "|1844[0-5][0-9]{15}",
+    "|18446[0-6][0-9]{14}",
+    "|184467[0-3][0-9]{13}",
+    "|1844674[0-3][0-9]{12}",
+    "|184467440[0-6][0-9]{10}",
+    "|1844674407[0-2][0-9]{9}",
+    "|18446744073[0-6][0-9]{8}",
+    "|1844674407370[0-8][0-9]{6}",
+    "|18446744073709[0-4][0-9]{5}",
+    "|184467440737095[0-4][0-9]{4}",
+    "|18446744073709550[0-9]{3}",
+    "|18446744073709551[0-5][0-9]{2}",
+    "|1844674407370955160[0-9]",
+    "|1844674407370955161[0-5])",
+);
+const UUID_V7_SCHEMA_PATTERN: &str =
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$";
+const OBSERVATION_ID_SCHEMA_PATTERN: &str =
+    r"^obs_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$";
+const EVENT_CODE_SCHEMA_PATTERN: &str = r"^[A-Za-z0-9.:/@_-]+$";
+const WORKSPACE_RELATIVE_PATH_SCHEMA_PATTERN: &str =
+    r"^(?!\.{1,2}(?:/|$))[^/\\:\x00]+(?:/(?!\.{1,2}(?:/|$))[^/\\:\x00]+)*$";
+
 #[test]
 fn rust_contracts_generate_json_schemas() {
     let provider_call = schema_for!(ProviderCall);
@@ -266,7 +294,7 @@ fn story_bundle_schema_exposes_validated_wire_boundaries() {
     assert_eq!(relative_path["minLength"], 1);
     assert_eq!(
         relative_path["pattern"],
-        r"^(?!/)(?!.*(?:^|/)\.{1,2}(?:/|$))[^/\\:\x00]+(?:/[^/\\:\x00]+)*$"
+        WORKSPACE_RELATIVE_PATH_SCHEMA_PATTERN
     );
 
     let schema_version = &manifest["definitions"]["SchemaVersion"];
@@ -274,13 +302,85 @@ fn story_bundle_schema_exposes_validated_wire_boundaries() {
     assert_eq!(schema_version["maxLength"], 43);
     assert_eq!(
         schema_version["pattern"],
-        r"^1\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$"
+        format!(r"^1\.{U64_DECIMAL_SCHEMA_COMPONENT}\.{U64_DECIMAL_SCHEMA_COMPONENT}$")
     );
 
     let digest = &manifest["definitions"]["Sha256Digest"];
     assert_eq!(digest["minLength"], 71);
     assert_eq!(digest["maxLength"], 71);
     assert_eq!(digest["pattern"], r"^sha256:[0-9a-f]{64}$");
+}
+
+#[test]
+fn story_schemas_expose_validated_identifier_code_and_claim_boundaries() {
+    let root = workspace_root();
+    let evidence = read_schema(&root, "story-evidence-view.schema.json");
+    let definitions = evidence["definitions"]
+        .as_object()
+        .expect("story evidence definitions");
+
+    for identifier in [
+        "StoryId",
+        "SessionId",
+        "OperationId",
+        "EventId",
+        "ApprovalId",
+        "ExecutionLeaseId",
+    ] {
+        let schema = &definitions[identifier];
+        assert_eq!(schema["type"], "string", "{identifier}");
+        assert_eq!(schema["format"], "uuid", "{identifier}");
+        assert_eq!(schema["minLength"], 36, "{identifier}");
+        assert_eq!(schema["maxLength"], 36, "{identifier}");
+        assert_eq!(schema["pattern"], UUID_V7_SCHEMA_PATTERN, "{identifier}");
+    }
+
+    let observation = &definitions["ObservationId"];
+    assert_eq!(observation["type"], "string");
+    assert!(observation.get("format").is_none());
+    assert_eq!(observation["minLength"], 40);
+    assert_eq!(observation["maxLength"], 40);
+    assert_eq!(observation["pattern"], OBSERVATION_ID_SCHEMA_PATTERN);
+
+    let event_code = &definitions["EventCode"];
+    assert_eq!(event_code["type"], "string");
+    assert_eq!(event_code["minLength"], 1);
+    assert_eq!(event_code["maxLength"], 128);
+    assert_eq!(event_code["pattern"], EVENT_CODE_SCHEMA_PATTERN);
+
+    let claim_support = &definitions["ReportClaimSupport"];
+    assert_eq!(claim_support["type"], "object");
+    assert_eq!(claim_support["additionalProperties"], false);
+    let requirements = claim_support["anyOf"]
+        .as_array()
+        .expect("non-null claim support requirements");
+    assert_eq!(requirements.len(), 6);
+
+    let mut required_fields = requirements
+        .iter()
+        .map(|requirement| {
+            let fields = requirement["required"]
+                .as_array()
+                .expect("claim support required fields");
+            assert_eq!(fields.len(), 1);
+            let field = fields[0].as_str().expect("required field name");
+            let property = &requirement["properties"][field];
+            assert!(!schema_explicitly_allows_null(property), "{field}");
+            field
+        })
+        .collect::<Vec<_>>();
+    required_fields.sort_unstable();
+    assert_eq!(
+        required_fields,
+        [
+            "event_kind",
+            "operation_state",
+            "policy_decision",
+            "provider",
+            "side_effect_state",
+            "simulated",
+        ]
+    );
 }
 
 #[test]
@@ -349,6 +449,16 @@ fn assert_string_or_nullable_string(value: &Value, field: &str) {
             .is_some_and(|types| types.iter().any(|kind| kind == "string")),
         "{field} must include string type"
     );
+}
+
+fn schema_explicitly_allows_null(schema: &Value) -> bool {
+    schema["type"] == "null"
+        || schema["type"]
+            .as_array()
+            .is_some_and(|types| types.iter().any(|kind| kind == "null"))
+        || schema["anyOf"]
+            .as_array()
+            .is_some_and(|variants| variants.iter().any(schema_explicitly_allows_null))
 }
 
 fn assert_schema_title(schema: schemars::schema::RootSchema, expected: &str) {

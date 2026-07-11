@@ -18,7 +18,9 @@ JSON deserialization both require a non-empty, slash-separated relative path.
 Absolute paths, platform prefixes, colons, backslashes, NUL, empty components,
 and `.` or `..` components are rejected. This newtype proves lexical safety
 only; filesystem writes must still use the stable-root containment and symlink
-checks above.
+checks above. The generated schema applies the dot-component checks locally to
+every slash-separated component, so a line terminator in a neighboring valid
+component cannot hide a later `.` or `..` component.
 
 The frozen `StoryBundleManifest` uses the same `WorkspaceRelativePath` for each
 `BundleFileDigest`. Its detached-signature material sorts those validated paths

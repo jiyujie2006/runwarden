@@ -12,12 +12,28 @@ export channel.
 The security-story schema writer version is `1.0.0`. Readers accept canonical
 three-component versions with major version `1` through the validated Rust
 `SchemaVersion` type and reject unsupported majors or non-canonical numeric
-components. Generated schemas publish the accepted major-version shape.
+components. Each minor and patch component spans the complete Rust `u64`
+range, including `18446744073709551615`; generated schemas encode that exact
+upper bound and reject larger decimal components.
 
 Validated workspace-relative paths and SHA-256 digests also retain their wire
 constraints in generated schemas. Paths are non-empty slash-separated relative
 paths without absolute/platform prefixes, empty, `.` or `..` components;
-digests use `sha256:` followed by exactly 64 lowercase hexadecimal characters.
+component-local schema checks continue to reject dot components when a
+neighboring component contains a JSON line terminator. Digests use `sha256:`
+followed by exactly 64 lowercase hexadecimal characters.
+
+Story, session, operation, event, approval, and execution-lease ids serialize
+as canonical lowercase hyphenated UUIDv7 strings with the RFC 4122 variant;
+JSON readers reject alternate textual UUID spellings. Observation ids use the
+same UUID boundary after the required `obs_` prefix. Event codes contain 1-128
+ASCII alphanumeric or `.`, `:`, `/`, `@`, `_`, and `-` characters.
+
+`ReportClaimSupport` is a closed object. Its optional fields are nullable for
+wire compatibility, but at least one of `provider`, `event_kind`,
+`policy_decision`, `operation_state`, `side_effect_state`, or `simulated` must
+be present with a non-null value; the generated schema publishes the same
+six-way requirement as Rust serialization and deserialization.
 
 Canonical JSON v1 recursively sorts every object by UTF-8 key bytes, preserves
 array order, and then emits compact `serde_json` bytes. Resource-claim digests

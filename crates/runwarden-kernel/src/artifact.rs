@@ -9,7 +9,7 @@ use thiserror::Error;
 pub struct WorkspaceRelativePath(
     #[schemars(
         length(min = 1),
-        regex(pattern = r"^(?!/)(?!.*(?:^|/)\.{1,2}(?:/|$))[^/\\:\x00]+(?:/[^/\\:\x00]+)*$")
+        regex(pattern = r"^(?!\.{1,2}(?:/|$))[^/\\:\x00]+(?:/(?!\.{1,2}(?:/|$))[^/\\:\x00]+)*$")
     )]
     String,
 );

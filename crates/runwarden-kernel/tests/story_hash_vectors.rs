@@ -213,6 +213,8 @@ fn event_codes_validate_construction_and_deserialization() {
         serde_json::from_value::<EventCode>(json!(valid.as_str())).unwrap(),
         valid
     );
+    let maximum = EventCode::try_from("x".repeat(128)).unwrap();
+    assert_eq!(maximum.as_str().len(), 128);
 
     for invalid in [
         String::new(),

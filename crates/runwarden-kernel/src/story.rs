@@ -1,4 +1,10 @@
-use schemars::JsonSchema;
+use schemars::{
+    JsonSchema,
+    r#gen::SchemaGenerator,
+    schema::{
+        InstanceType, ObjectValidation, Schema, SchemaObject, StringValidation, SubschemaValidation,
+    },
+};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -11,14 +17,49 @@ use crate::trace::{StoryEvent, StoryEventKind, canonical_json_v1};
 
 pub const SECURITY_STORY_SCHEMA_VERSION: &str = "1.0.0";
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, JsonSchema)]
-pub struct SchemaVersion(
-    #[schemars(
-        length(min = 5, max = 43),
-        regex(pattern = r"^1\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$")
-    )]
-    String,
+const U64_DECIMAL_SCHEMA_COMPONENT: &str = concat!(
+    "(?:0|[1-9][0-9]{0,18}",
+    "|1[0-7][0-9]{18}",
+    "|18[0-3][0-9]{17}",
+    "|184[0-3][0-9]{16}",
+    "|1844[0-5][0-9]{15}",
+    "|18446[0-6][0-9]{14}",
+    "|184467[0-3][0-9]{13}",
+    "|1844674[0-3][0-9]{12}",
+    "|184467440[0-6][0-9]{10}",
+    "|1844674407[0-2][0-9]{9}",
+    "|18446744073[0-6][0-9]{8}",
+    "|1844674407370[0-8][0-9]{6}",
+    "|18446744073709[0-4][0-9]{5}",
+    "|184467440737095[0-4][0-9]{4}",
+    "|18446744073709550[0-9]{3}",
+    "|18446744073709551[0-5][0-9]{2}",
+    "|1844674407370955160[0-9]",
+    "|1844674407370955161[0-5])",
 );
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SchemaVersion(String);
+
+impl JsonSchema for SchemaVersion {
+    fn schema_name() -> String {
+        "SchemaVersion".to_string()
+    }
+
+    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+        Schema::Object(SchemaObject {
+            instance_type: Some(InstanceType::String.into()),
+            string: Some(Box::new(StringValidation {
+                min_length: Some(5),
+                max_length: Some(43),
+                pattern: Some(format!(
+                    r"^1\.{U64_DECIMAL_SCHEMA_COMPONENT}\.{U64_DECIMAL_SCHEMA_COMPONENT}$"
+                )),
+            })),
+            ..Default::default()
+        })
+    }
+}
 
 impl SchemaVersion {
     pub fn current() -> Self {
@@ -78,8 +119,13 @@ impl<'de> Deserialize<'de> for SchemaVersion {
 macro_rules! typed_uuid {
     ($name:ident) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, JsonSchema)]
-        #[schemars(with = "String")]
-        pub struct $name(Uuid);
+        pub struct $name(
+            #[schemars(
+                length(equal = 36),
+                regex(pattern = r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+            )]
+            Uuid,
+        );
 
         impl $name {
             pub fn new() -> Self {
@@ -112,6 +158,12 @@ macro_rules! typed_uuid {
             fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
                 let raw = String::deserialize(deserializer)?;
                 let uuid = Uuid::parse_str(&raw).map_err(serde::de::Error::custom)?;
+                if raw != uuid.to_string() {
+                    return Err(serde::de::Error::custom(concat!(
+                        stringify!($name),
+                        " must use canonical lowercase hyphenated UUID text"
+                    )));
+                }
                 Self::try_from(uuid).map_err(serde::de::Error::custom)
             }
         }
@@ -138,8 +190,16 @@ typed_uuid!(ApprovalId);
 typed_uuid!(ExecutionLeaseId);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, JsonSchema)]
-#[schemars(with = "String")]
-pub struct ObservationId(Uuid);
+pub struct ObservationId(
+    #[schemars(
+        with = "String",
+        length(equal = 40),
+        regex(
+            pattern = r"^obs_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        )
+    )]
+    Uuid,
+);
 
 // The frozen story contract exposes explicit construction for observation IDs.
 #[allow(clippy::new_without_default)]
@@ -153,10 +213,15 @@ impl TryFrom<&str> for ObservationId {
     type Error = String;
 
     fn try_from(raw: &str) -> Result<Self, Self::Error> {
-        let uuid = raw
+        let uuid_text = raw
             .strip_prefix("obs_")
-            .ok_or_else(|| "observation id must start with obs_".to_string())
-            .and_then(|value| Uuid::parse_str(value).map_err(|error| error.to_string()))?;
+            .ok_or_else(|| "observation id must start with obs_".to_string())?;
+        let uuid = Uuid::parse_str(uuid_text).map_err(|error| error.to_string())?;
+        if uuid_text != uuid.to_string() {
+            return Err(
+                "observation id must use canonical lowercase hyphenated UUID text".to_string(),
+            );
+        }
         if uuid.get_version_num() != 7 || uuid.get_variant() != uuid::Variant::RFC4122 {
             return Err("observation id must contain UUIDv7".to_string());
         }
@@ -326,7 +391,7 @@ pub struct StoryClaim {
     pub support_expectation: ReportClaimSupport,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReportClaimSupport {
     pub provider: Option<String>,
     pub event_kind: Option<StoryEventKind>,
@@ -334,6 +399,76 @@ pub struct ReportClaimSupport {
     pub operation_state: Option<OperationState>,
     pub side_effect_state: Option<SideEffectState>,
     pub simulated: Option<bool>,
+}
+
+impl JsonSchema for ReportClaimSupport {
+    fn schema_name() -> String {
+        "ReportClaimSupport".to_string()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        let mut object = ObjectValidation::default();
+        object.properties.insert(
+            "provider".to_string(),
+            generator.subschema_for::<Option<String>>(),
+        );
+        object.properties.insert(
+            "event_kind".to_string(),
+            generator.subschema_for::<Option<StoryEventKind>>(),
+        );
+        object.properties.insert(
+            "policy_decision".to_string(),
+            generator.subschema_for::<Option<PolicyDecision>>(),
+        );
+        object.properties.insert(
+            "operation_state".to_string(),
+            generator.subschema_for::<Option<OperationState>>(),
+        );
+        object.properties.insert(
+            "side_effect_state".to_string(),
+            generator.subschema_for::<Option<SideEffectState>>(),
+        );
+        object.properties.insert(
+            "simulated".to_string(),
+            generator.subschema_for::<Option<bool>>(),
+        );
+        object.additional_properties = Some(Box::new(Schema::Bool(false)));
+
+        let any_of = vec![
+            required_claim_support_property::<String>(generator, "provider"),
+            required_claim_support_property::<StoryEventKind>(generator, "event_kind"),
+            required_claim_support_property::<PolicyDecision>(generator, "policy_decision"),
+            required_claim_support_property::<OperationState>(generator, "operation_state"),
+            required_claim_support_property::<SideEffectState>(generator, "side_effect_state"),
+            required_claim_support_property::<bool>(generator, "simulated"),
+        ];
+
+        Schema::Object(SchemaObject {
+            instance_type: Some(InstanceType::Object.into()),
+            subschemas: Some(Box::new(SubschemaValidation {
+                any_of: Some(any_of),
+                ..Default::default()
+            })),
+            object: Some(Box::new(object)),
+            ..Default::default()
+        })
+    }
+}
+
+fn required_claim_support_property<T: JsonSchema>(
+    generator: &mut SchemaGenerator,
+    field: &str,
+) -> Schema {
+    let mut object = ObjectValidation::default();
+    object.required.insert(field.to_string());
+    object
+        .properties
+        .insert(field.to_string(), generator.subschema_for::<T>());
+    Schema::Object(SchemaObject {
+        instance_type: Some(InstanceType::Object.into()),
+        object: Some(Box::new(object)),
+        ..Default::default()
+    })
 }
 
 impl ReportClaimSupport {

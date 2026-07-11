@@ -53,7 +53,9 @@ pub enum StoryEventKind {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(try_from = "String", into = "String")]
-pub struct EventCode(String);
+pub struct EventCode(
+    #[schemars(length(min = 1, max = 128), regex(pattern = r"^[A-Za-z0-9.:/@_-]+$"))] String,
+);
 
 impl TryFrom<String> for EventCode {
     type Error = String;

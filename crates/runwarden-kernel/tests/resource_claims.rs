@@ -68,6 +68,10 @@ fn workspace_relative_paths_reject_unsafe_lexical_forms() {
         "reports/../q2.md",
         "reports/q2.md/",
         "reports/\0q2.md",
+        "reports\n/../q2.md",
+        "reports\r/./q2.md",
+        "reports\u{2028}/../q2.md",
+        "reports\u{2029}/./q2.md",
     ] {
         assert!(
             WorkspaceRelativePath::try_from(invalid.to_string()).is_err(),

@@ -240,6 +240,29 @@ fn all_typed_uuid_identifiers_round_trip_as_v7_strings() {
 }
 
 #[test]
+fn typed_uuid_json_requires_canonical_lowercase_hyphenated_strings() {
+    let canonical = "01980a8c-0000-7000-8000-000000000001";
+    let uppercase = canonical.to_uppercase();
+
+    macro_rules! assert_rejects_noncanonical_id {
+        ($type:ty) => {
+            assert!(serde_json::from_value::<$type>(json!(uppercase)).is_err());
+        };
+    }
+
+    assert_rejects_noncanonical_id!(StoryId);
+    assert_rejects_noncanonical_id!(SessionId);
+    assert_rejects_noncanonical_id!(OperationId);
+    assert_rejects_noncanonical_id!(EventId);
+    assert_rejects_noncanonical_id!(ApprovalId);
+    assert_rejects_noncanonical_id!(ExecutionLeaseId);
+
+    let uppercase_observation = format!("obs_{uppercase}");
+    assert!(ObservationId::try_from(uppercase_observation.as_str()).is_err());
+    assert!(serde_json::from_value::<ObservationId>(json!(uppercase_observation)).is_err());
+}
+
+#[test]
 fn observation_ids_use_the_obs_prefix_and_round_trip() {
     let id = ObservationId::new();
     let rendered = id.to_string();
@@ -318,7 +341,13 @@ fn schema_version_current_is_the_frozen_writer_version() {
 
 #[test]
 fn schema_version_reader_accepts_canonical_major_one_versions() {
-    for compatible in ["1.0.0", "1.1.0", "1.12.34"] {
+    for compatible in [
+        "1.0.0",
+        "1.1.0",
+        "1.12.34",
+        "1.18446744073709551615.0",
+        "1.0.18446744073709551615",
+    ] {
         let from_json = serde_json::from_value::<SchemaVersion>(json!(compatible)).unwrap();
         let from_rust = SchemaVersion::try_from(compatible.to_string()).unwrap();
 
@@ -344,6 +373,8 @@ fn schema_version_rejects_noncanonical_or_unsupported_versions() {
         "1.0.01",
         "1.-1.0",
         "1.0.0-alpha",
+        "1.18446744073709551616.0",
+        "1.0.18446744073709551616",
         " 1.0.0",
         "1.0.0 ",
     ] {
@@ -397,6 +428,20 @@ fn native_story_views_reject_unknown_fields_and_empty_claim_expectations() {
 
     assert!(serde_json::from_value::<ReportClaimSupport>(json!({})).is_err());
     assert!(serde_json::from_value::<ReportClaimSupport>(json!({"supported": true})).is_err());
+    assert!(
+        serde_json::from_value::<ReportClaimSupport>(json!({
+            "provider": null,
+            "simulated": null,
+        }))
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<ReportClaimSupport>(json!({
+            "provider": null,
+            "simulated": false,
+        }))
+        .is_ok()
+    );
     assert!(
         serde_json::to_value(ReportClaimSupport {
             provider: None,
