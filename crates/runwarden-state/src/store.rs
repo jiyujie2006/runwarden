@@ -72,6 +72,14 @@ impl StateStore {
         transaction.commit()?;
         harden_database_files(&self.state_dir)
     }
+
+    pub(crate) fn connection(&self) -> Result<Connection, JournalError> {
+        open_configured_connection(&self.state_dir)
+    }
+
+    pub(crate) fn harden_files(&self) -> Result<(), JournalError> {
+        harden_database_files(&self.state_dir)
+    }
 }
 
 fn open_configured_connection(state_dir: &Path) -> Result<Connection, JournalError> {

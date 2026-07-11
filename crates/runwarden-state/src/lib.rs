@@ -4,9 +4,89 @@
 //! still compiles on other targets, but [`StateStore::open`] fails closed with
 //! [`JournalError::Permission`] there.
 
+mod sessions;
 mod store;
+mod stories;
 
+pub use sessions::SessionRecord;
 pub use store::{StateStore, StoreDiagnostics};
+pub use stories::{ActiveDemo, DemoActivation, StoryStatusUpdate};
+
+use serde::{Serialize, de::DeserializeOwned};
+use time::{OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
+
+pub(crate) fn canonical_json<T: Serialize>(value: &T) -> Result<String, JournalError> {
+    let value = serde_json::to_value(value)?;
+    String::from_utf8(runwarden_kernel::trace::canonical_json_v1(&value))
+        .map_err(|error| JournalError::Integrity(format!("canonical JSON was not UTF-8: {error}")))
+}
+
+pub(crate) fn persisted_json<T: DeserializeOwned>(
+    raw: &str,
+    entity: &'static str,
+) -> Result<T, JournalError> {
+    serde_json::from_str(raw).map_err(|error| {
+        JournalError::Integrity(format!(
+            "stored {entity} JSON failed typed decoding: {error}"
+        ))
+    })
+}
+
+pub(crate) fn enum_text<T: Serialize>(value: &T) -> Result<String, JournalError> {
+    match serde_json::to_value(value)? {
+        serde_json::Value::String(value) => Ok(value),
+        _ => Err(JournalError::Integrity(
+            "serialized enum was not a string".to_owned(),
+        )),
+    }
+}
+
+pub(crate) fn persisted_string<T: DeserializeOwned>(
+    raw: String,
+    entity: &'static str,
+) -> Result<T, JournalError> {
+    serde_json::from_value(serde_json::Value::String(raw)).map_err(|error| {
+        JournalError::Integrity(format!(
+            "stored {entity} value failed typed decoding: {error}"
+        ))
+    })
+}
+
+pub(crate) fn persisted_enum<T: DeserializeOwned>(
+    raw: String,
+    entity: &'static str,
+) -> Result<T, JournalError> {
+    persisted_string(raw, entity)
+}
+
+pub(crate) fn format_time(value: OffsetDateTime) -> Result<String, JournalError> {
+    value
+        .to_offset(UtcOffset::UTC)
+        .format(&Rfc3339)
+        .map_err(|error| JournalError::Integrity(format!("timestamp formatting failed: {error}")))
+}
+
+pub(crate) fn persisted_time(
+    raw: &str,
+    entity: &'static str,
+) -> Result<OffsetDateTime, JournalError> {
+    OffsetDateTime::parse(raw, &Rfc3339).map_err(|error| {
+        JournalError::Integrity(format!("stored {entity} timestamp is invalid: {error}"))
+    })
+}
+
+pub(crate) fn sqlite_u64(value: u64, entity: &'static str) -> Result<i64, JournalError> {
+    i64::try_from(value).map_err(|_| {
+        JournalError::Integrity(format!(
+            "{entity} value {value} exceeds SQLite INTEGER range"
+        ))
+    })
+}
+
+pub(crate) fn rust_u64(value: i64, entity: &'static str) -> Result<u64, JournalError> {
+    u64::try_from(value)
+        .map_err(|_| JournalError::Integrity(format!("stored {entity} value {value} is negative")))
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum JournalError {
