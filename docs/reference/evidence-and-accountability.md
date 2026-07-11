@@ -75,6 +75,40 @@ frame aggregate count must match its sequence, and each frame aggregate's
 `final_event_hash` must be absent for an empty chain or exactly equal the last
 sealed event hash. Export does not redact again or replace hashes after sealing.
 
+## Native Approval And Execution Evidence
+
+Native SQLite approval creation, reviewer approval or denial, and expiry each
+commit exactly one `StoryEventPayload::ApprovalLifecycle` event and one replay
+frame in the same transaction as the approval and operation state changes.
+The allowlisted payload contains only the typed approval id and state plus an
+optional SHA-256 reviewer-id commitment. Pending and expiry events omit the
+reviewer commitment; approval and denial events hash the reviewer id's UTF-8
+bytes. Raw reviewer reasons never enter an event payload or journal error,
+although the reviewer-authored reason is visible in the display-safe
+`ApprovalView` captured by replay frames.
+
+Lease acquisition and execution start use typed `ProviderExecution` events
+with stable status codes `execution_lease_acquired` and
+`provider_execution_started`. The latter is the durable start-intent boundary:
+an operation cannot persist a provider result without a verified matching
+start event. Completion or failure records the typed provider execution status,
+authoritative side-effect state, safe output hash, and an email receipt hash
+when that output variant supplies one. Full provider arguments remain only in
+private operation material and are absent from approvals, leases, events,
+frames, and errors.
+
+Every approval, lease, start, and result mutation first verifies the existing
+story evidence and then advances the story event/frame chain atomically. A
+failed binding check, stale version, exhausted budget, changed active instance,
+or repeated start creates no partial state or orphan event. Approval lifecycle
+events carry the operation id, so their `obs_*` ids appear in that operation's
+ordered observation references.
+
+These native journal events are distinct from the current legacy MCP
+`events.jsonl` and file-backed approval flow. Until runtime/MCP integration is
+complete, documentation and contest evidence must identify which source
+produced an observation rather than treating the two stores as interchangeable.
+
 Scenario replay trace payloads include the provider call arguments that led to
 the cited decision so judges can inspect the attempted target without executing
 the provider.

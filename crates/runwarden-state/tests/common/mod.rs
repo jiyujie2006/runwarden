@@ -7,8 +7,9 @@ use runwarden_kernel::story::{
 };
 use runwarden_kernel::trace::{Sha256Digest, canonical_json_v1};
 use runwarden_state::{NewOperation, PrivateOperationMaterial, SessionRecord, StateStore};
+use rusqlite::params;
 use serde_json::json;
-use time::{Duration, OffsetDateTime};
+use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
 
 pub const PRIVATE_MARKER: &str = "secret-raw-marker";
 
@@ -35,6 +36,14 @@ impl JournalFixture {
                 policy_snapshot_hash: story.authority.policy_snapshot_hash.clone(),
                 expires_at: story.authority.expires_at,
             })
+            .unwrap();
+        let journal_start = mutation_time(&story, 0).format(&Rfc3339).unwrap();
+        rusqlite::Connection::open(state_dir.join("runwarden.db"))
+            .unwrap()
+            .execute(
+                "UPDATE stories SET created_at = ?1, updated_at = ?1 WHERE story_id = ?2",
+                params![journal_start, story.story_id.to_string()],
+            )
             .unwrap();
         Self {
             _temp: temp,
@@ -119,7 +128,9 @@ fn story_fixture(enforcement_mode: EnforcementMode) -> SecurityStory {
             actor_id: "actor-demo".to_owned(),
             authz_id: "authz-demo".to_owned(),
             authz_state: "active".to_owned(),
-            expires_at: OffsetDateTime::now_utc() + Duration::days(2),
+            // Deterministic journal mutations begin one minute before wall
+            // time; lease/approval deadlines remain ahead of wall time.
+            expires_at: OffsetDateTime::now_utc() + Duration::days(1) - Duration::minutes(1),
             allowed_providers: vec!["email.send".to_owned()],
             files: Vec::new(),
             networks: Vec::new(),
