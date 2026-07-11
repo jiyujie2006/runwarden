@@ -19,7 +19,8 @@ CREATE TABLE stories (
       'evidence_invalid'
     )),
     CHECK(evidence_status IN ('pending', 'verified', 'incomplete', 'invalid')),
-    CHECK(json_valid(safe_story_json))
+    CHECK(CASE WHEN json_valid(safe_story_json)
+      THEN json_type(safe_story_json) IS 'object' ELSE 0 END)
 ) STRICT;
 
 CREATE TABLE sessions (
@@ -31,7 +32,8 @@ CREATE TABLE sessions (
     active INTEGER NOT NULL CHECK(active IN (0, 1)),
     version INTEGER NOT NULL DEFAULT 0 CHECK(version >= 0),
     UNIQUE(story_id, session_id),
-    CHECK(json_valid(authority_json))
+    CHECK(CASE WHEN json_valid(authority_json)
+      THEN json_type(authority_json) IS 'object' ELSE 0 END)
 ) STRICT;
 
 CREATE TABLE active_instances (
@@ -68,7 +70,8 @@ CREATE TABLE budget_reservations (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     FOREIGN KEY(story_id, session_id) REFERENCES sessions(story_id, session_id),
-    CHECK(json_valid(charge_json))
+    CHECK(CASE WHEN json_valid(charge_json)
+      THEN json_type(charge_json) IS 'object' ELSE 0 END)
 ) STRICT;
 
 CREATE TABLE operations (
@@ -115,9 +118,15 @@ CREATE TABLE operations (
       'not_attempted', 'blocked_before_execution', 'simulated', 'completed',
       'failed_before_side_effect', 'executed_with_error', 'outcome_unknown'
     )),
-    CHECK(json_valid(redacted_arguments_json)),
+    CHECK(CASE WHEN json_valid(redacted_arguments_json)
+      THEN json_type(redacted_arguments_json) IS 'object' ELSE 0 END),
     CHECK(json_valid(CAST(private_arguments_json AS TEXT))),
-    CHECK(provider_result_json IS NULL OR json_valid(provider_result_json))
+    CHECK(CASE
+      WHEN provider_result_json IS NULL THEN 1
+      WHEN json_valid(provider_result_json)
+        THEN json_type(provider_result_json) IS 'object'
+      ELSE 0
+    END)
 ) STRICT;
 
 CREATE TABLE resource_claims (
@@ -127,7 +136,8 @@ CREATE TABLE resource_claims (
     claim_hash TEXT NOT NULL,
     FOREIGN KEY(story_id, operation_id)
       REFERENCES operations(story_id, operation_id) ON DELETE CASCADE,
-    CHECK(json_valid(claim_json))
+    CHECK(CASE WHEN json_valid(claim_json)
+      THEN json_type(claim_json) IS 'object' ELSE 0 END)
 ) STRICT;
 
 CREATE TABLE policy_checks (
@@ -138,7 +148,8 @@ CREATE TABLE policy_checks (
     PRIMARY KEY(operation_id, ordinal),
     FOREIGN KEY(story_id, operation_id)
       REFERENCES operations(story_id, operation_id) ON DELETE CASCADE,
-    CHECK(json_valid(check_json))
+    CHECK(CASE WHEN json_valid(check_json)
+      THEN json_type(check_json) IS 'object' ELSE 0 END)
 ) STRICT;
 
 CREATE TABLE approvals (
@@ -165,11 +176,12 @@ CREATE TABLE approvals (
       'pending', 'approved', 'leased', 'consumed', 'denied', 'expired',
       'revoked'
     )),
-    CHECK(json_valid(binding_json)),
-    CHECK(
-      json_type(binding_json, '$.maximum_consumptions') IS 'integer'
+    CHECK(CASE WHEN json_valid(binding_json) THEN
+      json_type(binding_json) IS 'object'
+      AND json_type(binding_json, '$.maximum_consumptions') IS 'integer'
       AND json_extract(binding_json, '$.maximum_consumptions') IS 1
-    )
+      ELSE 0
+    END)
 ) STRICT;
 
 CREATE TABLE events (
@@ -190,7 +202,14 @@ CREATE TABLE events (
     FOREIGN KEY(story_id, session_id) REFERENCES sessions(story_id, session_id),
     FOREIGN KEY(story_id, session_id, operation_id)
       REFERENCES operations(story_id, session_id, operation_id),
-    CHECK(json_valid(redacted_payload_json))
+    CHECK(event_type IN (
+      'operation_proposed', 'policy_decision', 'approval_lifecycle',
+      'provider_execution', 'model_call', 'tool_proposal', 'causal_link',
+      'evidence_verification', 'input_consumed', 'sandbox_decision',
+      'monitor_observation'
+    )),
+    CHECK(CASE WHEN json_valid(redacted_payload_json)
+      THEN json_type(redacted_payload_json) IS 'object' ELSE 0 END)
 ) STRICT;
 
 CREATE TABLE story_frames (
@@ -206,7 +225,8 @@ CREATE TABLE story_frames (
     PRIMARY KEY(story_id, sequence),
     FOREIGN KEY(story_id, sequence, event_hash)
       REFERENCES events(story_id, sequence, event_hash),
-    CHECK(json_valid(safe_story_json))
+    CHECK(CASE WHEN json_valid(safe_story_json)
+      THEN json_type(safe_story_json) IS 'object' ELSE 0 END)
 ) STRICT;
 
 CREATE TABLE report_claims (
@@ -214,7 +234,8 @@ CREATE TABLE report_claims (
     claim_id TEXT NOT NULL,
     claim_json TEXT NOT NULL,
     PRIMARY KEY(story_id, claim_id),
-    CHECK(json_valid(claim_json))
+    CHECK(CASE WHEN json_valid(claim_json)
+      THEN json_type(claim_json) IS 'object' ELSE 0 END)
 ) STRICT;
 
 CREATE TABLE exports (

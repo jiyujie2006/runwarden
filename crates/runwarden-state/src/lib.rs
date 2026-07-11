@@ -1,4 +1,8 @@
 //! Durable, story-scoped state for Runwarden.
+//!
+//! The journal requires Unix owner-only filesystem permissions. The crate
+//! still compiles on other targets, but [`StateStore::open`] fails closed with
+//! [`JournalError::Permission`] there.
 
 mod store;
 

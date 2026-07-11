@@ -55,8 +55,8 @@ fn open_seeded() -> (tempfile::TempDir, Connection) {
                 story_id, sequence, obs_id, event_id, session_id, operation_id,
                 event_type, redacted_payload_json, event_hash, recorded_at
             ) VALUES
-                ('story-a', 1, 'obs-a', 'event-a', 'session-a', 'operation-a', 'observed', '{}', 'event-hash-a', 't'),
-                ('story-b', 1, 'obs-b', 'event-b', 'session-b', 'operation-b', 'observed', '{}', 'event-hash-b', 't');
+                ('story-a', 1, 'obs-a', 'event-a', 'session-a', 'operation-a', 'provider_execution', '{}', 'event-hash-a', 't'),
+                ('story-b', 1, 'obs-b', 'event-b', 'session-b', 'operation-b', 'provider_execution', '{}', 'event-hash-b', 't');
             "#,
         )
         .unwrap();
@@ -158,7 +158,7 @@ fn every_story_scoped_relationship_rejects_mismatched_tuples() {
                 story_id, sequence, obs_id, event_id, session_id, operation_id,
                 event_type, redacted_payload_json, event_hash, recorded_at
             ) VALUES ('story-a', 2, 'obs-cross-session', 'event-cross-session',
-                'session-a2', 'operation-a', 'observed', '{}', 'hash', 't')"#,
+                'session-a2', 'operation-a', 'provider_execution', '{}', 'hash', 't')"#,
             [],
         ),
         ffi::SQLITE_CONSTRAINT_FOREIGNKEY,
@@ -181,7 +181,7 @@ fn every_story_scoped_relationship_rejects_mismatched_tuples() {
                 story_id, sequence, obs_id, event_id, session_id, operation_id,
                 event_type, redacted_payload_json, event_hash, recorded_at
             ) VALUES ('story-b', 2, 'obs-cross-story', 'event-cross-story',
-                'session-b', 'operation-a', 'observed', '{}', 'hash', 't')"#,
+                'session-b', 'operation-a', 'provider_execution', '{}', 'hash', 't')"#,
             [],
         ),
         ffi::SQLITE_CONSTRAINT_FOREIGNKEY,
@@ -309,7 +309,7 @@ fn every_json_column_rejects_malformed_json() {
                 story_id, sequence, obs_id, event_id, session_id, operation_id,
                 event_type, redacted_payload_json, event_hash, recorded_at
             ) VALUES ('story-a', 2, 'obs-bad-json', 'event-bad-json',
-                'session-a', 'operation-a', 'observed', '{', 'hash', 't')"#,
+                'session-a', 'operation-a', 'provider_execution', '{', 'hash', 't')"#,
             [],
         ),
         ffi::SQLITE_CONSTRAINT_CHECK,
@@ -346,6 +346,151 @@ fn every_json_column_rejects_malformed_json() {
         ),
         ffi::SQLITE_CONSTRAINT_CHECK,
     );
+}
+
+#[test]
+fn every_typed_json_column_rejects_well_formed_non_objects() {
+    let (_temp, connection) = open_seeded();
+
+    for (index, json) in ["null", "[]", "42", r#""text""#].into_iter().enumerate() {
+        assert_constraint(
+            connection.execute(
+                r#"INSERT INTO stories (
+                    story_id, schema_version, title, scenario_id, run_mode,
+                    enforcement_mode, status, evidence_status, safe_story_json,
+                    created_at, updated_at
+                ) VALUES (?1, '1.0.0', 'bad shape', 'scenario', 'deterministic',
+                    'enforced', 'running', 'pending', ?2, 't', 't')"#,
+                params![format!("shape-story-{index}"), json],
+            ),
+            ffi::SQLITE_CONSTRAINT_CHECK,
+        );
+        assert_constraint(
+            connection.execute(
+                r#"INSERT INTO sessions (
+                    session_id, story_id, authority_json, policy_snapshot_hash,
+                    expires_at, active
+                ) VALUES (?1, 'story-a', ?2, 'policy', 't', 1)"#,
+                params![format!("shape-session-{index}"), json],
+            ),
+            ffi::SQLITE_CONSTRAINT_CHECK,
+        );
+        assert_constraint(
+            connection.execute(
+                r#"INSERT INTO budget_reservations (
+                    lease_id, story_id, session_id, charge_json, state,
+                    created_at, updated_at
+                ) VALUES (?1, 'story-a', 'session-a', ?2, 'reserved', 't', 't')"#,
+                params![format!("shape-lease-{index}"), json],
+            ),
+            ffi::SQLITE_CONSTRAINT_CHECK,
+        );
+
+        for (kind, redacted, result) in [("redacted", json, None), ("result", "{}", Some(json))] {
+            let operation_id = format!("shape-operation-{kind}-{index}");
+            assert_constraint(
+                connection.execute(
+                    r#"INSERT INTO operations (
+                        operation_id, story_id, session_id, invocation_key,
+                        provider, action, argument_hash,
+                        redacted_arguments_json, private_arguments_json,
+                        policy_snapshot_hash, state, side_effect_state,
+                        provider_result_json, created_at, updated_at
+                    ) VALUES (?1, 'story-a', 'session-a', ?1, 'provider',
+                        'action', 'args', ?2, x'7b7d', 'policy-a', 'proposed',
+                        'not_attempted', ?3, 't', 't')"#,
+                    params![operation_id, redacted, result],
+                ),
+                ffi::SQLITE_CONSTRAINT_CHECK,
+            );
+        }
+
+        assert_constraint(
+            connection.execute(
+                "INSERT INTO resource_claims VALUES ('story-a', 'operation-a', ?1, 'hash')",
+                params![json],
+            ),
+            ffi::SQLITE_CONSTRAINT_CHECK,
+        );
+        assert_constraint(
+            connection.execute(
+                "INSERT INTO policy_checks VALUES ('story-a', 'operation-a', 1, ?1)",
+                params![json],
+            ),
+            ffi::SQLITE_CONSTRAINT_CHECK,
+        );
+        assert_constraint(
+            connection.execute(
+                r#"INSERT INTO approvals (
+                    approval_id, story_id, session_id, operation_id,
+                    binding_json, binding_hash, state, expires_at,
+                    created_at, updated_at
+                ) VALUES (?1, 'story-a', 'session-a', 'operation-a', ?2,
+                    'hash', 'pending', 't', 't', 't')"#,
+                params![format!("shape-approval-{index}"), json],
+            ),
+            ffi::SQLITE_CONSTRAINT_CHECK,
+        );
+        assert_constraint(
+            connection.execute(
+                r#"INSERT INTO events (
+                    story_id, sequence, obs_id, event_id, session_id,
+                    operation_id, event_type, redacted_payload_json,
+                    event_hash, recorded_at
+                ) VALUES ('story-a', 2, ?1, ?2, 'session-a', 'operation-a',
+                    'provider_execution', ?3, ?4, 't')"#,
+                params![
+                    format!("obs-shape-{index}"),
+                    format!("event-shape-{index}"),
+                    json,
+                    format!("event-shape-hash-{index}")
+                ],
+            ),
+            ffi::SQLITE_CONSTRAINT_CHECK,
+        );
+        assert_constraint(
+            connection.execute(
+                r#"INSERT INTO story_frames (
+                    story_id, sequence, story_version, event_hash,
+                    snapshot_hash, frame_hash, safe_story_json, recorded_at
+                ) VALUES ('story-a', 1, 0, 'event-hash-a', 'snapshot', ?1,
+                    ?2, 't')"#,
+                params![format!("frame-shape-{index}"), json],
+            ),
+            ffi::SQLITE_CONSTRAINT_CHECK,
+        );
+        assert_constraint(
+            connection.execute(
+                "INSERT INTO report_claims VALUES ('story-a', ?1, ?2)",
+                params![format!("shape-claim-{index}"), json],
+            ),
+            ffi::SQLITE_CONSTRAINT_CHECK,
+        );
+    }
+}
+
+#[test]
+fn private_argument_json_accepts_every_well_formed_json_shape() {
+    let (_temp, connection) = open_seeded();
+
+    for (index, json) in ["null", "[]", "42", r#""text""#, "{}"]
+        .into_iter()
+        .enumerate()
+    {
+        connection
+            .execute(
+                r#"INSERT INTO operations (
+                    operation_id, story_id, session_id, invocation_key,
+                    provider, action, argument_hash, redacted_arguments_json,
+                    private_arguments_json, policy_snapshot_hash, state,
+                    side_effect_state, created_at, updated_at
+                ) VALUES (?1, 'story-a', 'session-a', ?1, 'provider', 'action',
+                    'args', '{}', ?2, 'policy-a', 'proposed',
+                    'not_attempted', 't', 't')"#,
+                params![format!("private-shape-{index}"), json.as_bytes()],
+            )
+            .unwrap();
+    }
 }
 
 #[test]
@@ -442,7 +587,7 @@ fn integer_versions_counters_sequences_and_ordinals_are_bounded() {
                 story_id, sequence, obs_id, event_id, session_id, operation_id,
                 event_type, redacted_payload_json, event_hash, recorded_at
             ) VALUES ('story-a', 0, 'obs-zero', 'event-zero', 'session-a',
-                'operation-a', 'observed', '{}', 'hash-zero', 't')"#,
+                'operation-a', 'provider_execution', '{}', 'hash-zero', 't')"#,
             [],
         ),
         ffi::SQLITE_CONSTRAINT_CHECK,
@@ -692,6 +837,65 @@ fn frozen_enum_columns_reject_unknown_values() {
             ) VALUES ('bad-approval-state', 'story-a', 'session-a',
                 'operation-a', '{"maximum_consumptions":1}', 'hash',
                 'unknown', 't', 't', 't')"#,
+            [],
+        ),
+        ffi::SQLITE_CONSTRAINT_CHECK,
+    );
+}
+
+#[test]
+fn event_type_accepts_every_frozen_story_event_kind() {
+    let (_temp, connection) = open_seeded();
+
+    for (index, event_type) in [
+        "operation_proposed",
+        "policy_decision",
+        "approval_lifecycle",
+        "provider_execution",
+        "model_call",
+        "tool_proposal",
+        "causal_link",
+        "evidence_verification",
+        "input_consumed",
+        "sandbox_decision",
+        "monitor_observation",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        connection
+            .execute(
+                r#"INSERT INTO events (
+                    story_id, sequence, obs_id, event_id, session_id,
+                    operation_id, event_type, redacted_payload_json,
+                    event_hash, recorded_at
+                ) VALUES ('story-a', ?1, ?2, ?3, 'session-a', 'operation-a',
+                    ?4, '{}', ?5, 't')"#,
+                params![
+                    i64::try_from(index).unwrap() + 2,
+                    format!("obs-enum-{index}"),
+                    format!("event-enum-{index}"),
+                    event_type,
+                    format!("event-enum-hash-{index}")
+                ],
+            )
+            .unwrap();
+    }
+}
+
+#[test]
+fn event_type_rejects_unknown_values() {
+    let (_temp, connection) = open_seeded();
+
+    assert_constraint(
+        connection.execute(
+            r#"INSERT INTO events (
+                story_id, sequence, obs_id, event_id, session_id,
+                operation_id, event_type, redacted_payload_json, event_hash,
+                recorded_at
+            ) VALUES ('story-a', 2, 'obs-bad-event-kind',
+                'event-bad-event-kind', 'session-a', 'operation-a', 'unknown',
+                '{}', 'bad-event-kind-hash', 't')"#,
             [],
         ),
         ffi::SQLITE_CONSTRAINT_CHECK,

@@ -1,6 +1,6 @@
 use std::fs::{self, OpenOptions};
 use std::io::ErrorKind;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use rusqlite::{Connection, ErrorCode, OpenFlags, TransactionBehavior, params};
@@ -28,7 +28,8 @@ pub struct StateStore {
 
 impl StateStore {
     pub fn open(state_dir: impl AsRef<Path>) -> Result<Self, JournalError> {
-        let state_dir = state_dir.as_ref().to_path_buf();
+        ensure_supported_platform()?;
+        let state_dir = prepare_state_directory(state_dir.as_ref())?;
         let mut connection = open_configured_connection(&state_dir)?;
         migrate(&mut connection)?;
         validate_v1_schema(&connection)?;
@@ -74,8 +75,10 @@ impl StateStore {
 }
 
 fn open_configured_connection(state_dir: &Path) -> Result<Connection, JournalError> {
-    prepare_state_directory(state_dir)?;
+    ensure_supported_platform()?;
+    verify_stable_state_directory(state_dir)?;
     prepare_database_files(state_dir)?;
+    verify_stable_state_directory(state_dir)?;
 
     let database_path = state_dir.join(DATABASE_NAME);
     let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
@@ -87,6 +90,7 @@ fn open_configured_connection(state_dir: &Path) -> Result<Connection, JournalErr
     let connection = Connection::open_with_flags(database_path, flags)?;
     configure_connection(&connection)?;
     harden_database_files(state_dir)?;
+    verify_stable_state_directory(state_dir)?;
     Ok(connection)
 }
 
@@ -264,18 +268,115 @@ fn validate_v1_schema(connection: &Connection) -> Result<(), JournalError> {
     Ok(())
 }
 
-fn prepare_state_directory(state_dir: &Path) -> Result<(), JournalError> {
-    match fs::symlink_metadata(state_dir) {
-        Ok(metadata) => validate_directory_metadata(state_dir, &metadata)?,
+fn prepare_state_directory(state_dir: &Path) -> Result<PathBuf, JournalError> {
+    let state_dir = normalize_state_path(state_dir)?;
+    inspect_existing_directory_components(&state_dir)?;
+    match fs::symlink_metadata(&state_dir) {
+        Ok(metadata) => validate_directory_metadata(&state_dir, &metadata)?,
         Err(error) if error.kind() == ErrorKind::NotFound => {
-            fs::create_dir_all(state_dir).map_err(|error| permission_error(state_dir, error))?;
-            let metadata = fs::symlink_metadata(state_dir)
-                .map_err(|error| permission_error(state_dir, error))?;
-            validate_directory_metadata(state_dir, &metadata)?;
+            fs::create_dir_all(&state_dir).map_err(|error| permission_error(&state_dir, error))?;
         }
-        Err(error) => return Err(permission_error(state_dir, error)),
+        Err(error) => return Err(permission_error(&state_dir, error)),
     }
-    set_owner_only_directory(state_dir)
+    inspect_existing_directory_components(&state_dir)?;
+    let canonical =
+        fs::canonicalize(&state_dir).map_err(|error| permission_error(&state_dir, error))?;
+    if canonical != state_dir {
+        return Err(JournalError::Permission(format!(
+            "state directory {} did not retain its normalized absolute identity",
+            state_dir.display()
+        )));
+    }
+    set_owner_only_directory(&canonical)?;
+    verify_stable_state_directory(&canonical)?;
+    Ok(canonical)
+}
+
+fn normalize_state_path(path: &Path) -> Result<PathBuf, JournalError> {
+    if path.as_os_str().is_empty() {
+        return Err(JournalError::Permission(
+            "state directory path is empty".to_owned(),
+        ));
+    }
+
+    let mut normalized = if path.is_absolute() {
+        PathBuf::new()
+    } else {
+        std::env::current_dir().map_err(|error| permission_error(path, error))?
+    };
+    for component in path.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                normalized.push(component.as_os_str());
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                return Err(JournalError::Permission(format!(
+                    "state directory {} contains a parent component",
+                    path.display()
+                )));
+            }
+        }
+    }
+    if !normalized.is_absolute() || normalized.parent().is_none() {
+        return Err(JournalError::Permission(format!(
+            "state directory {} must resolve below the filesystem root",
+            path.display()
+        )));
+    }
+    Ok(normalized)
+}
+
+fn inspect_existing_directory_components(path: &Path) -> Result<(), JournalError> {
+    if !path.is_absolute() {
+        return Err(JournalError::Permission(format!(
+            "state directory {} is not absolute",
+            path.display()
+        )));
+    }
+
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => continue,
+            Component::ParentDir => {
+                return Err(JournalError::Permission(format!(
+                    "state directory {} contains a parent component",
+                    path.display()
+                )));
+            }
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                current.push(component.as_os_str());
+            }
+        }
+
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                    return Err(JournalError::Permission(format!(
+                        "state directory component {} is a symlink or is not a directory",
+                        current.display()
+                    )));
+                }
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => break,
+            Err(error) => return Err(permission_error(&current, error)),
+        }
+    }
+    Ok(())
+}
+
+fn verify_stable_state_directory(state_dir: &Path) -> Result<(), JournalError> {
+    inspect_existing_directory_components(state_dir)?;
+    let canonical =
+        fs::canonicalize(state_dir).map_err(|error| permission_error(state_dir, error))?;
+    if canonical != state_dir {
+        return Err(JournalError::Permission(format!(
+            "state directory {} changed identity",
+            state_dir.display()
+        )));
+    }
+    Ok(())
 }
 
 fn validate_directory_metadata(path: &Path, metadata: &fs::Metadata) -> Result<(), JournalError> {
@@ -356,8 +457,11 @@ fn set_owner_only_directory(path: &Path) -> Result<(), JournalError> {
 }
 
 #[cfg(not(unix))]
-fn set_owner_only_directory(_path: &Path) -> Result<(), JournalError> {
-    Ok(())
+fn set_owner_only_directory(path: &Path) -> Result<(), JournalError> {
+    Err(JournalError::Permission(format!(
+        "state directory {} requires Unix owner-only permissions",
+        path.display()
+    )))
 }
 
 #[cfg(unix)]
@@ -368,8 +472,23 @@ fn set_owner_only_file(path: &Path) -> Result<(), JournalError> {
 }
 
 #[cfg(not(unix))]
-fn set_owner_only_file(_path: &Path) -> Result<(), JournalError> {
+fn set_owner_only_file(path: &Path) -> Result<(), JournalError> {
+    Err(JournalError::Permission(format!(
+        "database path {} requires Unix owner-only permissions",
+        path.display()
+    )))
+}
+
+#[cfg(unix)]
+fn ensure_supported_platform() -> Result<(), JournalError> {
     Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_supported_platform() -> Result<(), JournalError> {
+    Err(JournalError::Permission(
+        "the SQLite story journal requires Unix owner-only filesystem permissions".to_owned(),
+    ))
 }
 
 fn permission_error(path: &Path, error: std::io::Error) -> JournalError {

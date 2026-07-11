@@ -80,6 +80,51 @@ fn symlink_state_paths_are_rejected_without_following_them() {
 
 #[cfg(unix)]
 #[test]
+fn relative_state_path_rejects_a_symlinked_ancestor_without_touching_outside() {
+    use std::os::unix::fs::symlink;
+
+    let current_dir = std::env::current_dir().unwrap();
+    let temp = tempfile::Builder::new()
+        .prefix("runwarden-state-ancestor-")
+        .tempdir_in(&current_dir)
+        .unwrap();
+    let relative_root = temp.path().strip_prefix(&current_dir).unwrap();
+    let trusted = temp.path().join("trusted");
+    let outside = temp.path().join("outside");
+    std::fs::create_dir(&trusted).unwrap();
+    std::fs::create_dir(&outside).unwrap();
+    let marker = outside.join("marker");
+    std::fs::write(&marker, b"unchanged").unwrap();
+    symlink(&outside, trusted.join("link")).unwrap();
+
+    let result =
+        runwarden_state::StateStore::open(relative_root.join("trusted").join("link").join("state"));
+
+    assert_eq!(std::fs::read(&marker).unwrap(), b"unchanged");
+    assert!(!outside.join("state").exists());
+    assert!(matches!(
+        result,
+        Err(runwarden_state::JournalError::Permission(_))
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn parent_components_in_state_paths_are_rejected() {
+    let temp = tempfile::tempdir().unwrap();
+    let child = temp.path().join("child");
+    std::fs::create_dir(&child).unwrap();
+    let state_dir = child.join("..").join("state");
+
+    assert!(matches!(
+        runwarden_state::StateStore::open(&state_dir),
+        Err(runwarden_state::JournalError::Permission(_))
+    ));
+    assert!(!temp.path().join("state").exists());
+}
+
+#[cfg(unix)]
+#[test]
 fn symlink_wal_and_shm_paths_are_rejected_without_following_them() {
     use std::os::unix::fs::symlink;
 
@@ -150,4 +195,14 @@ fn existing_wal_and_shm_files_are_hardened() {
     drop(runwarden_state::StateStore::open(&state_dir).unwrap());
     assert_owner_only(&state_dir);
     drop(connection);
+}
+
+#[cfg(not(unix))]
+#[test]
+fn non_unix_state_store_fails_closed() {
+    let temp = tempfile::tempdir().unwrap();
+    assert!(matches!(
+        runwarden_state::StateStore::open(temp.path().join("state")),
+        Err(runwarden_state::JournalError::Permission(_))
+    ));
 }
