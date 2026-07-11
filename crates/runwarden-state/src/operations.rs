@@ -166,6 +166,7 @@ impl StateStore {
             });
         }
         if story.story.provenance != runwarden_kernel::story::StoryProvenance::Native
+            || story.story.evidence_status != runwarden_kernel::story::EvidenceStatus::Pending
             || matches!(
                 story.story.status,
                 runwarden_kernel::story::StoryStatus::EvidenceInvalid

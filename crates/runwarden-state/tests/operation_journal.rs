@@ -7,7 +7,10 @@ use runwarden_kernel::contracts::PolicyDecision;
 use runwarden_kernel::operation::{
     OperationState, PolicyCheck, PolicyCheckStatus, SideEffectState,
 };
-use runwarden_kernel::story::{EnforcementMode, InvocationKey, ObservationId};
+use runwarden_kernel::story::{
+    EnforcementMode, EvidenceStatus, InvocationKey, ObservationId, StoryReplayFrame,
+};
+use runwarden_kernel::trace::canonical_json_v1;
 use runwarden_state::{JournalError, RecordPolicyInput};
 use rusqlite::{Connection, params};
 
@@ -563,4 +566,91 @@ fn two_invocations_reusing_one_operation_id_return_a_structured_conflict() {
         .unwrap();
     assert_eq!(evidence.story.operations.len(), 1);
     assert_eq!(evidence.events.len(), 1);
+}
+
+#[test]
+fn a_finalized_verified_story_rejects_post_verification_operations() {
+    let fixture = JournalFixture::new(EnforcementMode::Enforced);
+    let operation = fixture
+        .store
+        .create_operation(fixture.operation(70, "send"))
+        .unwrap()
+        .operation;
+    fixture
+        .store
+        .record_policy(RecordPolicyInput {
+            operation_id: operation.operation_id,
+            expected_version: 0,
+            decision: PolicyDecision::Denied,
+            reason: "finalized denial".to_owned(),
+            next_state: OperationState::Denied,
+            checks: vec![PolicyCheck {
+                check_id: "final-deny".to_owned(),
+                layer: "policy".to_owned(),
+                status: PolicyCheckStatus::Failed,
+                reason: "denied".to_owned(),
+                observation_ref: None,
+            }],
+            now: mutation_time(&fixture.story, 2),
+        })
+        .unwrap();
+    let evidence = fixture
+        .store
+        .story_evidence(fixture.story.story_id)
+        .unwrap();
+    let old_frame = evidence.replay_frames.last().unwrap();
+    let mut finalized_story = evidence.story;
+    finalized_story.evidence_status = EvidenceStatus::Verified;
+    let finalized_frame = StoryReplayFrame::seal(
+        old_frame.sequence,
+        old_frame.story_version,
+        old_frame.event_hash.clone(),
+        old_frame.previous_frame_hash.clone(),
+        old_frame.recorded_at,
+        finalized_story.clone(),
+    )
+    .unwrap();
+    let finalized_json = String::from_utf8(canonical_json_v1(
+        &serde_json::to_value(&finalized_story).unwrap(),
+    ))
+    .unwrap();
+    let connection = Connection::open(fixture.state_dir.join("runwarden.db")).unwrap();
+    connection
+        .execute(
+            r#"UPDATE story_frames
+               SET snapshot_hash = ?1, frame_hash = ?2, safe_story_json = ?3
+               WHERE story_id = ?4 AND sequence = ?5"#,
+            params![
+                finalized_frame.snapshot_hash,
+                finalized_frame.frame_hash,
+                finalized_json,
+                fixture.story.story_id.to_string(),
+                i64::try_from(old_frame.sequence).unwrap(),
+            ],
+        )
+        .unwrap();
+    connection
+        .execute(
+            r#"UPDATE stories
+               SET evidence_status = 'verified', safe_story_json = ?1
+               WHERE story_id = ?2"#,
+            params![finalized_json, fixture.story.story_id.to_string()],
+        )
+        .unwrap();
+    fixture
+        .store
+        .story_evidence(fixture.story.story_id)
+        .unwrap()
+        .verify_structure()
+        .unwrap();
+
+    let mut next = fixture.operation(71, "send_after_finalization");
+    next.now = mutation_time(&fixture.story, 3);
+    assert!(matches!(
+        fixture.store.create_operation(next),
+        Err(JournalError::InvalidTransition {
+            entity: "story",
+            ..
+        })
+    ));
 }
