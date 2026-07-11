@@ -8,11 +8,7 @@ use runwarden_kernel::story::{
 use runwarden_kernel::trace::Sha256Digest;
 use runwarden_state::{DemoActivation, JournalError, SessionRecord, StateStore, StoryStatusUpdate};
 use rusqlite::{Connection, params};
-use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
-
-fn at(raw: &str) -> OffsetDateTime {
-    OffsetDateTime::parse(raw, &Rfc3339).unwrap()
-}
+use time::{Duration, OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
 
 fn story_fixture() -> SecurityStory {
     let session_id = SessionId::new();
@@ -41,7 +37,7 @@ fn story_fixture() -> SecurityStory {
             actor_id: "actor-demo".to_owned(),
             authz_id: "authz-demo".to_owned(),
             authz_state: "active".to_owned(),
-            expires_at: at("2030-07-11T12:00:00Z"),
+            expires_at: OffsetDateTime::now_utc() + Duration::days(2),
             allowed_providers: vec!["email.send".to_owned()],
             files: Vec::new(),
             networks: Vec::new(),
@@ -97,7 +93,7 @@ fn activation_fixture(story: &SecurityStory, suffix: &str) -> DemoActivation {
         instance_token_hash: Sha256Digest::from_bytes(suffix.as_bytes())
             .as_str()
             .to_owned(),
-        now: at("2029-07-11T12:00:00Z"),
+        now: mutation_time(story, 0),
     }
 }
 
@@ -195,7 +191,7 @@ fn story_status_update_is_atomic_versioned_and_cannot_forge_verification() {
             status: StoryStatus::AwaitingApproval,
             evidence_status: EvidenceStatus::Pending,
             final_outcome_summary: "Reviewer decision required".to_owned(),
-            now: at("2029-07-11T12:00:01Z"),
+            now: mutation_time(&story, 1),
         })
         .unwrap();
     assert_eq!(updated.status, StoryStatus::AwaitingApproval);
@@ -209,7 +205,7 @@ fn story_status_update_is_atomic_versioned_and_cannot_forge_verification() {
             status: StoryStatus::Failed,
             evidence_status: EvidenceStatus::Incomplete,
             final_outcome_summary: "stale".to_owned(),
-            now: at("2029-07-11T12:00:02Z"),
+            now: mutation_time(&story, 2),
         })
         .unwrap_err();
     assert!(matches!(
@@ -229,7 +225,7 @@ fn story_status_update_is_atomic_versioned_and_cannot_forge_verification() {
             status: StoryStatus::BlockedBeforeSideEffect,
             evidence_status: EvidenceStatus::Verified,
             final_outcome_summary: "pretend verified".to_owned(),
-            now: at("2029-07-11T12:00:03Z"),
+            now: mutation_time(&story, 3),
         })
         .unwrap_err();
     assert!(matches!(
@@ -294,6 +290,7 @@ fn concurrent_story_cas_has_one_winner_and_one_actual_version_conflict() {
 
     let barrier = Arc::new(Barrier::new(3));
     let mut handles = Vec::new();
+    let update_time = mutation_time(&story, 1);
     for (status, summary) in [
         (StoryStatus::BlockedBeforeSideEffect, "blocked"),
         (StoryStatus::Failed, "failed"),
@@ -310,7 +307,7 @@ fn concurrent_story_cas_has_one_winner_and_one_actual_version_conflict() {
                 status,
                 evidence_status: EvidenceStatus::Incomplete,
                 final_outcome_summary: summary.to_owned(),
-                now: at("2029-07-11T12:00:01Z"),
+                now: update_time,
             })
         }));
     }
@@ -466,7 +463,10 @@ fn noncanonical_story_time_and_out_of_lifetime_heartbeat_fail_closed() {
     connection
         .execute(
             "UPDATE stories SET created_at = ?1, updated_at = ?1 WHERE story_id = ?2",
-            params!["2026-07-11T08:00:00+08:00", story.story_id.to_string()],
+            params![
+                format_noncanonical_time_for_test(mutation_time(&story, 0)),
+                story.story_id.to_string()
+            ],
         )
         .unwrap();
     assert!(matches!(
@@ -522,7 +522,7 @@ fn checked_versions_and_forward_only_transitions_leave_state_unchanged() {
             status: StoryStatus::Failed,
             evidence_status: EvidenceStatus::Incomplete,
             final_outcome_summary: "overflow".to_owned(),
-            now: at("2029-07-11T12:00:01Z"),
+            now: mutation_time(&story, 1),
         }),
         Err(JournalError::Integrity(_))
     ));
@@ -535,7 +535,7 @@ fn checked_versions_and_forward_only_transitions_leave_state_unchanged() {
             status: StoryStatus::Failed,
             evidence_status: EvidenceStatus::Incomplete,
             final_outcome_summary: "failed safely".to_owned(),
-            now: at("2029-07-11T12:00:01Z"),
+            now: mutation_time(&story, 1),
         })
         .unwrap();
     assert!(matches!(
@@ -545,7 +545,7 @@ fn checked_versions_and_forward_only_transitions_leave_state_unchanged() {
             status: StoryStatus::Running,
             evidence_status: EvidenceStatus::Pending,
             final_outcome_summary: "illegal reset".to_owned(),
-            now: at("2029-07-11T12:00:02Z"),
+            now: mutation_time(&story, 2),
         }),
         Err(JournalError::InvalidTransition { .. })
     ));
@@ -554,4 +554,15 @@ fn checked_versions_and_forward_only_transitions_leave_state_unchanged() {
 
 fn format_time_for_test(value: OffsetDateTime) -> String {
     value.format(&Rfc3339).unwrap()
+}
+
+fn format_noncanonical_time_for_test(value: OffsetDateTime) -> String {
+    value
+        .to_offset(UtcOffset::from_hms(8, 0, 0).unwrap())
+        .format(&Rfc3339)
+        .unwrap()
+}
+
+fn mutation_time(story: &SecurityStory, seconds: i64) -> OffsetDateTime {
+    story.authority.expires_at - Duration::days(1) + Duration::seconds(seconds)
 }
