@@ -45,6 +45,12 @@ substitute a smaller charge afterward. The returned usage version and
 authenticated `BudgetCharge` are observations for the later SQLite CAS
 reservation, not a reservation by themselves.
 
+The resulting value also records `proposal_binding_verified` and a
+domain-separated `proposal_commitment` over the canonical provider contract,
+provider/action, complete arguments, claim, and charge. These fields let a
+non-executing assurance observer prove that its counterfactual effect belongs
+to the same proposal even when an earlier policy layer denied the request.
+
 ## Sessions
 
 Sessions are now internal to demo/check flows. A session derived from an

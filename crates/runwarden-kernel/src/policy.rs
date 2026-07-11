@@ -16,7 +16,9 @@ use crate::resource::{
     DataClass, ExecutionLimits, FileAccess, MemoryAccess, NetworkCapability, ResourceClaim,
     canonical_provider_contract_hash,
 };
-use crate::resource_binding::{ResourceBindingProof, ResourceBindingVerifier};
+use crate::resource_binding::{
+    ResourceBindingProof, ResourceBindingVerifier, resource_proposal_commitment,
+};
 use crate::session::{AuthoritySnapshot, BudgetCharge, BudgetUsageSnapshot};
 use crate::story::{EnforcementMode, SessionId, StoryId};
 use crate::trace::{Sha256Digest, canonical_json_v1};
@@ -97,6 +99,8 @@ pub struct PolicyEvaluation {
     pub decision: PolicyDecision,
     pub denial_kind: Option<String>,
     pub reason: String,
+    pub proposal_binding_verified: bool,
+    pub proposal_commitment: Sha256Digest,
     pub resource_claim_hash: Sha256Digest,
     pub policy_snapshot_hash: Sha256Digest,
     pub budget_usage_version: u64,
@@ -117,6 +121,18 @@ pub fn evaluate_proposal(
     binding_proof: &ResourceBindingProof,
     now: OffsetDateTime,
 ) -> PolicyEvaluation {
+    let proposal_binding_verified = session
+        .resource_binding_verifier
+        .validate(
+            binding_proof,
+            provider,
+            &call.action,
+            &call.arguments,
+            claim,
+            charge,
+            session.enforcement_mode,
+        )
+        .is_ok();
     let mut checks = Vec::with_capacity(6);
     let mut terminal = None;
 
@@ -130,7 +146,7 @@ pub fn evaluate_proposal(
         check_authorization(session, call)
     });
     record_check(&mut checks, &mut terminal, "resource", "resource", || {
-        check_resource(session, provider, call, claim, charge, binding_proof)
+        check_resource(session, call, claim, proposal_binding_verified)
     });
     record_check(&mut checks, &mut terminal, "budget", "budget", || {
         check_budget(session, usage, charge, provider, call, claim)
@@ -157,6 +173,14 @@ pub fn evaluate_proposal(
         decision,
         denial_kind,
         reason,
+        proposal_binding_verified,
+        proposal_commitment: resource_proposal_commitment(
+            provider,
+            &call.action,
+            &call.arguments,
+            claim,
+            charge,
+        ),
         resource_claim_hash: claim.digest(),
         policy_snapshot_hash: session.policy_snapshot_hash.clone(),
         budget_usage_version: usage.version,
@@ -337,25 +361,11 @@ fn check_authorization(session: &SessionContext, call: &ProviderCall) -> StageOu
 
 fn check_resource(
     session: &SessionContext,
-    provider: &KernelProvider,
     call: &ProviderCall,
     claim: &ResourceClaim,
-    charge: &BudgetCharge,
-    binding_proof: &ResourceBindingProof,
+    proposal_binding_verified: bool,
 ) -> StageOutcome {
-    if session
-        .resource_binding_verifier
-        .validate(
-            binding_proof,
-            provider,
-            &call.action,
-            &call.arguments,
-            claim,
-            charge,
-            session.enforcement_mode,
-        )
-        .is_err()
-    {
+    if !proposal_binding_verified {
         return fail(
             "resource_binding_invalid",
             "resource extraction binding does not match the frozen proposal",

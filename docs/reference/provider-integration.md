@@ -113,6 +113,23 @@ cannot be caller-selected. The
 permit separately commits the complete canonical argument object so data not
 present in the least-authority claim remains bound to the approved operation.
 
+The native default executor configuration canonicalizes two non-overlapping
+existing directories: the local business-tool sandbox and the trusted runtime
+root. Output and timeout limits are positive and capped; all validated fields
+become private after construction, and verifier material is redacted. Task 4
+does not call the legacy public dispatcher or any business tool. Even a valid
+permit for one of the ten typed contest providers returns the stable
+`provider_not_migrated` result without output, cleanup material, actual budget
+charge, or side effect until private implementations and reconciliation
+receipts land.
+
+Monitor-only assurance is deliberately outside this executor. It has no
+delegate and never touches a configured root. A domain-separated proposal
+commitment ties its observation to the exact policy-evaluated provider,
+action, arguments, claim, contract, and charge; `proposal_binding_verified`
+must also be true. Its simulated result models an unprotected baseline for A/B
+evaluation and must never be reported as a trusted provider execution.
+
 Result persistence then requires executing state, the exact lease identity and
 expected operation version, and a verified start event. Only coherent
 Completed or Failed provider-result/side-effect combinations are accepted.

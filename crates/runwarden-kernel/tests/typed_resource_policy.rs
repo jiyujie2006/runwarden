@@ -389,6 +389,7 @@ fn assert_short_circuit(
 }
 
 fn assert_resource_binding_denial(name: &str, evaluation: &PolicyEvaluation) {
+    assert!(!evaluation.proposal_binding_verified, "{name}");
     assert_eq!(evaluation.decision, PolicyDecision::Denied, "{name}");
     assert_eq!(
         evaluation.denial_kind.as_deref(),
@@ -418,6 +419,7 @@ fn policy_records_the_exact_order_for_allow_deny_and_review() {
         &file_claim,
     );
     assert_eq!(allowed.decision, PolicyDecision::Allowed);
+    assert!(allowed.proposal_binding_verified);
     assert_eq!(allowed.denial_kind, None);
     assert_eq!(
         check_ids(&allowed.checks),

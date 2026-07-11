@@ -16,6 +16,7 @@ use crate::story::EnforcementMode;
 use crate::trace::{EventCode, Sha256Digest, canonical_json_v1};
 
 const RESOURCE_BINDING_DOMAIN_V1: &[u8] = b"runwarden.resource-binding.hmac-sha256.v1\0";
+const RESOURCE_PROPOSAL_DOMAIN_V1: &[u8] = b"runwarden.resource-proposal.sha256.v1\0";
 
 /// Namespace for creating one process-local extraction-binding authority.
 /// There is intentionally no constructor that accepts caller-provided key
@@ -174,14 +175,45 @@ pub enum ResourceBindingValidationError {
 
 #[derive(Serialize)]
 #[serde(deny_unknown_fields)]
-struct ResourceBindingMaterial<'a> {
+struct ResourceProposalMaterial<'a> {
     provider_contract_hash: Sha256Digest,
     provider: &'a str,
     action: &'a str,
     argument_hash: Sha256Digest,
     resource_claim_hash: Sha256Digest,
     budget_charge: BudgetCharge,
+}
+
+#[derive(Serialize)]
+#[serde(deny_unknown_fields)]
+struct ResourceBindingMaterial {
+    proposal_commitment: Sha256Digest,
     enforcement_mode: EnforcementMode,
+}
+
+/// Stable, non-authorizing commitment used to prove that a policy evaluation
+/// and a monitor observation describe the same complete provider proposal.
+pub fn resource_proposal_commitment(
+    provider: &KernelProvider,
+    action: &str,
+    arguments: &Value,
+    claim: &ResourceClaim,
+    budget_charge: &BudgetCharge,
+) -> Sha256Digest {
+    let material = ResourceProposalMaterial {
+        provider_contract_hash: canonical_provider_contract_hash(provider),
+        provider: provider.id.as_str(),
+        action,
+        argument_hash: Sha256Digest::from_bytes(&canonical_json_v1(arguments)),
+        resource_claim_hash: claim.digest(),
+        budget_charge: *budget_charge,
+    };
+    let value = serde_json::to_value(material).expect("resource proposal material serializes");
+    let encoded = canonical_json_v1(&value);
+    let mut domain_separated = Vec::new();
+    domain_separated.extend_from_slice(RESOURCE_PROPOSAL_DOMAIN_V1);
+    domain_separated.extend_from_slice(&encoded);
+    Sha256Digest::from_bytes(&domain_separated)
 }
 
 fn validate_public_codes(
@@ -203,12 +235,13 @@ fn binding_message(
     enforcement_mode: EnforcementMode,
 ) -> Result<Vec<u8>, ResourceBindingSealError> {
     let material = ResourceBindingMaterial {
-        provider_contract_hash: canonical_provider_contract_hash(provider),
-        provider: provider.id.as_str(),
-        action,
-        argument_hash: Sha256Digest::from_bytes(&canonical_json_v1(arguments)),
-        resource_claim_hash: claim.digest(),
-        budget_charge: *budget_charge,
+        proposal_commitment: resource_proposal_commitment(
+            provider,
+            action,
+            arguments,
+            claim,
+            budget_charge,
+        ),
         enforcement_mode,
     };
     let value = serde_json::to_value(material).map_err(|_| ResourceBindingSealError::Encoding)?;

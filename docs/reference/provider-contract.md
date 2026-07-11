@@ -27,6 +27,13 @@ the complete tuple and uses constant-time tag verification; all mismatches use
 one stable failure. This pre-policy proof establishes extraction provenance but
 does not authorize a side effect.
 
+`PolicyEvaluation` records whether that proof verified and carries a separate,
+non-authorizing `proposal_commitment`. The commitment uses its own domain and
+binds the canonical provider contract and id, action, complete arguments,
+claim, and charge. Monitor-only assurance recomputes it so a self-consistent
+request changed after policy evaluation cannot be attributed to the old
+decision.
+
 ## Frozen native execution permit
 
 The native provider boundary defines an opaque, process-local
@@ -58,3 +65,25 @@ store. Plan 4 will be the only issuer call site, after
 operation and return reconciliation state instead of repeating a backend side
 effect. A restarted authority cannot validate an old process permit and must
 recover the already-started operation rather than issue another capability.
+
+## Default executor and monitor-only boundary
+
+`DefaultProviderExecutor` receives its `PermitVerifier` only through a trusted
+`ExecutorConfig`. The verified sandbox root, trusted runtime root, output cap,
+and timeout are private after construction and exposed only through read-only
+getters; the two canonical roots must exist, be absolute, and not overlap.
+Debug output redacts the verifier. Execution performs only canonical catalog
+lookup, permit verification, and exact provider/action/claim-family checks at
+this stage. Until private business tools migrate, every otherwise valid call
+returns `provider_not_migrated`, zero actual charge, no output, no cleanup
+token, and no side effect.
+
+`MonitorOnlyObserver` is a separate stateless unit type, not an executor. It
+holds no permit, verifier, approval, lease, filesystem, process, network, or
+tool delegate. It checks request self-commitments, the canonical catalog
+contract, all ten contest provider/action/claim shapes, verified extraction
+status, evaluation hashes and charge, and the full proposal commitment.
+Syntactically valid proposals are reported as counterfactual
+`simulated_would_execute` for every shadow policy decision; malformed or
+uncatalogued proposals are `not_executable`. Neither result is execution
+evidence.

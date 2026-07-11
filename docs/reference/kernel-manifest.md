@@ -41,6 +41,11 @@ proposed charge. It returns a `PolicyEvaluation` value snapshot containing the
 ordered check ledger, typed claim and policy digests, usage version, charge,
 and one of `Allowed`, `Denied`, or `RequiresReview`.
 
+The value additionally exposes a verified-binding flag and a domain-separated
+proposal commitment. They bind monitor-only attribution to the exact full
+proposal without turning the serializable evaluation into an approval,
+execution permit, or side-effect capability.
+
 This API is deliberately state-free. An `Allowed` result does not execute
 a tool or reserve budget, and a `RequiresReview` result does not accept a
 caller-provided approval id. Native execution still requires the SQLite lease,
