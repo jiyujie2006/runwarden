@@ -16,6 +16,19 @@ per-operation ceilings; call, file-byte, and network-byte budgets are cumulative
 session counters; model call/input/output budgets are reserved separately by
 the model proxy.
 
+Static demo story generation creates one typed UUIDv7 session id before the
+legacy `SessionManifest` and reuses it for kernel calls, the
+`AuthoritySnapshot`, and every `SecurityOperation`. The story projection reads
+only trusted assessment/session fields. It does not copy provider-supplied
+authority or absolute scoped-root paths. Authority classes and budgets that
+the legacy manifest cannot prove remain empty or zero.
+
+The five current demo assessments have a trusted `demo-agent` actor but no
+configured authz id or expiry. Their incomplete legacy story snapshots use
+`legacy-not-configured`, `not_configured`, and the Unix epoch as explicit
+absence sentinels. Agent and model identity fields use `legacy-unavailable`;
+these values are not fabricated identities or authorization grants.
+
 MCP callers do not create or mutate that envelope through tool arguments.
 `runwarden-mcp` builds any inline kernel policy from server-owned defaults and
 rejects agent-supplied session, assessment, authz, budget, root, and

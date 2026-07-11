@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     ffi::OsString,
     fs,
     io::{Read, Write},
@@ -8,9 +9,18 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
+use runwarden_kernel::story::{EvidenceStatus, SecurityStory, StoryProvenance};
 use runwarden_mcp::handle_jsonrpc_body;
 use serde_json::Value;
 use serde_json::json;
+
+const CONTEST_SCENARIOS: [&str; 5] = [
+    "prompt-injection-file-exfil",
+    "tool-hijack-email-api",
+    "memory-knowledge-poisoning",
+    "environment-local-web-risk",
+    "path-escape-file-boundary",
+];
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -56,7 +66,7 @@ fn check_strict_runs_scenario_eval_json() {
 }
 
 #[test]
-fn demo_scenario_writes_real_trace_report_and_webui_json() {
+fn demo_scenario_writes_real_trace_report_webui_and_story_json() {
     let workspace = workspace_root();
     let output_dir = PathBuf::from("target/runwarden-contest-test/prompt-injection-file-exfil");
     let absolute_output = workspace.join(&output_dir);
@@ -83,6 +93,7 @@ fn demo_scenario_writes_real_trace_report_and_webui_json() {
     assert!(absolute_output.join("trace.json").exists());
     assert!(absolute_output.join("report.json").exists());
     assert!(absolute_output.join("webui.json").exists());
+    assert!(absolute_output.join("story.json").exists());
     let webui: Value = serde_json::from_str(
         &fs::read_to_string(absolute_output.join("webui.json")).expect("webui"),
     )
@@ -91,10 +102,37 @@ fn demo_scenario_writes_real_trace_report_and_webui_json() {
     assert_eq!(webui["provider_calls"][1]["decision"], "requires_review");
     assert_eq!(webui["provider_calls"][2]["decision"], "denied");
     assert_eq!(webui["provider_calls"][2]["side_effect_executed"], false);
+    let story: SecurityStory = serde_json::from_str(
+        &fs::read_to_string(absolute_output.join("story.json")).expect("story"),
+    )
+    .expect("security story JSON");
+    assert_eq!(story.scenario_id, "prompt-injection-file-exfil");
+    assert_eq!(story.provenance, StoryProvenance::LegacyDerived);
+    assert_eq!(story.evidence_status, EvidenceStatus::Incomplete);
+    assert_eq!(story.stage_statuses.len(), 8);
+    assert_eq!(story.identity.agent_id, "legacy-unavailable");
+    assert_eq!(story.identity.model_id, "legacy-unavailable");
+    assert_eq!(story.identity.actor_id, "demo-agent");
+    assert_eq!(story.authority.authz_id, "legacy-not-configured");
+    assert_eq!(story.authority.authz_state, "not_configured");
+    assert!(story.authority.files.is_empty());
+    assert_eq!(
+        story.authority.allowed_providers,
+        [
+            "runwarden.input.inspect".to_string(),
+            "external.mcp.filesystem.read_file".to_string(),
+        ]
+    );
+    assert!(story.operations.iter().all(|operation| {
+        operation.session_id == story.authority.session_id && operation.observation_refs.is_empty()
+    }));
+    assert_eq!(story.event_count, 0);
+    assert!(story.final_event_hash.is_none());
+    assert!(story.report_claims.is_empty());
 }
 
 #[test]
-fn demo_all_writes_static_reviewer_console() {
+fn demo_all_writes_exact_official_stories_and_static_reviewer_console() {
     let workspace = workspace_root();
     let output_dir = PathBuf::from("target/runwarden-contest-test/demo-all");
     let absolute_output = workspace.join(&output_dir);
@@ -128,6 +166,30 @@ fn demo_all_writes_static_reviewer_console() {
     assert!(!html.contains("anomalous-provider-sequence"));
     assert!(!html.contains("insertAdjacentHTML"));
     assert!(!html.contains("innerHTML"));
+
+    let story_directories = fs::read_dir(&absolute_output)
+        .expect("demo output directory")
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().join("story.json").is_file())
+        .map(|entry| entry.file_name().to_string_lossy().to_string())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        story_directories,
+        CONTEST_SCENARIOS
+            .into_iter()
+            .map(ToString::to_string)
+            .collect::<BTreeSet<_>>()
+    );
+    for scenario in CONTEST_SCENARIOS {
+        let story: SecurityStory = serde_json::from_str(
+            &fs::read_to_string(absolute_output.join(scenario).join("story.json"))
+                .expect("story file"),
+        )
+        .expect("security story JSON");
+        assert_eq!(story.scenario_id, scenario);
+        assert_eq!(story.provenance, StoryProvenance::LegacyDerived);
+        assert_eq!(story.evidence_status, EvidenceStatus::Incomplete);
+    }
 }
 
 #[cfg(unix)]
@@ -167,6 +229,7 @@ fn demo_output_allows_in_workspace_symlink_and_rejects_symlink_escape() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(inside_target.join("webui.json").exists());
+    assert!(inside_target.join("story.json").exists());
 
     let outside_target =
         std::env::temp_dir().join(format!("runwarden-output-escape-{}", std::process::id()));
@@ -193,6 +256,7 @@ fn demo_output_allows_in_workspace_symlink_and_rejects_symlink_escape() {
 
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("workspace"));
+    assert!(!outside_target.join("story.json").exists());
 }
 
 #[test]

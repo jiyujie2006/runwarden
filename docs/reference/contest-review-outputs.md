@@ -22,6 +22,7 @@ bash scripts/release_gate_local.sh
 - `artifacts/demo/<scenario>/report.json`
 - `artifacts/demo/<scenario>/metrics.json`
 - `artifacts/demo/<scenario>/webui.json`
+- `artifacts/demo/<scenario>/story.json`
 - `artifacts/reports/contest-report.md`
 - `artifacts/demo/reviewer-console.html`
 
@@ -29,6 +30,10 @@ bash scripts/release_gate_local.sh
 replay, is newline-delimited sealed `TraceEvent` data with `previous_hash` and
 `event_hash`. The local release gate removes any stale LLM proxy trace before
 regenerating contest outputs.
+
+Each `story.json` is a redacted `LegacyDerived` snapshot. It deliberately has
+incomplete evidence and no fabricated native observations; `trace.json` and
+the other legacy files remain available for the existing contest workflow.
 
 `redteam/run.py proxy-probe` additionally writes
 `artifacts/redteam/proxy-probe-results.jsonl` and

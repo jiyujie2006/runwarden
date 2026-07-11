@@ -29,7 +29,7 @@ bash scripts/contest_bundle.sh
 |---|---|
 | `dev_gate.sh` | `cargo fmt` + `cargo clippy -D warnings` + `cargo-deny` + corpus 校验 + Python unittest + `cargo test --workspace` |
 | `check --strict` | 5 场景 fixture 验证 + 评估 |
-| `demo --all` | 5 场景真实执行（kernel → sandbox → 真写 mbox/真读文件），生成 `webui.json` × 5 + `reviewer-console.html` |
+| `demo --all` | 5 场景真实执行（kernel → sandbox → 真写 mbox/真读文件），生成 `webui.json` × 5、`story.json` × 5 + `reviewer-console.html` |
 | `proxy-probe` | deterministic 模型输入过滤红队测试 |
 | `output-probe` | deterministic 流式输出过滤红队测试 |
 | `report render` | 汇总 5 场景为 `contest-report.md` |

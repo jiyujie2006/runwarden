@@ -32,6 +32,8 @@ This index is the canonical map for the contest edition.
 - [Provider Integration](reference/provider-integration.md): mediated external adapter requirements.
 - [Provider Contract](reference/provider-contract.md): manifest-derived enforcement contract.
 - [Evidence and Accountability](reference/evidence-and-accountability.md): `obs_*` semantics and report citations.
+- [Security Story](reference/security-story.md): Rust-owned story state,
+  redaction, provenance, and honest legacy conversion.
 
 ## Contracts
 

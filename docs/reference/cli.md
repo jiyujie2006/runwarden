@@ -46,10 +46,12 @@ the demo. Copy `examples/agent-configs/opencode.runwarden-only.json` to
 `runwarden demo --scenario <name> --output <dir> --json` executes the scenario
 provider calls through the Rust kernel and provider layer, then writes
 `trace.json`, `provider-calls.json`, `denials.json`, `report.json`,
-`metrics.json`, and `webui.json`.
+`metrics.json`, `webui.json`, and the redacted, explicitly incomplete
+`story.json` legacy projection.
 
 `runwarden demo --all --output artifacts/demo --json` runs all five scenarios
-and writes `artifacts/demo/reviewer-console.html`.
+and writes exactly one `story.json` per official scenario plus
+`artifacts/demo/reviewer-console.html`.
 
 ## Trace Commands
 

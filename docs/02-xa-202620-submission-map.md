@@ -11,7 +11,7 @@ reproducible from the checked-out repository.
 | Local contest gate | `bash scripts/release_gate_local.sh` | Adds strict check, scenario eval, deterministic demos, suite report rendering, and static console build. |
 | Strict repository check | `target/debug/runwarden check --strict` | Verifies required contest docs, scenarios, providers, and gate scripts. |
 | Scenario eval | `target/debug/runwarden check --strict --json` | Validates the five checked-in golden corpora. |
-| Demo run | `target/debug/runwarden demo --scenario <id> --output artifacts/demo/<id> --json` | Generates trace, provider calls, denials, metrics, report input, and WebUI JSON. |
+| Demo run | `target/debug/runwarden demo --scenario <id> --output artifacts/demo/<id> --json` | Generates trace, provider calls, denials, metrics, report input, WebUI JSON, and an incomplete redacted Security Story. |
 | Contest report | `target/debug/runwarden report render --scenario-suite scenarios --format markdown --output artifacts/reports/contest-report.md --json` | Produces the trace-backed submission report. |
 | Reviewer console | `target/debug/runwarden demo --all --output artifacts/demo --json` | Builds static reviewer HTML from demo JSON. |
 

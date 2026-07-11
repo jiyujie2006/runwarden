@@ -51,6 +51,12 @@ historical events or an embedded export signature. `StoryReplayFrame` binds the
 current aggregate snapshot and frame metadata with Canonical JSON v1 hashes;
 ordered sealed events and persistence remain separate trace/journal contracts.
 
+The demo legacy adapter does not translate legacy `obs_ref` or `trace_event`
+fields into native observations. Its stories have `LegacyDerived` provenance,
+`Incomplete` evidence, zero native events, no final event hash, empty report
+claims, and empty observation-reference lists. Passing the legacy report/trace
+checks does not upgrade that native evidence status.
+
 Full provider arguments are private operation material. A story event is built
 only from its Rust allowlisted payload variant and is redacted before hashing:
 argument bytes are represented only by `argument_hash`, while output and other

@@ -36,7 +36,12 @@ before reads or writes, and writes may only create a missing final file after
 the existing parent path is confirmed contained. The sandbox root is selected by
 Runwarden-owned runtime configuration, not provider-call arguments.
 
-`runwarden demo --scenario` writes scenario JSON under the requested demo output directory. `runwarden demo --all` writes all scenario outputs plus `reviewer-console.html`. `runwarden report render --scenario-suite` writes the contest report when `--output` is supplied.
+`runwarden demo --scenario` writes legacy scenario JSON plus the redacted
+`story.json` projection under the requested demo output directory. `runwarden
+demo --all` writes one story for each of the five official scenarios plus
+`reviewer-console.html`. The existing output-directory containment check also
+protects each sibling story write. `runwarden report render --scenario-suite`
+writes the contest report when `--output` is supplied.
 
 `runwarden demo` serves the interactive console from Rust and writes reviewer
 approval state under `.runwarden/approvals`.

@@ -9,16 +9,21 @@ use runwarden_assurance::eval::{EvalThresholds, evaluate_report_assurance};
 use runwarden_assurance::report::{
     RenderFormat, ReportDraft, lint_report_against_trace, render_report,
 };
+use runwarden_cli::story::{LegacyStoryContext, adapt_legacy_webui};
 use runwarden_kernel::artifact::resolve_workspace_relative_path;
 use runwarden_kernel::contracts::{PolicyDecision, ProviderCall, ProviderClass, ProviderOutcome};
 use runwarden_kernel::evidence::{InMemoryTraceStore, TraceEvent, TraceQuery};
 use runwarden_kernel::kernel::KernelEnforcer;
-use runwarden_kernel::manifest::{AssessmentManifest, SessionManifest};
+use runwarden_kernel::manifest::{AssessmentManifest, AuthzManifestState, SessionManifest};
+use runwarden_kernel::session::{AuthoritySnapshot, BudgetSnapshot, EvidenceAuthority};
+use runwarden_kernel::story::SessionId;
+use runwarden_kernel::trace::Sha256Digest;
 use runwarden_providers::catalog::full_provider_registry;
 use runwarden_providers::input::{InputInspectPolicy, InputSource, inspect_input};
 use runwarden_providers::tools;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use time::OffsetDateTime;
 
 mod server;
 
@@ -466,7 +471,10 @@ fn run_demo_scenario_real(root: &Path, scenario: &str, output: &Path) -> anyhow:
     let manifest_body = fs::read_to_string(&manifest_path)?;
     let assessment = AssessmentManifest::from_toml_str(&manifest_body)?;
     let assessment = assessment_with_manifest_relative_roots(&manifest_path, assessment)?;
-    let session = SessionManifest::from_assessment(scenario.to_string(), &assessment);
+    let session_id = SessionId::new();
+    let session = SessionManifest::from_assessment(session_id.to_string(), &assessment);
+    let story_context =
+        trusted_legacy_story_context(scenario, &scenario_path, &assessment, &session, session_id)?;
     let inputs = read_demo_provider_calls(&scenario_path.join("expected/provider-calls.json"))?;
     let sandbox_root = tools::sandbox_root_from();
     let mut previous_hash = None;
@@ -542,6 +550,7 @@ fn run_demo_scenario_real(root: &Path, scenario: &str, output: &Path) -> anyhow:
         "expected": baseline,
         "side_effect_executed": results.iter().any(|result| result.side_effect_executed)
     });
+    let story = adapt_legacy_webui(&webui, story_context)?;
 
     write_json_file(&output_path.join("trace.json"), &webui["trace"])?;
     write_json_file(
@@ -552,6 +561,10 @@ fn run_demo_scenario_real(root: &Path, scenario: &str, output: &Path) -> anyhow:
     write_json_file(&output_path.join("report.json"), &webui["report"])?;
     write_json_file(&output_path.join("metrics.json"), &webui["metrics"])?;
     write_json_file(&output_path.join("webui.json"), &webui)?;
+    write_json_file(
+        &output_path.join("story.json"),
+        &serde_json::to_value(&story)?,
+    )?;
 
     Ok(json!({
         "scenario": scenario,
@@ -561,6 +574,118 @@ fn run_demo_scenario_real(root: &Path, scenario: &str, output: &Path) -> anyhow:
         "requires_review_count": results.iter().filter(|result| result.decision == "requires_review").count(),
         "side_effect_executed": webui["side_effect_executed"],
     }))
+}
+
+fn trusted_legacy_story_context(
+    scenario: &str,
+    scenario_path: &Path,
+    assessment: &AssessmentManifest,
+    session: &SessionManifest,
+    session_id: SessionId,
+) -> anyhow::Result<LegacyStoryContext> {
+    let actor_id = session
+        .actor_id
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("demo assessment actor is required for story output"))?;
+    let (authz_id, authz_state) = match &session.authz_id {
+        Some(authz_id) => (
+            authz_id.clone(),
+            match session.governance_state {
+                AuthzManifestState::Active => "active",
+                AuthzManifestState::Expired => "expired",
+                AuthzManifestState::Revoked => "revoked",
+                AuthzManifestState::Denied => "denied",
+            }
+            .to_string(),
+        ),
+        None => (
+            "legacy-not-configured".to_string(),
+            "not_configured".to_string(),
+        ),
+    };
+    let policy_snapshot_hash = format!("sha256:{}", session.manifest_hash);
+    Sha256Digest::try_from(policy_snapshot_hash.clone())
+        .map_err(anyhow::Error::msg)
+        .map_err(|error| error.context("demo assessment hash must be a SHA-256 digest"))?;
+    let attack = read_trusted_attack(scenario_path)?;
+    let safe_attack_preview = String::from_utf8_lossy(&attack)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(160)
+        .collect::<String>();
+    let max_argument_bytes = session
+        .budgets
+        .max_argument_bytes
+        .map(u64::try_from)
+        .transpose()
+        .map_err(|_| anyhow::anyhow!("demo max_argument_bytes does not fit u64"))?
+        .unwrap_or(0);
+
+    Ok(LegacyStoryContext {
+        title: assessment.name.clone(),
+        scenario_id: scenario.to_string(),
+        attack_category: legacy_attack_category(scenario).to_string(),
+        safe_attack_preview,
+        attack_content_hash: Sha256Digest::from_bytes(&attack).as_str().to_string(),
+        authority: AuthoritySnapshot {
+            session_id,
+            actor_id,
+            authz_id,
+            authz_state,
+            expires_at: OffsetDateTime::UNIX_EPOCH,
+            allowed_providers: session.allowed_providers.clone(),
+            files: Vec::new(),
+            networks: Vec::new(),
+            email: None,
+            stores: Vec::new(),
+            code: None,
+            inputs: Vec::new(),
+            evidence: EvidenceAuthority {
+                current_story_only: true,
+                allowed_operations: Vec::new(),
+            },
+            artifacts: Vec::new(),
+            budgets: BudgetSnapshot {
+                max_argument_bytes,
+                max_file_bytes: 0,
+                max_network_bytes: 0,
+                max_calls: 0,
+                max_wall_time_ms: 0,
+                max_model_calls: 0,
+                max_model_input_bytes: 0,
+                max_model_output_bytes: 0,
+            },
+            policy_snapshot_hash,
+        },
+    })
+}
+
+fn read_trusted_attack(scenario_path: &Path) -> anyhow::Result<Vec<u8>> {
+    let mut attacks = Vec::new();
+    for entry in fs::read_dir(scenario_path.join("attacks"))? {
+        let path = entry?.path();
+        if path.extension().is_some_and(|extension| extension == "md") {
+            attacks.push(path);
+        }
+    }
+    attacks.sort();
+    let path = attacks
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("scenario attack fixture is required for story output"))?;
+    Ok(fs::read(path)?)
+}
+
+fn legacy_attack_category(scenario: &str) -> &'static str {
+    match scenario {
+        "prompt-injection-file-exfil" => "prompt_injection",
+        "tool-hijack-email-api" => "tool_hijack",
+        "memory-knowledge-poisoning" => "memory_knowledge_poisoning",
+        "environment-local-web-risk" => "environment_local_web_risk",
+        "path-escape-file-boundary" => "path_escape",
+        _ => "legacy_security_scenario",
+    }
 }
 
 fn execute_provider_call_real(
@@ -1310,6 +1435,7 @@ fn run_strict_check(json_output: bool) -> anyhow::Result<()> {
         "docs/reference/provider-model.md",
         "docs/reference/provider-integration.md",
         "docs/reference/evidence-and-accountability.md",
+        "docs/reference/security-story.md",
         "docs/reference/webui-review-console.md",
         "scripts/pr_fast_gate.sh",
         "scripts/release_gate_local.sh",

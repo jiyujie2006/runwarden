@@ -32,6 +32,11 @@ Only the five official scenario `webui.json` files generated for that run are
 embedded; stale or example scenario outputs under the same directory are not
 included. The static page does not submit approval decisions.
 
+Each official scenario directory also receives a sibling `story.json`. It is
+the Rust adapter's redacted `LegacyDerived` projection and remains
+`EvidenceStatus::Incomplete`; the current static console continues to embed
+the retained legacy `webui.json` until the story-native console migration.
+
 ## Policy Boundary
 
 The browser uses DOM text APIs and `fetch`; it must not reimplement allow,
@@ -39,3 +44,5 @@ deny, egress, provider, report, artifact, or trace verification policy.
 Denied and review-blocked state comes from Rust-produced event JSON.
 Defense-layer labels are produced by Rust event JSON (`defense_layer`) and the
 browser displays them without reclassifying provider ids.
+The browser does not convert legacy traces into native story events or mint
+`obs_*` references; the Rust adapter owns the `story.json` projection.

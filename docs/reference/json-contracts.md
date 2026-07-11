@@ -7,7 +7,8 @@ The kernel also owns the typed `ResourceClaim`, `AuthoritySnapshot`,
 `SecurityOperation`, `SecurityStory`, `StoryEvent`, `StoryReplayFrame`,
 `StoryEvidenceView`, and `StoryBundleManifest` views. Native v1 views reject
 unknown fields so arbitrary JSON cannot become an unreviewed security or
-export channel.
+export channel. See [Security Story](security-story.md) for native versus
+legacy provenance and the adapter's redaction boundary.
 
 The security-story schema writer version is `1.0.0`. Readers accept canonical
 three-component versions with major version `1` through the validated Rust
