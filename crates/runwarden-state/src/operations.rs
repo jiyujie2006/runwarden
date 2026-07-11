@@ -11,6 +11,7 @@ use runwarden_kernel::story::{
 };
 use runwarden_kernel::trace::{EventCode, Sha256Digest, StoryEventPayload};
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
+use serde::Serialize;
 use serde_json::Value;
 use time::OffsetDateTime;
 
@@ -69,11 +70,13 @@ struct PreparedOperation {
     private_arguments: Vec<u8>,
     claim_json: String,
     claim_hash: Sha256Digest,
+    invocation_binding_hash: Sha256Digest,
     now: String,
 }
 
 struct StoredBinding {
     operation_id: String,
+    invocation_binding_hash: String,
     parent_model_call_id: Option<String>,
     proposed_tool_call_id: Option<String>,
     provider: String,
@@ -84,6 +87,31 @@ struct StoredBinding {
     policy_snapshot_hash: String,
     claim_json: String,
     claim_hash: String,
+}
+
+#[derive(Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct InvocationBindingMaterial<'a> {
+    pub schema_version: &'static str,
+    pub story_id: &'a StoryId,
+    pub session_id: &'a SessionId,
+    pub invocation_key: &'a str,
+    pub parent_model_call_id: Option<&'a str>,
+    pub proposed_tool_call_id: Option<&'a str>,
+    pub provider: &'a str,
+    pub action: &'a str,
+    pub argument_hash: &'a str,
+    pub safe_arguments_hash: Sha256Digest,
+    pub resource_claim_hash: &'a str,
+    pub policy_snapshot_hash: &'a str,
+}
+
+pub(crate) fn invocation_binding_hash(
+    material: InvocationBindingMaterial<'_>,
+) -> Result<Sha256Digest, JournalError> {
+    Ok(Sha256Digest::from_bytes(
+        canonical_json(&material)?.as_bytes(),
+    ))
 }
 
 impl StateStore {
@@ -118,11 +146,14 @@ impl StateStore {
             &input.invocation_key,
         )? {
             if existing.operation_id != input.operation_id.to_string()
-                && operation_id_exists(&transaction, input.operation_id)?
+                && let Some(actual) = operation_version_if_exists(&transaction, input.operation_id)?
             {
-                return Err(JournalError::Integrity(
-                    "retry operation id is already bound to another invocation".to_owned(),
-                ));
+                return Err(JournalError::Conflict {
+                    entity: "operation",
+                    id: input.operation_id.to_string(),
+                    expected: 0,
+                    actual,
+                });
             }
             validate_retry_binding(&input, &prepared, &existing)?;
             let existing_id: OperationId =
@@ -134,7 +165,13 @@ impl StateStore {
                 operation,
             });
         }
-        if story.story.status != runwarden_kernel::story::StoryStatus::Running {
+        if story.story.provenance != runwarden_kernel::story::StoryProvenance::Native
+            || matches!(
+                story.story.status,
+                runwarden_kernel::story::StoryStatus::EvidenceInvalid
+                    | runwarden_kernel::story::StoryStatus::OutcomeUnknown
+            )
+        {
             return Err(JournalError::InvalidTransition {
                 entity: "story",
                 from: enum_text(&story.story.status)?,
@@ -162,28 +199,33 @@ impl StateStore {
                 to: prepared.now,
             });
         }
-        if operation_id_exists(&transaction, input.operation_id)? {
-            return Err(JournalError::Integrity(
-                "operation id is already bound to another invocation".to_owned(),
-            ));
+        if let Some(actual) = operation_version_if_exists(&transaction, input.operation_id)? {
+            return Err(JournalError::Conflict {
+                entity: "operation",
+                id: input.operation_id.to_string(),
+                expected: 0,
+                actual,
+            });
         }
 
         transaction.execute(
             r#"INSERT INTO operations (
                 operation_id, story_id, session_id, invocation_key,
+                invocation_binding_hash,
                 parent_model_call_id, proposed_tool_call_id, provider, action,
                 argument_hash, redacted_arguments_json, private_arguments_json,
                 policy_snapshot_hash, state, side_effect_state, version,
                 created_at, updated_at
             ) VALUES (
-                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
-                'proposed', 'not_attempted', 0, ?13, ?13
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+                'proposed', 'not_attempted', 0, ?14, ?14
             )"#,
             params![
                 input.operation_id.to_string(),
                 input.story_id.to_string(),
                 input.session_id.to_string(),
                 input.invocation_key.as_str(),
+                prepared.invocation_binding_hash.as_str(),
                 input.parent_model_call_id,
                 input.proposed_tool_call_id,
                 input.provider,
@@ -476,6 +518,20 @@ fn prepare_operation(input: &NewOperation) -> Result<PreparedOperation, JournalE
     }
     let claim_json = canonical_json(&input.resource_claim)?;
     let claim_hash = input.resource_claim.digest();
+    let invocation_binding_hash = invocation_binding_hash(InvocationBindingMaterial {
+        schema_version: "1.0.0",
+        story_id: &input.story_id,
+        session_id: &input.session_id,
+        invocation_key: input.invocation_key.as_str(),
+        parent_model_call_id: input.parent_model_call_id.as_deref(),
+        proposed_tool_call_id: input.proposed_tool_call_id.as_deref(),
+        provider: &input.provider,
+        action: &input.action,
+        argument_hash: input.argument_hash.as_str(),
+        safe_arguments_hash: Sha256Digest::from_bytes(safe_arguments_json.as_bytes()),
+        resource_claim_hash: claim_hash.as_str(),
+        policy_snapshot_hash: input.policy_snapshot_hash.as_str(),
+    })?;
     Ok(PreparedOperation {
         provider_code,
         action_code,
@@ -483,6 +539,7 @@ fn prepare_operation(input: &NewOperation) -> Result<PreparedOperation, JournalE
         private_arguments: private_json.into_bytes(),
         claim_json,
         claim_hash,
+        invocation_binding_hash,
         now: format_time(input.now)?,
     })
 }
@@ -495,7 +552,8 @@ fn load_binding_for_invocation(
 ) -> Result<Option<StoredBinding>, JournalError> {
     connection
         .query_row(
-            r#"SELECT o.operation_id, o.parent_model_call_id,
+            r#"SELECT o.operation_id, o.invocation_binding_hash,
+                      o.parent_model_call_id,
                       o.proposed_tool_call_id, o.provider, o.action,
                       o.argument_hash, o.redacted_arguments_json,
                       o.private_arguments_json, o.policy_snapshot_hash,
@@ -513,16 +571,17 @@ fn load_binding_for_invocation(
             |row| {
                 Ok(StoredBinding {
                     operation_id: row.get(0)?,
-                    parent_model_call_id: row.get(1)?,
-                    proposed_tool_call_id: row.get(2)?,
-                    provider: row.get(3)?,
-                    action: row.get(4)?,
-                    argument_hash: row.get(5)?,
-                    safe_arguments_json: row.get(6)?,
-                    private_arguments: row.get(7)?,
-                    policy_snapshot_hash: row.get(8)?,
-                    claim_json: row.get(9)?,
-                    claim_hash: row.get(10)?,
+                    invocation_binding_hash: row.get(1)?,
+                    parent_model_call_id: row.get(2)?,
+                    proposed_tool_call_id: row.get(3)?,
+                    provider: row.get(4)?,
+                    action: row.get(5)?,
+                    argument_hash: row.get(6)?,
+                    safe_arguments_json: row.get(7)?,
+                    private_arguments: row.get(8)?,
+                    policy_snapshot_hash: row.get(9)?,
+                    claim_json: row.get(10)?,
+                    claim_hash: row.get(11)?,
                 })
             },
         )
@@ -536,6 +595,7 @@ fn validate_retry_binding(
     stored: &StoredBinding,
 ) -> Result<(), JournalError> {
     let matches = stored.parent_model_call_id == input.parent_model_call_id
+        && stored.invocation_binding_hash == prepared.invocation_binding_hash.as_str()
         && stored.proposed_tool_call_id == input.proposed_tool_call_id
         && stored.provider == input.provider
         && stored.action == input.action
@@ -554,19 +614,20 @@ fn validate_retry_binding(
     }
 }
 
-fn operation_id_exists(
+fn operation_version_if_exists(
     connection: &rusqlite::Connection,
     operation_id: OperationId,
-) -> Result<bool, JournalError> {
+) -> Result<Option<u64>, JournalError> {
     connection
         .query_row(
-            "SELECT 1 FROM operations WHERE operation_id = ?1",
+            "SELECT version FROM operations WHERE operation_id = ?1",
             params![operation_id.to_string()],
-            |_| Ok(()),
+            |row| row.get::<_, i64>(0),
         )
         .optional()
-        .map(|value| value.is_some())
-        .map_err(Into::into)
+        .map_err(JournalError::from)?
+        .map(|version| crate::rust_u64(version, "operation version"))
+        .transpose()
 }
 
 fn validate_policy_input(input: &RecordPolicyInput) -> Result<(), JournalError> {

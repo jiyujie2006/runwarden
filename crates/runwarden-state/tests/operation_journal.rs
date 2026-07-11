@@ -7,7 +7,7 @@ use runwarden_kernel::contracts::PolicyDecision;
 use runwarden_kernel::operation::{
     OperationState, PolicyCheck, PolicyCheckStatus, SideEffectState,
 };
-use runwarden_kernel::story::{EnforcementMode, ObservationId};
+use runwarden_kernel::story::{EnforcementMode, InvocationKey, ObservationId};
 use runwarden_state::{JournalError, RecordPolicyInput};
 use rusqlite::{Connection, params};
 
@@ -371,4 +371,196 @@ fn private_and_evidence_tampering_fail_before_trusted_reads() {
         fixture.store.operation(operation.operation_id),
         Err(JournalError::Integrity(_))
     ));
+}
+
+#[test]
+fn a_denied_operation_does_not_finalize_a_multi_operation_story() {
+    let fixture = JournalFixture::new(EnforcementMode::Enforced);
+    let first = fixture
+        .store
+        .create_operation(fixture.operation(30, "send_denied"))
+        .unwrap()
+        .operation;
+    fixture
+        .store
+        .record_policy(RecordPolicyInput {
+            operation_id: first.operation_id,
+            expected_version: 0,
+            decision: PolicyDecision::Denied,
+            reason: "first action denied".to_owned(),
+            next_state: OperationState::Denied,
+            checks: vec![PolicyCheck {
+                check_id: "deny-first".to_owned(),
+                layer: "policy".to_owned(),
+                status: PolicyCheckStatus::Failed,
+                reason: "denied".to_owned(),
+                observation_ref: None,
+            }],
+            now: mutation_time(&fixture.story, 2),
+        })
+        .unwrap();
+    assert_eq!(
+        fixture
+            .store
+            .story_snapshot(fixture.story.story_id)
+            .unwrap()
+            .status,
+        runwarden_kernel::story::StoryStatus::BlockedBeforeSideEffect
+    );
+
+    let mut second_input = fixture.operation(31, "send_next");
+    second_input.now = mutation_time(&fixture.story, 3);
+    let second = fixture.store.create_operation(second_input).unwrap();
+    assert!(second.created);
+    let snapshot = fixture
+        .store
+        .story_snapshot(fixture.story.story_id)
+        .unwrap();
+    assert_eq!(snapshot.operations.len(), 2);
+    assert_eq!(
+        snapshot.status,
+        runwarden_kernel::story::StoryStatus::Running
+    );
+}
+
+#[test]
+fn stored_story_version_tampering_blocks_reads_and_the_next_append() {
+    let fixture = JournalFixture::new(EnforcementMode::Enforced);
+    fixture
+        .store
+        .create_operation(fixture.operation(32, "send"))
+        .unwrap();
+    let connection = Connection::open(fixture.state_dir.join("runwarden.db")).unwrap();
+    connection
+        .execute(
+            "UPDATE stories SET version = 99 WHERE story_id = ?1",
+            params![fixture.story.story_id.to_string()],
+        )
+        .unwrap();
+    assert!(matches!(
+        fixture.store.story_snapshot(fixture.story.story_id),
+        Err(JournalError::Integrity(_))
+    ));
+    assert!(matches!(
+        fixture.store.story_evidence(fixture.story.story_id),
+        Err(JournalError::Integrity(_))
+    ));
+    assert!(matches!(
+        fixture
+            .store
+            .create_operation(fixture.operation(33, "send_after_tamper")),
+        Err(JournalError::Integrity(_))
+    ));
+    let count: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM operations WHERE story_id = ?1",
+            params![fixture.story.story_id.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 1);
+}
+
+#[test]
+fn invocation_key_is_immutable_and_bound_without_entering_safe_output() {
+    let fixture = JournalFixture::new(EnforcementMode::Enforced);
+    fixture
+        .store
+        .create_operation(fixture.operation(40, "send"))
+        .unwrap();
+    let safe = serde_json::to_string(
+        &fixture
+            .store
+            .story_snapshot(fixture.story.story_id)
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(!safe.contains("inv_"));
+
+    let changed_key = InvocationKey::from_hmac_bytes([41; 32]);
+    let connection = Connection::open(fixture.state_dir.join("runwarden.db")).unwrap();
+    assert!(
+        connection
+            .execute(
+                "UPDATE operations SET invocation_key = ?1 WHERE story_id = ?2",
+                params![changed_key.as_str(), fixture.story.story_id.to_string()],
+            )
+            .is_err()
+    );
+
+    // Simulate lower-level schema tampering: even if the immutable trigger is
+    // removed, the hidden binding hash prevents a substituted valid key from
+    // becoming a second durable invocation.
+    connection
+        .execute_batch("DROP TRIGGER operations_invocation_binding_immutable")
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE operations SET invocation_key = ?1 WHERE story_id = ?2",
+            params![changed_key.as_str(), fixture.story.story_id.to_string()],
+        )
+        .unwrap();
+    assert!(matches!(
+        fixture.store.story_evidence(fixture.story.story_id),
+        Err(JournalError::Integrity(_))
+    ));
+    assert!(matches!(
+        fixture
+            .store
+            .create_operation(fixture.operation(40, "send")),
+        Err(JournalError::Integrity(_))
+    ));
+    let count: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM operations WHERE story_id = ?1",
+            params![fixture.story.story_id.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 1);
+}
+
+#[test]
+fn two_invocations_reusing_one_operation_id_return_a_structured_conflict() {
+    let fixture = JournalFixture::new(EnforcementMode::Enforced);
+    let shared_operation_id = runwarden_kernel::story::OperationId::new();
+    let barrier = Arc::new(Barrier::new(3));
+    let mut handles = Vec::new();
+    for suffix in [50, 51] {
+        let barrier = Arc::clone(&barrier);
+        let state_dir = fixture.state_dir.clone();
+        let story = fixture.story.clone();
+        handles.push(std::thread::spawn(move || {
+            let store = runwarden_state::StateStore::open(state_dir).unwrap();
+            let mut input = operation_fixture(&story, suffix, "send");
+            input.operation_id = shared_operation_id;
+            barrier.wait();
+            store.create_operation(input)
+        }));
+    }
+    barrier.wait();
+    let results = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(
+                result,
+                Err(JournalError::Conflict {
+                    entity: "operation",
+                    ..
+                })
+            ))
+            .count(),
+        1
+    );
+    let evidence = fixture
+        .store
+        .story_evidence(fixture.story.story_id)
+        .unwrap();
+    assert_eq!(evidence.story.operations.len(), 1);
+    assert_eq!(evidence.events.len(), 1);
 }

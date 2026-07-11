@@ -8,12 +8,13 @@ use runwarden_kernel::operation::{
 };
 use runwarden_kernel::resource::ResourceClaim;
 use runwarden_kernel::story::{
-    ApprovalId, EvidenceStatus, ExecutionLeaseId, ObservationId, OperationId, SecurityStory,
-    StoryClaim, StoryEvidenceView, StoryId, StoryReplayFrame, StoryStatus,
+    ApprovalId, EvidenceStatus, ExecutionLeaseId, InvocationKey, ObservationId, OperationId,
+    SecurityStory, StoryClaim, StoryEvidenceView, StoryId, StoryReplayFrame, StoryStatus,
 };
 use runwarden_kernel::trace::{EventCode, Sha256Digest, StoryEvent};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
+use crate::operations::{InvocationBindingMaterial, invocation_binding_hash};
 use crate::sessions::load_session_record;
 use crate::stories::load_story_record;
 use crate::{
@@ -153,9 +154,11 @@ pub(crate) fn verify_event_frame_chains_tx(
 ) -> Result<(), JournalError> {
     let events = load_events(connection, story_id)?;
     let replay_frames = load_frames(connection, story_id)?;
+    let stored = load_story_record(connection, story_id)?;
+    verify_frame_story_versions(&replay_frames, stored.version)?;
     let story = match replay_frames.last() {
         Some(frame) => frame.story.clone(),
-        None => load_story_record(connection, story_id)?.story,
+        None => stored.story,
     };
     let evidence = StoryEvidenceView {
         story,
@@ -173,9 +176,11 @@ pub(crate) fn load_story_evidence_tx(
     connection: &Connection,
     story_id: StoryId,
 ) -> Result<StoryEvidenceView, JournalError> {
+    let stored_version = load_story_record(connection, story_id)?.version;
     let story = load_story_snapshot_tx(connection, story_id)?;
     let events = load_events(connection, story_id)?;
     let replay_frames = load_frames(connection, story_id)?;
+    verify_frame_story_versions(&replay_frames, stored_version)?;
     let evidence = StoryEvidenceView {
         story,
         events,
@@ -270,14 +275,15 @@ fn decode_operation(
     expected_story_id: StoryId,
     raw: RawOperation,
 ) -> Result<SecurityOperation, JournalError> {
-    let operation_id: OperationId = persisted_string(raw.operation_id, "operation id")?;
-    let story_id: StoryId = persisted_string(raw.story_id, "operation story id")?;
-    let session_id = persisted_string(raw.session_id, "operation session id")?;
+    let operation_id: OperationId = persisted_string(raw.operation_id.clone(), "operation id")?;
+    let story_id: StoryId = persisted_string(raw.story_id.clone(), "operation story id")?;
+    let session_id = persisted_string(raw.session_id.clone(), "operation session id")?;
     if story_id != expected_story_id {
         return Err(JournalError::Integrity(
             "operation story id disagrees with snapshot story".to_owned(),
         ));
     }
+    verify_invocation_binding(connection, operation_id, story_id, session_id, &raw)?;
     if raw.proposed_sequence.is_none() {
         return Err(JournalError::Integrity(
             "operation has no operation-proposed event".to_owned(),
@@ -377,6 +383,45 @@ fn decode_operation(
         side_effect_state,
         observation_refs,
     })
+}
+
+fn verify_invocation_binding(
+    connection: &Connection,
+    operation_id: OperationId,
+    story_id: StoryId,
+    session_id: runwarden_kernel::story::SessionId,
+    raw: &RawOperation,
+) -> Result<(), JournalError> {
+    let (invocation_key, stored_hash): (String, String) = connection.query_row(
+        r#"SELECT invocation_key, invocation_binding_hash
+           FROM operations WHERE operation_id = ?1"#,
+        params![operation_id.to_string()],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let invocation_key: InvocationKey =
+        persisted_string(invocation_key, "operation invocation key")?;
+    let stored_hash: Sha256Digest =
+        persisted_string(stored_hash, "operation invocation binding hash")?;
+    let expected = invocation_binding_hash(InvocationBindingMaterial {
+        schema_version: "1.0.0",
+        story_id: &story_id,
+        session_id: &session_id,
+        invocation_key: invocation_key.as_str(),
+        parent_model_call_id: raw.parent_model_call_id.as_deref(),
+        proposed_tool_call_id: raw.proposed_tool_call_id.as_deref(),
+        provider: &raw.provider,
+        action: &raw.action,
+        argument_hash: &raw.argument_hash,
+        safe_arguments_hash: Sha256Digest::from_bytes(raw.arguments_json.as_bytes()),
+        resource_claim_hash: &raw.claim_hash,
+        policy_snapshot_hash: &raw.policy_snapshot_hash,
+    })?;
+    if stored_hash != expected {
+        return Err(JournalError::Integrity(
+            "stored operation invocation binding hash does not match".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 fn load_policy_checks(
@@ -739,7 +784,8 @@ fn verify_snapshot_anchor_tx(
     )?;
     let frame_count = rust_u64(frame_count, "frame count")?;
     if snapshot.event_count == 0 {
-        if frame_count != 0 || !snapshot.operations.is_empty() {
+        if frame_count != 0 || !snapshot.operations.is_empty() || !snapshot.report_claims.is_empty()
+        {
             return Err(JournalError::Integrity(
                 "story has dynamic state without replay frames".to_owned(),
             ));
@@ -782,12 +828,52 @@ fn verify_snapshot_anchor_tx(
         },
     )?;
     let final_frame = decode_frame(snapshot.story_id, raw)?;
+    let stored_version: i64 = connection.query_row(
+        "SELECT version FROM stories WHERE story_id = ?1",
+        params![snapshot.story_id.to_string()],
+        |row| row.get(0),
+    )?;
+    let stored_version = rust_u64(stored_version, "story version")?;
     if final_frame.sequence != snapshot.event_count
+        || final_frame.story_version != stored_version
         || final_frame.event_hash != snapshot.final_event_hash.as_deref().unwrap_or_default()
         || final_frame.story != *snapshot
     {
         return Err(JournalError::Integrity(
             "current snapshot does not match the final replay frame".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn verify_frame_story_versions(
+    frames: &[StoryReplayFrame],
+    stored_story_version: u64,
+) -> Result<(), JournalError> {
+    let mut previous: Option<u64> = None;
+    for frame in frames {
+        if frame.story_version == 0 {
+            return Err(JournalError::Integrity(
+                "replay-frame story version must be positive".to_owned(),
+            ));
+        }
+        if let Some(previous) = previous {
+            let expected = previous.checked_add(1).ok_or_else(|| {
+                JournalError::Integrity("replay-frame story version overflow".to_owned())
+            })?;
+            if frame.story_version != expected {
+                return Err(JournalError::Integrity(
+                    "replay-frame story versions are not contiguous".to_owned(),
+                ));
+            }
+        }
+        previous = Some(frame.story_version);
+    }
+    if let Some(final_version) = previous
+        && final_version != stored_story_version
+    {
+        return Err(JournalError::Integrity(
+            "final replay-frame version does not match stored story version".to_owned(),
         ));
     }
     Ok(())
@@ -808,26 +894,29 @@ fn derived_story_status(
         StoryStatus::OutcomeUnknown
     } else if operations
         .iter()
-        .any(|operation| operation.state == OperationState::Failed)
-    {
-        StoryStatus::Failed
-    } else if operations
-        .iter()
-        .any(|operation| operation.state == OperationState::Completed)
-    {
-        StoryStatus::CompletedWithControlledSideEffect
-    } else if operations.iter().any(|operation| {
-        matches!(
-            operation.state,
-            OperationState::Denied | OperationState::DeniedByReviewer | OperationState::Expired
-        )
-    }) {
-        StoryStatus::BlockedBeforeSideEffect
-    } else if operations
-        .iter()
         .any(|operation| operation.state == OperationState::AwaitingApproval)
     {
         StoryStatus::AwaitingApproval
+    } else if operations.iter().any(|operation| {
+        matches!(
+            operation.state,
+            OperationState::Proposed
+                | OperationState::PolicyEvaluated
+                | OperationState::Approved
+                | OperationState::ExecutionLeased
+                | OperationState::Executing
+        )
+    }) {
+        StoryStatus::Running
+    } else if let Some(last) = operations.last() {
+        match last.state {
+            OperationState::Denied | OperationState::DeniedByReviewer | OperationState::Expired => {
+                StoryStatus::BlockedBeforeSideEffect
+            }
+            OperationState::Completed => StoryStatus::CompletedWithControlledSideEffect,
+            OperationState::Failed => StoryStatus::Failed,
+            _ => current,
+        }
     } else if operations.is_empty() {
         current
     } else {

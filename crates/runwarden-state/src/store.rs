@@ -74,7 +74,9 @@ impl StateStore {
     }
 
     pub(crate) fn connection(&self) -> Result<Connection, JournalError> {
-        open_configured_connection(&self.state_dir)
+        let connection = open_configured_connection(&self.state_dir)?;
+        validate_v1_schema(&connection)?;
+        Ok(connection)
     }
 
     pub(crate) fn harden_files(&self) -> Result<(), JournalError> {

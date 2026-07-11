@@ -79,6 +79,7 @@ CREATE TABLE operations (
     story_id TEXT NOT NULL REFERENCES stories(story_id) ON DELETE CASCADE,
     session_id TEXT NOT NULL REFERENCES sessions(session_id),
     invocation_key TEXT NOT NULL,
+    invocation_binding_hash TEXT NOT NULL DEFAULT 'sha256:0000000000000000000000000000000000000000000000000000000000000000',
     parent_model_call_id TEXT,
     proposed_tool_call_id TEXT,
     provider TEXT NOT NULL,
@@ -108,6 +109,9 @@ CREATE TABLE operations (
     CHECK(policy_decision IS NULL OR policy_decision IN (
       'allowed', 'denied', 'requires_review'
     )),
+    CHECK(length(invocation_binding_hash) = 71
+      AND substr(invocation_binding_hash, 1, 7) = 'sha256:'
+      AND substr(invocation_binding_hash, 8) NOT GLOB '*[^0-9a-f]*'),
     CHECK(state IN (
       'proposed', 'policy_evaluated', 'denied', 'awaiting_approval',
       'denied_by_reviewer', 'expired', 'approved', 'observed_only',
@@ -256,6 +260,12 @@ CREATE TABLE exports (
 CREATE INDEX operations_story_state_idx ON operations(story_id, state);
 CREATE INDEX events_story_event_idx ON events(story_id, event_type);
 CREATE INDEX approvals_state_expiry_idx ON approvals(state, expires_at);
+
+CREATE TRIGGER operations_invocation_binding_immutable
+BEFORE UPDATE OF invocation_key, invocation_binding_hash ON operations
+BEGIN
+  SELECT RAISE(ABORT, 'operation invocation binding is immutable');
+END;
 
 -- Rust journal versions/counters are u64. All future persistence code must
 -- perform a checked u64-to-i64 conversion before binding these INTEGERs.

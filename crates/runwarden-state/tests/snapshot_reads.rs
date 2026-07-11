@@ -2,8 +2,10 @@ mod common;
 
 use common::{JournalFixture, PRIVATE_MARKER};
 use runwarden_kernel::story::EnforcementMode;
+use runwarden_kernel::trace::canonical_json_v1;
 use runwarden_state::snapshots::STORY_SNAPSHOT_SQL;
 use runwarden_state::{JournalError, StoryStatusUpdate};
+use rusqlite::{Connection, params};
 
 #[test]
 fn snapshot_query_and_output_are_private_material_free() {
@@ -90,4 +92,103 @@ fn snapshot_order_is_event_order_and_unframed_status_updates_are_rejected() {
             .unwrap(),
         snapshot
     );
+}
+
+#[test]
+fn relational_event_rows_cannot_be_hidden_to_enable_an_unframed_story_cas() {
+    let fixture = JournalFixture::new(EnforcementMode::Enforced);
+    fixture
+        .store
+        .create_operation(fixture.operation(60, "send"))
+        .unwrap();
+    let original = fixture.store.story(fixture.story.story_id).unwrap();
+    let connection = Connection::open(fixture.state_dir.join("runwarden.db")).unwrap();
+    let raw: String = connection
+        .query_row(
+            "SELECT safe_story_json FROM stories WHERE story_id = ?1",
+            params![fixture.story.story_id.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut forged: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    forged["event_count"] = serde_json::json!(0);
+    forged["final_event_hash"] = serde_json::Value::Null;
+    let forged = String::from_utf8(canonical_json_v1(&forged)).unwrap();
+    connection
+        .execute(
+            "UPDATE stories SET safe_story_json = ?1 WHERE story_id = ?2",
+            params![forged, fixture.story.story_id.to_string()],
+        )
+        .unwrap();
+
+    assert!(matches!(
+        fixture.store.update_story_status(StoryStatusUpdate {
+            story_id: fixture.story.story_id,
+            expected_version: 1,
+            status: runwarden_kernel::story::StoryStatus::Failed,
+            evidence_status: runwarden_kernel::story::EvidenceStatus::Incomplete,
+            final_outcome_summary: "forged zero".to_owned(),
+            now: common::mutation_time(&fixture.story, 2),
+        }),
+        Err(JournalError::InvalidTransition {
+            entity: "story_after_event",
+            ..
+        })
+    ));
+    assert_eq!(
+        fixture.store.story(fixture.story.story_id).unwrap(),
+        original
+    );
+    let version: i64 = connection
+        .query_row(
+            "SELECT version FROM stories WHERE story_id = ?1",
+            params![fixture.story.story_id.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(version, 1);
+
+    let mut invalid_hash: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    invalid_hash["final_event_hash"] = serde_json::json!("not-a-digest");
+    let invalid_hash = String::from_utf8(canonical_json_v1(&invalid_hash)).unwrap();
+    connection
+        .execute(
+            "UPDATE stories SET safe_story_json = ?1 WHERE story_id = ?2",
+            params![invalid_hash, fixture.story.story_id.to_string()],
+        )
+        .unwrap();
+    assert!(matches!(
+        fixture.store.story(fixture.story.story_id),
+        Err(JournalError::Integrity(_))
+    ));
+}
+
+#[test]
+fn an_unframed_report_claim_on_an_empty_story_is_rejected() {
+    let fixture = JournalFixture::new(EnforcementMode::Enforced);
+    let claim = serde_json::json!({
+        "claim_id": "fabricated-empty-claim",
+        "text": "This claim has no committed observation.",
+        "observation_refs": [runwarden_kernel::story::ObservationId::new()],
+        "support_expectation": {
+            "provider": "email.send"
+        }
+    });
+    let claim = String::from_utf8(canonical_json_v1(&claim)).unwrap();
+    let connection = Connection::open(fixture.state_dir.join("runwarden.db")).unwrap();
+    connection
+        .execute(
+            r#"INSERT INTO report_claims (story_id, claim_id, claim_json)
+               VALUES (?1, 'fabricated-empty-claim', ?2)"#,
+            params![fixture.story.story_id.to_string(), claim],
+        )
+        .unwrap();
+    assert!(matches!(
+        fixture.store.story_snapshot(fixture.story.story_id),
+        Err(JournalError::Integrity(_))
+    ));
+    assert!(matches!(
+        fixture.store.story_evidence(fixture.story.story_id),
+        Err(JournalError::Integrity(_))
+    ));
 }

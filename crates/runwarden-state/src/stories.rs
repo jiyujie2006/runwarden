@@ -7,6 +7,7 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use time::OffsetDateTime;
 
 use crate::sessions::load_session_record;
+use crate::snapshots::load_story_evidence_tx;
 use crate::{
     JournalError, StateStore, canonical_json, enum_text, format_time, persisted_enum,
     persisted_json, persisted_string, persisted_time, rust_u64, sqlite_u64,
@@ -122,9 +123,20 @@ impl StateStore {
     }
 
     pub fn story(&self, story_id: StoryId) -> Result<SecurityStory, JournalError> {
-        let connection = self.connection()?;
-        let stored = load_story_record(&connection, story_id)?;
-        Ok(stored.story)
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
+        let event_count: i64 = transaction.query_row(
+            "SELECT count(*) FROM events WHERE story_id = ?1",
+            params![story_id.to_string()],
+            |row| row.get(0),
+        )?;
+        let story = if event_count == 0 {
+            load_story_record(&transaction, story_id)?.story
+        } else {
+            load_story_evidence_tx(&transaction, story_id)?.story
+        };
+        transaction.commit()?;
+        Ok(story)
     }
 
     pub fn update_story_status(
@@ -141,10 +153,23 @@ impl StateStore {
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let stored = load_story_record(&transaction, input.story_id)?;
-        if stored.story.event_count != 0 {
+        let event_rows: i64 = transaction.query_row(
+            "SELECT count(*) FROM events WHERE story_id = ?1",
+            params![input.story_id.to_string()],
+            |row| row.get(0),
+        )?;
+        let frame_rows: i64 = transaction.query_row(
+            "SELECT count(*) FROM story_frames WHERE story_id = ?1",
+            params![input.story_id.to_string()],
+            |row| row.get(0),
+        )?;
+        if stored.story.event_count != 0 || event_rows != 0 || frame_rows != 0 {
             return Err(JournalError::InvalidTransition {
                 entity: "story_after_event",
-                from: stored.story.event_count.to_string(),
+                from: format!(
+                    "json={},events={event_rows},frames={frame_rows}",
+                    stored.story.event_count
+                ),
                 to: "unframed_status_update".to_owned(),
             });
         }
@@ -493,6 +518,9 @@ pub(crate) fn validate_story_contract(story: &SecurityStory) -> Result<(), Journ
         &story.authority.policy_snapshot_hash,
     )?;
     validate_digest("story attack content hash", &story.attack_content_hash)?;
+    if let Some(final_event_hash) = story.final_event_hash.as_deref() {
+        validate_digest("story final event hash", final_event_hash)?;
+    }
     if story.provenance == StoryProvenance::LegacyDerived
         && story.evidence_status != EvidenceStatus::Incomplete
     {
