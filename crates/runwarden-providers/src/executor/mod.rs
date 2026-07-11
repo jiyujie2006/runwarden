@@ -619,12 +619,19 @@ pub struct ProviderExecutionOutcome {
     pub cleanup: Option<CleanupToken>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CleanupFileIdentity {
+    pub(crate) device: u64,
+    pub(crate) inode: u64,
+}
+
 pub struct CleanupToken {
     id: String,
     operation_id: OperationId,
     provider: String,
     relative_path: WorkspaceRelativePath,
     sha256: Sha256Digest,
+    file_identity: CleanupFileIdentity,
 }
 
 impl CleanupToken {
@@ -633,12 +640,15 @@ impl CleanupToken {
         provider: String,
         relative_path: WorkspaceRelativePath,
         sha256: Sha256Digest,
+        file_identity: CleanupFileIdentity,
     ) -> Self {
         let binding = serde_json::json!({
             "operation_id": operation_id,
             "provider": provider,
             "relative_path": relative_path,
             "sha256": sha256,
+            "device": file_identity.device,
+            "inode": file_identity.inode,
         });
         let mut message = CLEANUP_TOKEN_DOMAIN_V1.to_vec();
         message.extend_from_slice(&canonical_json_v1(&binding));
@@ -649,6 +659,7 @@ impl CleanupToken {
             provider,
             relative_path,
             sha256,
+            file_identity,
         }
     }
 
@@ -670,6 +681,10 @@ impl CleanupToken {
 
     pub(crate) fn sha256(&self) -> &Sha256Digest {
         &self.sha256
+    }
+
+    pub(crate) fn file_identity(&self) -> CleanupFileIdentity {
+        self.file_identity
     }
 }
 
@@ -695,6 +710,14 @@ pub enum ReconciliationResult {
     Unknown,
 }
 
+/// Read-only recovery result for one frozen provider request. Cleanup remains
+/// an opaque capability and is returned only when durable provider evidence
+/// proves the exact operation/request binding.
+pub struct ProviderReconciliationOutcome {
+    pub result: ReconciliationResult,
+    pub cleanup: Option<CleanupToken>,
+}
+
 pub trait ProviderExecutor: Send + Sync {
     /// Implementors must validate first and atomically claim the permit's
     /// operation before touching files, processes, DNS, sockets, or receipts.
@@ -707,7 +730,9 @@ pub trait ProviderExecutor: Send + Sync {
         now: OffsetDateTime,
     ) -> ProviderExecutionOutcome;
 
-    fn reconcile(&self, operation_id: OperationId) -> ReconciliationResult;
+    /// Inspect trusted provider evidence for the complete frozen request.
+    /// Reconciliation must never invoke the provider business operation.
+    fn reconcile(&self, request: &ProviderExecutionRequest) -> ProviderReconciliationOutcome;
 
     fn finalize_cleanup(
         &self,

@@ -62,7 +62,29 @@ fn policy_operation_at(
     create_seconds: i64,
     policy_seconds: i64,
 ) -> runwarden_kernel::operation::SecurityOperation {
+    policy_operation_at_with_charge(
+        fixture,
+        suffix,
+        decision,
+        create_seconds,
+        policy_seconds,
+        charge(1),
+    )
+}
+
+fn policy_operation_at_with_charge(
+    fixture: &JournalFixture,
+    suffix: u8,
+    decision: PolicyDecision,
+    create_seconds: i64,
+    policy_seconds: i64,
+    budget_charge: BudgetCharge,
+) -> runwarden_kernel::operation::SecurityOperation {
     let mut input = fixture.operation(suffix, "send");
+    let frozen = common::fixture_frozen_proposal_with_budget("send", budget_charge);
+    input.proposal_commitment = frozen.proposal_commitment;
+    input.provider_contract_hash = frozen.provider_contract_hash;
+    input.budget_charge = frozen.budget_charge;
     input.now = mutation_time(&fixture.story, create_seconds);
     let operation = fixture.store.create_operation(input).unwrap().operation;
     let (next_state, status) = match decision {
@@ -88,6 +110,8 @@ fn policy_operation_at(
                 reason: "typed lease policy".to_owned(),
                 observation_ref: None,
             }],
+            proposal_commitment: common::frozen_proposal(&fixture.store, operation.operation_id)
+                .proposal_commitment,
             now: mutation_time(&fixture.story, policy_seconds),
         })
         .unwrap()
@@ -110,6 +134,8 @@ fn binding(
         data_classification: Some(DataClass::Internal),
         risk_tags: vec!["email_send".to_owned(), "network_egress".to_owned()],
         policy_snapshot_hash: operation.policy_snapshot_hash.clone(),
+        proposal_commitment: common::frozen_proposal(&fixture.store, operation.operation_id)
+            .proposal_commitment,
         maximum_consumptions: OneShotConsumption::new(),
     }
 }
@@ -166,6 +192,10 @@ fn direct_lease_request(
         instance_token_hash: token_hash(),
         expected_budget_version: 0,
         budget_charge: charge(1),
+        proposal_commitment: common::frozen_proposal(&fixture.store, operation_id)
+            .proposal_commitment,
+        provider_contract_hash: common::frozen_proposal(&fixture.store, operation_id)
+            .provider_contract_hash,
         expires_at: mutation_time(&fixture.story, 120),
         now: mutation_time(&fixture.story, 3),
     }
@@ -177,6 +207,7 @@ fn direct_request_from_story(
     lease_id: ExecutionLeaseId,
     budget_charge: BudgetCharge,
 ) -> LeaseRequest {
+    let frozen = common::fixture_frozen_proposal_with_budget("send", budget_charge);
     LeaseRequest {
         operation_id,
         expected_operation_version: 1,
@@ -187,6 +218,8 @@ fn direct_request_from_story(
         instance_token_hash: token_hash(),
         expected_budget_version: 0,
         budget_charge,
+        proposal_commitment: frozen.proposal_commitment,
+        provider_contract_hash: frozen.provider_contract_hash,
         expires_at: mutation_time(story, 120),
         now: mutation_time(story, 5),
     }
@@ -211,6 +244,10 @@ fn reviewed_lease_request(
         instance_token_hash: token_hash(),
         expected_budget_version: 0,
         budget_charge: charge(1),
+        proposal_commitment: common::frozen_proposal(&fixture.store, operation_id)
+            .proposal_commitment,
+        provider_contract_hash: common::frozen_proposal(&fixture.store, operation_id)
+            .provider_contract_hash,
         expires_at: mutation_time(&fixture.story, 120),
         now: mutation_time(&fixture.story, 5),
     }
@@ -411,8 +448,10 @@ fn reviewed_lease_contention_has_one_winner_and_one_approval_conflict() {
 #[test]
 fn aggregate_budget_contention_commits_exactly_one_reservation() {
     let fixture = JournalFixture::new(runwarden_kernel::story::EnforcementMode::Enforced);
-    let first = policy_operation_at(&fixture, 86, PolicyDecision::Allowed, 1, 2);
-    let second = policy_operation_at(&fixture, 87, PolicyDecision::Allowed, 3, 4);
+    let first =
+        policy_operation_at_with_charge(&fixture, 86, PolicyDecision::Allowed, 1, 2, charge(3));
+    let second =
+        policy_operation_at_with_charge(&fixture, 87, PolicyDecision::Allowed, 3, 4, charge(3));
     activate(&fixture);
     let barrier = Arc::new(Barrier::new(3));
     let mut handles = Vec::new();
@@ -505,6 +544,8 @@ fn reviewed_request_from_story(
         instance_token_hash: token_hash(),
         expected_budget_version: 0,
         budget_charge: charge(1),
+        proposal_commitment: common::fixture_frozen_proposal("send").proposal_commitment,
+        provider_contract_hash: common::fixture_frozen_proposal("send").provider_contract_hash,
         expires_at: mutation_time(story, 120),
         now: mutation_time(story, 5),
     }

@@ -16,13 +16,14 @@ mod stories;
 
 pub use approvals::{
     ApprovalDecisionInput, ApprovalRecordV1, DurableApprovalBinding, ExecutionLease,
-    ExecutionResultInput, ExecutionStarted, ExpireApprovalInput, LeaseAuthorization, LeaseRequest,
-    MarkOutcomeUnknownInput, NewApproval, OneShotConsumption, OperationRuntimeSnapshot,
-    ReleaseLeaseInput, ReviewerDecision,
+    ExecutionResultInput, ExecutionRuntimeSnapshot, ExecutionStarted, ExpireApprovalInput,
+    LeaseAuthorization, LeaseRequest, MarkOutcomeUnknownInput, NewApproval, OneShotConsumption,
+    OperationRuntimeSnapshot, ReleaseLeaseInput, ReviewerDecision,
 };
 pub use events::{CommittedStoryEvent, NewStoryEvent};
 pub use operations::{
-    CreateOperationOutcome, NewOperation, PrivateOperationMaterial, RecordPolicyInput,
+    CreateOperationOutcome, FrozenProposalBinding, NewOperation, PrivateOperationMaterial,
+    RecordPolicyInput,
 };
 pub use recovery::RecoveryCandidate;
 pub use sessions::SessionRecord;

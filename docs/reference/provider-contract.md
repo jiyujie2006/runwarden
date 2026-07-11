@@ -68,9 +68,9 @@ a positive call charge no greater than the permit reservation;
 entire reservation.
 
 Permit validation is intentionally not a durable start transition or a replay
-store. Plan 4 will be the only issuer call site, after
-`mark_execution_started`; `DefaultProviderExecutor` will atomically claim the
-operation and return reconciliation state instead of repeating a backend side
+store. The native runtime is the only issuer call site, after
+`mark_execution_started`; `DefaultProviderExecutor` atomically claims the
+operation and returns reconciliation state instead of repeating a backend side
 effect. A restarted authority cannot validate an old process permit and must
 recover the already-started operation rather than issue another capability.
 
@@ -89,15 +89,17 @@ email, memory, knowledge, and simulated-network bodies are crate-private; no
 generic public execution wrapper remains. Generic file operations also reject
 the private backing prefixes used by email, stores, and Runwarden state.
 
-Email is the first replay-reconciled business effect. Its canonical receipt
-binds operation id, complete argument hash, canonical recipients, subject and
-body hashes, and recorded time. Unique fsynced temporary files plus atomic
-`hard_link` creation ensure concurrent executors converge on one receipt.
-Exact duplicates return the same typed receipt, changed arguments return a
-zero-charge binding conflict, and malformed or internally contradictory
-receipt state returns `OutcomeUnknown` with the full reserved budget. Safe
-provider outputs never contain file contents, message plaintext, or store
-values.
+Email is the first replay-reconciled business effect. Its canonical v2 receipt
+binds operation id, canonical recipients, subject and body hashes, recorded
+time, and a domain-separated digest of the complete frozen execution request:
+story, session, provider, action, argument and resource-claim commitments,
+policy snapshot, provider contract, and reserved budget. Unique fsynced
+temporary files plus atomic `hard_link` creation ensure concurrent executors
+converge on one receipt. Exact duplicates return the same typed receipt,
+changed bindings return a zero-charge conflict, and malformed or internally
+contradictory receipt state returns `OutcomeUnknown` with the full reserved
+budget. Safe provider outputs never contain file contents, message plaintext,
+or store values.
 
 A bounded process registry claims each operation id across executor instances.
 Its binding includes the complete frozen request and the pinned physical roots;
@@ -105,6 +107,41 @@ completed or uncertain tombstones do not expire with the permit. Exact replay
 returns the cached redacted result without repeating an effect, while a changed
 binding or a second physical root fails closed. This is process-local defense
 in depth; the SQLite lease and operation journal remain the durable owner.
+
+Recovery uses `ProviderExecutor::reconcile(&ProviderExecutionRequest)` and
+returns `ProviderReconciliationOutcome`, which contains the typed
+`ReconciliationResult` and an optional opaque `CleanupToken`. An operation id
+alone is never sufficient. The default executor first verifies pinned roots,
+the current canonical catalog contract, canonical argument and claim hashes,
+the exact provider/action/claim family, trusted extraction scope, positive
+single-call reservation, and any cached complete binding. It then invokes only
+a provider-specific evidence reader; reconciliation never dispatches a
+business tool. Email completion requires the v2 receipt to match the complete
+frozen request. A missing exact email receipt may be `NotExecuted` only when no
+conflicting process record exists. Providers without durable evidence return
+`Unknown`, never `NotExecuted` based on an empty email-receipt path or process
+memory.
+
+Email reconciliation may rebuild one cleanup capability without retaining
+process memory. The candidate must be a bounded, canonical regular file in
+`mail/tmp`, carry the exact operation-prefixed random name, hash to the verified
+receipt, and, on Unix, share the receipt's device/inode hard-link identity.
+Substituted same-content copies, symlinks, malformed candidates, and binding
+changes return `Unknown` with no cleanup capability. Cleanup remains a separate
+post-journal action and never changes the truthful reconciliation result.
+Every Unix cleanup token also commits the device/inode identity observed when
+the executor created or recovered that file. This lets the winning receipt hard
+link and a concurrently created losing temp inode be finalized without
+authorizing a later same-content replacement. Platforms without a stable file
+identity do not receive cleanup capabilities in this build.
+
+The contest threat model makes `mail/` provider-private: the generic file
+provider rejects that prefix, external process adapters are disabled, and no
+same-UID out-of-band writer may mutate it concurrently. Final deletion checks
+the token-bound identity immediately before unlinking. Strict protection
+against a hostile host process racing that final pathname check requires a
+future handle-based deletion sandbox; such host compromise is not represented
+as an in-process cleanup guarantee.
 
 External MCP manifests can be offered only through the consuming
 `DefaultProviderExecutor::with_external_mcp` registration method. Admission

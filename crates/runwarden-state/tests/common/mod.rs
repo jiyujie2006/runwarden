@@ -1,12 +1,17 @@
 use runwarden_kernel::operation::SafeArgumentView;
 use runwarden_kernel::resource::{DataClass, ResourceClaim};
-use runwarden_kernel::session::{AuthoritySnapshot, BudgetSnapshot, EvidenceAuthority};
+use runwarden_kernel::resource_binding::resource_proposal_commitment_from_hashes;
+use runwarden_kernel::session::{
+    AuthoritySnapshot, BudgetCharge, BudgetSnapshot, EvidenceAuthority,
+};
 use runwarden_kernel::story::{
     EnforcementMode, EvidenceStatus, InvocationKey, OperationId, RunMode, SchemaVersion,
     SecurityStory, SessionId, StoryId, StoryIdentity, StoryProvenance, StoryStatus,
 };
 use runwarden_kernel::trace::{Sha256Digest, canonical_json_v1};
-use runwarden_state::{NewOperation, PrivateOperationMaterial, SessionRecord, StateStore};
+use runwarden_state::{
+    FrozenProposalBinding, NewOperation, PrivateOperationMaterial, SessionRecord, StateStore,
+};
 use rusqlite::params;
 use serde_json::json;
 use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
@@ -71,6 +76,11 @@ pub fn operation_fixture(
         "token": PRIVATE_MARKER,
     });
     let argument_hash = Sha256Digest::from_bytes(&canonical_json_v1(&private_arguments));
+    let resource_claim = ResourceClaim::Email {
+        recipients: vec!["judge@example.test".to_owned()],
+        classification: DataClass::Internal,
+    };
+    let frozen = fixture_frozen_proposal(action);
     NewOperation {
         operation_id: OperationId::new(),
         story_id: story.story_id,
@@ -80,10 +90,7 @@ pub fn operation_fixture(
         proposed_tool_call_id: Some("tool-call-1".to_owned()),
         provider: "email.send".to_owned(),
         action: action.to_owned(),
-        resource_claim: ResourceClaim::Email {
-            recipients: vec!["judge@example.test".to_owned()],
-            classification: DataClass::Internal,
-        },
+        resource_claim,
         argument_hash,
         arguments: SafeArgumentView::Email {
             recipients: vec!["judge@example.test".to_owned()],
@@ -95,8 +102,61 @@ pub fn operation_fixture(
         },
         policy_snapshot_hash: Sha256Digest::try_from(story.authority.policy_snapshot_hash.clone())
             .unwrap(),
+        proposal_commitment: frozen.proposal_commitment,
+        provider_contract_hash: frozen.provider_contract_hash,
+        budget_charge: frozen.budget_charge,
         now: mutation_time(story, 1),
     }
+}
+
+#[allow(dead_code)]
+pub fn fixture_frozen_proposal(action: &str) -> FrozenProposalBinding {
+    fixture_frozen_proposal_with_budget(
+        action,
+        BudgetCharge {
+            calls: 1,
+            file_bytes: 0,
+            network_bytes: 0,
+        },
+    )
+}
+
+#[allow(dead_code)]
+pub fn fixture_frozen_proposal_with_budget(
+    action: &str,
+    budget_charge: BudgetCharge,
+) -> FrozenProposalBinding {
+    let private_arguments = json!({
+        "recipients": ["judge@example.test"],
+        "subject": "review request",
+        "token": PRIVATE_MARKER,
+    });
+    let argument_hash = Sha256Digest::from_bytes(&canonical_json_v1(&private_arguments));
+    let resource_claim = ResourceClaim::Email {
+        recipients: vec!["judge@example.test".to_owned()],
+        classification: DataClass::Internal,
+    };
+    let provider_contract_hash = Sha256Digest::from_bytes(b"state-test-provider-contract");
+    FrozenProposalBinding {
+        proposal_commitment: resource_proposal_commitment_from_hashes(
+            provider_contract_hash.clone(),
+            "email.send",
+            action,
+            argument_hash,
+            resource_claim.digest(),
+            budget_charge,
+        ),
+        provider_contract_hash,
+        budget_charge,
+    }
+}
+
+#[allow(dead_code)]
+pub fn frozen_proposal(store: &StateStore, operation_id: OperationId) -> FrozenProposalBinding {
+    store
+        .operation_runtime_snapshot(operation_id)
+        .unwrap()
+        .frozen_proposal
 }
 
 pub fn mutation_time(story: &SecurityStory, seconds: i64) -> OffsetDateTime {

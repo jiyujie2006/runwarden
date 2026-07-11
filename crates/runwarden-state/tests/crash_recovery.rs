@@ -63,7 +63,29 @@ fn policy_operation_at(
     create_second: i64,
     policy_second: i64,
 ) -> SecurityOperation {
+    policy_operation_at_with_charge(
+        fixture,
+        suffix,
+        decision,
+        create_second,
+        policy_second,
+        charge(1),
+    )
+}
+
+fn policy_operation_at_with_charge(
+    fixture: &JournalFixture,
+    suffix: u8,
+    decision: PolicyDecision,
+    create_second: i64,
+    policy_second: i64,
+    budget_charge: BudgetCharge,
+) -> SecurityOperation {
     let mut input = fixture.operation(suffix, "send");
+    let frozen = common::fixture_frozen_proposal_with_budget("send", budget_charge);
+    input.proposal_commitment = frozen.proposal_commitment;
+    input.provider_contract_hash = frozen.provider_contract_hash;
+    input.budget_charge = frozen.budget_charge;
     input.now = mutation_time(&fixture.story, create_second);
     let operation = fixture.store.create_operation(input).unwrap().operation;
     let (next_state, status) = match decision {
@@ -89,6 +111,8 @@ fn policy_operation_at(
                 reason: "durable recovery decision".to_owned(),
                 observation_ref: None,
             }],
+            proposal_commitment: common::frozen_proposal(&fixture.store, operation.operation_id)
+                .proposal_commitment,
             now: mutation_time(&fixture.story, policy_second),
         })
         .unwrap()
@@ -100,6 +124,15 @@ fn policy_operation(
     decision: PolicyDecision,
 ) -> SecurityOperation {
     policy_operation_at(fixture, suffix, decision, 1, 2)
+}
+
+fn policy_operation_with_charge(
+    fixture: &JournalFixture,
+    suffix: u8,
+    decision: PolicyDecision,
+    budget_charge: BudgetCharge,
+) -> SecurityOperation {
+    policy_operation_at_with_charge(fixture, suffix, decision, 1, 2, budget_charge)
 }
 
 fn approval_binding(
@@ -119,6 +152,8 @@ fn approval_binding(
         data_classification: Some(DataClass::Internal),
         risk_tags: vec!["email_send".to_owned(), "network_egress".to_owned()],
         policy_snapshot_hash: operation.policy_snapshot_hash.clone(),
+        proposal_commitment: common::frozen_proposal(&fixture.store, operation.operation_id)
+            .proposal_commitment,
         maximum_consumptions: OneShotConsumption::new(),
     }
 }
@@ -172,6 +207,10 @@ fn direct_request(
         instance_token_hash: token_hash(),
         expected_budget_version,
         budget_charge: charge(calls),
+        proposal_commitment: common::frozen_proposal(&fixture.store, operation_id)
+            .proposal_commitment,
+        provider_contract_hash: common::frozen_proposal(&fixture.store, operation_id)
+            .provider_contract_hash,
         expires_at: mutation_time(&fixture.story, expires_second),
         now: mutation_time(&fixture.story, now_second),
     }
@@ -197,6 +236,10 @@ fn reviewed_request(
         instance_token_hash: token_hash(),
         expected_budget_version: 0,
         budget_charge: charge(1),
+        proposal_commitment: common::frozen_proposal(&fixture.store, operation_id)
+            .proposal_commitment,
+        provider_contract_hash: common::frozen_proposal(&fixture.store, operation_id)
+            .provider_contract_hash,
         expires_at: mutation_time(&fixture.story, expires_second),
         now: mutation_time(&fixture.story, 5),
     }
@@ -404,7 +447,7 @@ fn recovery_candidates_include_only_expired_executing_operations_in_deterministi
 #[test]
 fn direct_unstarted_release_cas_restores_policy_and_releases_budget() {
     let fixture = JournalFixture::new(EnforcementMode::Enforced);
-    let operation = policy_operation(&fixture, 124, PolicyDecision::Allowed);
+    let operation = policy_operation_with_charge(&fixture, 124, PolicyDecision::Allowed, charge(2));
     activate(&fixture);
     let lease = fixture
         .store
@@ -524,7 +567,7 @@ fn direct_unstarted_release_cas_restores_policy_and_releases_budget() {
 #[test]
 fn recovery_write_rejects_a_verified_story_without_partial_release() {
     let fixture = JournalFixture::new(EnforcementMode::Enforced);
-    let operation = policy_operation(&fixture, 133, PolicyDecision::Allowed);
+    let operation = policy_operation_with_charge(&fixture, 133, PolicyDecision::Allowed, charge(2));
     activate(&fixture);
     let lease = fixture
         .store
@@ -573,7 +616,8 @@ fn recovery_write_rejects_a_verified_story_without_partial_release() {
 #[test]
 fn recovery_rejects_tampered_budget_aggregates_and_reservation_time_atomically() {
     let release_fixture = JournalFixture::new(EnforcementMode::Enforced);
-    let release_operation = policy_operation(&release_fixture, 134, PolicyDecision::Allowed);
+    let release_operation =
+        policy_operation_with_charge(&release_fixture, 134, PolicyDecision::Allowed, charge(3));
     activate(&release_fixture);
     let release_lease = release_fixture
         .store
@@ -637,7 +681,8 @@ fn recovery_rejects_tampered_budget_aggregates_and_reservation_time_atomically()
     );
 
     let unknown_fixture = JournalFixture::new(EnforcementMode::Enforced);
-    let unknown_operation = policy_operation(&unknown_fixture, 135, PolicyDecision::Allowed);
+    let unknown_operation =
+        policy_operation_with_charge(&unknown_fixture, 135, PolicyDecision::Allowed, charge(3));
     activate(&unknown_fixture);
     let unknown_lease = unknown_fixture
         .store
@@ -838,7 +883,7 @@ fn reviewed_unstarted_release_restores_live_approval_or_expires_both() {
 #[test]
 fn started_execution_is_never_released_and_unknown_commits_full_budget() {
     let fixture = JournalFixture::new(EnforcementMode::Enforced);
-    let operation = policy_operation(&fixture, 127, PolicyDecision::Allowed);
+    let operation = policy_operation_with_charge(&fixture, 127, PolicyDecision::Allowed, charge(3));
     activate(&fixture);
     let lease = fixture
         .store
@@ -1024,7 +1069,7 @@ fn stale_recovery_candidate_cannot_overwrite_a_completed_result() {
 #[test]
 fn provider_result_and_unknown_recovery_have_exactly_one_atomic_winner() {
     let fixture = JournalFixture::new(EnforcementMode::Enforced);
-    let operation = policy_operation(&fixture, 132, PolicyDecision::Allowed);
+    let operation = policy_operation_with_charge(&fixture, 132, PolicyDecision::Allowed, charge(3));
     activate(&fixture);
     let lease = fixture
         .store

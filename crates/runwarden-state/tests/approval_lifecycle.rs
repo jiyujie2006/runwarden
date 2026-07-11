@@ -42,6 +42,8 @@ fn review_operation(fixture: &JournalFixture, suffix: u8) -> SecurityOperation {
                 reason: "review is required".to_owned(),
                 observation_ref: None,
             }],
+            proposal_commitment: common::frozen_proposal(&fixture.store, operation.operation_id)
+                .proposal_commitment,
             now: mutation_time(&fixture.story, 2),
         })
         .unwrap();
@@ -59,7 +61,8 @@ fn approval_binding(
     fixture: &JournalFixture,
     operation: &SecurityOperation,
 ) -> DurableApprovalBinding {
-    DurableApprovalBinding::from_operation(operation, &fixture.story.authority).unwrap()
+    let frozen = common::frozen_proposal(&fixture.store, operation.operation_id);
+    DurableApprovalBinding::from_operation(operation, &frozen, &fixture.story.authority).unwrap()
 }
 
 fn create_pending(
@@ -179,6 +182,19 @@ fn approval_creation_rejects_changed_binding_risk_order_and_session_overrun() {
             approval_id: ApprovalId::new(),
             operation_id: operation.operation_id,
             binding: unsorted,
+            expires_at: mutation_time(&fixture.story, 120),
+            now: mutation_time(&fixture.story, 3),
+        }),
+        Err(JournalError::Integrity(_))
+    ));
+
+    let mut changed_proposal = approval_binding(&fixture, &operation);
+    changed_proposal.proposal_commitment = Sha256Digest::from_bytes(b"changed-proposal-binding");
+    assert!(matches!(
+        fixture.store.create_approval(NewApproval {
+            approval_id: ApprovalId::new(),
+            operation_id: operation.operation_id,
+            binding: changed_proposal,
             expires_at: mutation_time(&fixture.story, 120),
             now: mutation_time(&fixture.story, 3),
         }),

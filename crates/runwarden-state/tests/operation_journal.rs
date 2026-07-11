@@ -10,7 +10,7 @@ use runwarden_kernel::operation::{
 use runwarden_kernel::story::{
     EnforcementMode, EvidenceStatus, InvocationKey, ObservationId, StoryReplayFrame,
 };
-use runwarden_kernel::trace::canonical_json_v1;
+use runwarden_kernel::trace::{Sha256Digest, canonical_json_v1};
 use runwarden_state::{JournalError, RecordPolicyInput};
 use rusqlite::{Connection, params};
 
@@ -92,6 +92,127 @@ fn invocation_retry_is_idempotent_and_binding_changes_fail_closed() {
 }
 
 #[test]
+fn proposal_components_are_frozen_at_creation_and_policy_evaluation() {
+    let fixture = JournalFixture::new(EnforcementMode::Enforced);
+
+    let mut changed_contract = fixture.operation(4, "send");
+    changed_contract.provider_contract_hash = Sha256Digest::from_bytes(b"changed-contract");
+    assert!(matches!(
+        fixture.store.create_operation(changed_contract),
+        Err(JournalError::Integrity(_))
+    ));
+
+    let mut changed_charge = fixture.operation(5, "send");
+    changed_charge.budget_charge.calls = 2;
+    assert!(matches!(
+        fixture.store.create_operation(changed_charge),
+        Err(JournalError::Integrity(_))
+    ));
+
+    let mut changed_commitment = fixture.operation(6, "send");
+    changed_commitment.proposal_commitment = Sha256Digest::from_bytes(b"changed-proposal");
+    assert!(matches!(
+        fixture.store.create_operation(changed_commitment),
+        Err(JournalError::Integrity(_))
+    ));
+
+    let operation = fixture
+        .store
+        .create_operation(fixture.operation(7, "send"))
+        .unwrap()
+        .operation;
+    assert!(matches!(
+        fixture.store.record_policy(RecordPolicyInput {
+            operation_id: operation.operation_id,
+            expected_version: 0,
+            decision: PolicyDecision::Allowed,
+            reason: "drifted policy proposal".to_owned(),
+            next_state: OperationState::PolicyEvaluated,
+            checks: vec![PolicyCheck {
+                check_id: "proposal-binding".to_owned(),
+                layer: "kernel".to_owned(),
+                status: PolicyCheckStatus::Passed,
+                reason: "must bind the exact proposal".to_owned(),
+                observation_ref: None,
+            }],
+            proposal_commitment: Sha256Digest::from_bytes(b"different-policy-proposal"),
+            now: mutation_time(&fixture.story, 2),
+        }),
+        Err(JournalError::Integrity(_))
+    ));
+    let unchanged = fixture.store.operation(operation.operation_id).unwrap();
+    assert_eq!(unchanged.state, OperationState::Proposed);
+    assert_eq!(unchanged.version, 0);
+    assert_eq!(
+        fixture
+            .store
+            .story_evidence(fixture.story.story_id)
+            .unwrap()
+            .events
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn stored_frozen_proposal_fields_are_immutable_and_tamper_evident() {
+    let cases = [
+        (
+            "proposal_commitment",
+            Sha256Digest::from_bytes(b"tampered-proposal")
+                .as_str()
+                .to_owned(),
+        ),
+        (
+            "provider_contract_hash",
+            Sha256Digest::from_bytes(b"tampered-contract")
+                .as_str()
+                .to_owned(),
+        ),
+        (
+            "proposed_budget_charge_json",
+            r#"{"calls":2,"file_bytes":0,"network_bytes":0}"#.to_owned(),
+        ),
+    ];
+
+    for (index, (column, value)) in cases.into_iter().enumerate() {
+        let fixture = JournalFixture::new(EnforcementMode::Enforced);
+        let suffix = u8::try_from(20 + index).unwrap();
+        let operation = fixture
+            .store
+            .create_operation(fixture.operation(suffix, "send"))
+            .unwrap()
+            .operation;
+        let connection = Connection::open(fixture.state_dir.join("runwarden.db")).unwrap();
+        let statement = format!("UPDATE operations SET {column} = ?1 WHERE operation_id = ?2");
+        assert!(
+            connection
+                .execute(
+                    &statement,
+                    params![value, operation.operation_id.to_string()]
+                )
+                .is_err()
+        );
+
+        connection
+            .execute_batch("DROP TRIGGER operations_invocation_binding_immutable")
+            .unwrap();
+        connection
+            .execute(
+                &statement,
+                params![value, operation.operation_id.to_string()],
+            )
+            .unwrap();
+        assert!(matches!(
+            fixture
+                .store
+                .operation_runtime_snapshot(operation.operation_id),
+            Err(JournalError::Integrity(_))
+        ));
+    }
+}
+
+#[test]
 fn policy_transition_is_versioned_and_raw_reason_is_not_evidence() {
     let fixture = JournalFixture::new(EnforcementMode::Enforced);
     let operation = fixture
@@ -115,6 +236,8 @@ fn policy_transition_is_versioned_and_raw_reason_is_not_evidence() {
                 reason: "recipient not authorized".to_owned(),
                 observation_ref: Some(ObservationId::new()),
             }],
+            proposal_commitment: common::frozen_proposal(&fixture.store, operation.operation_id)
+                .proposal_commitment,
             now: mutation_time(&fixture.story, 2),
         })
         .unwrap();
@@ -150,6 +273,8 @@ fn policy_transition_is_versioned_and_raw_reason_is_not_evidence() {
             reason: "stale".to_owned(),
             next_state: OperationState::PolicyEvaluated,
             checks: Vec::new(),
+            proposal_commitment: common::frozen_proposal(&fixture.store, operation.operation_id)
+                .proposal_commitment,
             now: mutation_time(&fixture.story, 3),
         })
         .unwrap_err();
@@ -258,6 +383,11 @@ fn policy_matrix_enforces_enforced_and_monitor_only_semantics() {
                     reason: "matrix evidence".to_owned(),
                     observation_ref: None,
                 }],
+                proposal_commitment: common::frozen_proposal(
+                    &fixture.store,
+                    operation.operation_id,
+                )
+                .proposal_commitment,
                 now: mutation_time(&fixture.story, 2),
             })
             .unwrap();
@@ -318,6 +448,8 @@ fn invalid_policy_transition_and_argument_hash_mismatch_roll_back_every_row() {
                 reason: "denied".to_owned(),
                 observation_ref: None,
             }],
+            proposal_commitment: common::frozen_proposal(&fixture.store, operation.operation_id,)
+                .proposal_commitment,
             now: mutation_time(&fixture.story, 2),
         }),
         Err(JournalError::InvalidTransition { .. })
@@ -403,6 +535,8 @@ fn a_denied_operation_does_not_finalize_a_multi_operation_story() {
                 reason: "denied".to_owned(),
                 observation_ref: None,
             }],
+            proposal_commitment: common::frozen_proposal(&fixture.store, first.operation_id)
+                .proposal_commitment,
             now: mutation_time(&fixture.story, 2),
         })
         .unwrap();
@@ -595,6 +729,8 @@ fn a_finalized_verified_story_rejects_post_verification_operations() {
                 reason: "denied".to_owned(),
                 observation_ref: None,
             }],
+            proposal_commitment: common::frozen_proposal(&fixture.store, operation.operation_id)
+                .proposal_commitment,
             now: mutation_time(&fixture.story, 2),
         })
         .unwrap();

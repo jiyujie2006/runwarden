@@ -18,6 +18,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use time::OffsetDateTime;
 
 use crate::events::{NewStoryEvent, append_event_and_frame_tx};
+use crate::operations::{FrozenProposalBinding, load_frozen_proposal_tx};
 use crate::sessions::load_session_record;
 use crate::snapshots::{load_operation_tx, load_story_evidence_tx, verify_story_evidence_tx};
 use crate::stories::{load_story_record, validate_digest, validate_nonempty};
@@ -41,6 +42,7 @@ pub struct DurableApprovalBinding {
     pub data_classification: Option<DataClass>,
     pub risk_tags: Vec<String>,
     pub policy_snapshot_hash: Sha256Digest,
+    pub proposal_commitment: Sha256Digest,
     pub maximum_consumptions: OneShotConsumption,
 }
 
@@ -50,6 +52,7 @@ impl DurableApprovalBinding {
     /// the frozen typed resource claim.
     pub fn from_operation(
         operation: &SecurityOperation,
+        frozen_proposal: &FrozenProposalBinding,
         authority: &runwarden_kernel::session::AuthoritySnapshot,
     ) -> Result<Self, JournalError> {
         let binding = Self {
@@ -65,9 +68,10 @@ impl DurableApprovalBinding {
             data_classification: resource_classification(&operation.resource_claim),
             risk_tags: resource_risk_tags(&operation.resource_claim),
             policy_snapshot_hash: operation.policy_snapshot_hash.clone(),
+            proposal_commitment: frozen_proposal.proposal_commitment.clone(),
             maximum_consumptions: OneShotConsumption::new(),
         };
-        validate_binding_context(&binding, operation, authority)?;
+        validate_binding_context(&binding, operation, authority, frozen_proposal)?;
         Ok(binding)
     }
 }
@@ -132,6 +136,21 @@ pub struct ApprovalRecordV1 {
 pub struct OperationRuntimeSnapshot {
     pub operation: SecurityOperation,
     pub policy_decision: Option<PolicyDecision>,
+    pub frozen_proposal: FrozenProposalBinding,
+}
+
+/// Exact durable state required to resume or reconcile an execution.
+///
+/// Unlike [`StateStore::execution_lease`], this snapshot supports both sides
+/// of the execution-start boundary and binds the operation, persisted policy
+/// decision, lease, and verified start evidence to one SQLite read snapshot.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExecutionRuntimeSnapshot {
+    pub operation: SecurityOperation,
+    pub policy_decision: PolicyDecision,
+    pub lease: ExecutionLease,
+    pub execution_started: bool,
+    pub frozen_proposal: FrozenProposalBinding,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -177,6 +196,8 @@ pub struct LeaseRequest {
     pub instance_token_hash: String,
     pub expected_budget_version: u64,
     pub budget_charge: BudgetCharge,
+    pub proposal_commitment: Sha256Digest,
+    pub provider_contract_hash: Sha256Digest,
     pub expires_at: OffsetDateTime,
     pub now: OffsetDateTime,
 }
@@ -198,6 +219,8 @@ pub struct ExecutionLease {
     pub argument_hash: Sha256Digest,
     pub resource_claim_hash: Sha256Digest,
     pub policy_snapshot_hash: Sha256Digest,
+    pub proposal_commitment: Sha256Digest,
+    pub provider_contract_hash: Sha256Digest,
     pub expires_at: OffsetDateTime,
 }
 
@@ -332,10 +355,16 @@ impl StateStore {
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let operation = load_operation_tx(&transaction, input.operation_id)?;
+        let frozen_proposal = load_frozen_proposal_tx(&transaction, input.operation_id)?;
         verify_story_evidence_tx(&transaction, operation.story_id)?;
         let story = load_story_record(&transaction, operation.story_id)?;
         let session = load_session_record(&transaction, operation.session_id)?;
-        validate_binding_context(&input.binding, &operation, &session.record.authority)?;
+        validate_binding_context(
+            &input.binding,
+            &operation,
+            &session.record.authority,
+            &frozen_proposal,
+        )?;
         if input.binding.operation_id != input.operation_id {
             return Err(JournalError::Integrity(
                 "approval input and binding name different operations".to_owned(),
@@ -416,11 +445,13 @@ impl StateStore {
         let stored = load_approval_by_id_tx(&transaction, approval_id)?;
         verify_story_evidence_tx(&transaction, stored.story_id)?;
         let operation = load_operation_tx(&transaction, stored.record.operation_id)?;
+        let frozen_proposal = load_frozen_proposal_tx(&transaction, operation.operation_id)?;
         let session = load_session_record(&transaction, stored.session_id)?;
         validate_binding_context(
             &stored.record.binding,
             &operation,
             &session.record.authority,
+            &frozen_proposal,
         )?;
         validate_approval_operation_state(&stored.record, &operation)?;
         transaction.commit()?;
@@ -434,6 +465,7 @@ impl StateStore {
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
         let operation = load_operation_tx(&transaction, operation_id)?;
+        let frozen_proposal = load_frozen_proposal_tx(&transaction, operation_id)?;
         verify_story_evidence_tx(&transaction, operation.story_id)?;
         let Some(stored) = load_approval_for_operation_tx(&transaction, operation_id)? else {
             transaction.commit()?;
@@ -444,6 +476,7 @@ impl StateStore {
             &stored.record.binding,
             &operation,
             &session.record.authority,
+            &frozen_proposal,
         )?;
         validate_approval_operation_state(&stored.record, &operation)?;
         transaction.commit()?;
@@ -470,6 +503,7 @@ impl StateStore {
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
         let operation = load_operation_tx(&transaction, operation_id)?;
+        let frozen_proposal = load_frozen_proposal_tx(&transaction, operation_id)?;
         let evidence = load_story_evidence_tx(&transaction, operation.story_id)?;
         evidence
             .verify_structure()
@@ -509,6 +543,79 @@ impl StateStore {
         Ok(OperationRuntimeSnapshot {
             operation,
             policy_decision: decision,
+            frozen_proposal,
+        })
+    }
+
+    /// Load the exact lease-bearing operation state used by runtime execution
+    /// recovery from one verified SQLite snapshot.
+    pub fn execution_runtime_snapshot(
+        &self,
+        operation_id: OperationId,
+    ) -> Result<ExecutionRuntimeSnapshot, JournalError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
+        let operation = load_operation_tx(&transaction, operation_id)?;
+        let frozen_proposal = load_frozen_proposal_tx(&transaction, operation_id)?;
+        if !matches!(
+            operation.state,
+            OperationState::ExecutionLeased | OperationState::Executing
+        ) {
+            return Err(JournalError::InvalidTransition {
+                entity: "operation",
+                from: enum_text(&operation.state)?,
+                to: "execution_runtime_snapshot".to_owned(),
+            });
+        }
+
+        let evidence = load_story_evidence_tx(&transaction, operation.story_id)?;
+        let policy_decision =
+            load_policy_decision(&transaction, operation_id)?.ok_or_else(|| {
+                JournalError::Integrity(
+                    "lease-bearing operation is missing its persisted policy decision".to_owned(),
+                )
+            })?;
+        let mut event_decision = None;
+        for event in evidence
+            .events
+            .iter()
+            .filter(|event| event.operation_id == Some(operation_id))
+        {
+            if let StoryEventPayload::PolicyDecision {
+                decision: observed,
+                policy_snapshot_hash,
+                ..
+            } = event.payload()
+                && (event_decision.replace(observed.clone()).is_some()
+                    || policy_snapshot_hash != &operation.policy_snapshot_hash)
+            {
+                return Err(JournalError::Integrity(
+                    "operation has duplicate or mismatched policy evidence".to_owned(),
+                ));
+            }
+        }
+        if event_decision.as_ref() != Some(&policy_decision) {
+            return Err(JournalError::Integrity(
+                "lease-bearing operation has missing or mismatched policy evidence".to_owned(),
+            ));
+        }
+
+        let lease = decode_execution_lease_tx(&transaction, &operation)?;
+        let execution_started = has_execution_started_tx(&transaction, &operation)?;
+        let state_requires_started = operation.state == OperationState::Executing;
+        if execution_started != state_requires_started {
+            return Err(JournalError::Integrity(
+                "operation state disagrees with execution-start evidence".to_owned(),
+            ));
+        }
+
+        transaction.commit()?;
+        Ok(ExecutionRuntimeSnapshot {
+            operation,
+            policy_decision,
+            lease,
+            execution_started,
+            frozen_proposal,
         })
     }
 
@@ -531,12 +638,14 @@ impl StateStore {
             });
         }
         let operation = load_operation_tx(&transaction, stored.record.operation_id)?;
+        let frozen_proposal = load_frozen_proposal_tx(&transaction, stored.record.operation_id)?;
         let story = load_story_record(&transaction, stored.story_id)?;
         let session = load_session_record(&transaction, stored.session_id)?;
         validate_binding_context(
             &stored.record.binding,
             &operation,
             &session.record.authority,
+            &frozen_proposal,
         )?;
         validate_approval_operation_state(&stored.record, &operation)?;
         require_operation_version(&operation, input.expected_operation_version)?;
@@ -650,12 +759,14 @@ impl StateStore {
             });
         }
         let operation = load_operation_tx(&transaction, stored.record.operation_id)?;
+        let frozen_proposal = load_frozen_proposal_tx(&transaction, stored.record.operation_id)?;
         let story = load_story_record(&transaction, stored.story_id)?;
         let session = load_session_record(&transaction, stored.session_id)?;
         validate_binding_context(
             &stored.record.binding,
             &operation,
             &session.record.authority,
+            &frozen_proposal,
         )?;
         validate_approval_operation_state(&stored.record, &operation)?;
         require_operation_version(&operation, input.expected_operation_version)?;
@@ -742,6 +853,15 @@ impl StateStore {
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let operation = load_operation_tx(&transaction, input.operation_id)?;
+        let frozen_proposal = load_frozen_proposal_tx(&transaction, input.operation_id)?;
+        if input.budget_charge != frozen_proposal.budget_charge
+            || input.proposal_commitment != frozen_proposal.proposal_commitment
+            || input.provider_contract_hash != frozen_proposal.provider_contract_hash
+        {
+            return Err(JournalError::Integrity(
+                "execution lease request drifted from the frozen proposal".to_owned(),
+            ));
+        }
         verify_story_evidence_tx(&transaction, operation.story_id)?;
         let story = load_story_record(&transaction, operation.story_id)?;
         let session = load_session_record(&transaction, operation.session_id)?;
@@ -815,6 +935,7 @@ impl StateStore {
                     &approval.record.binding,
                     &operation,
                     &session.record.authority,
+                    &frozen_proposal,
                 )?;
                 validate_approval_operation_state(&approval.record, &operation)?;
                 require_operation_version(&operation, input.expected_operation_version)?;
@@ -966,6 +1087,17 @@ impl StateStore {
         &self,
         lease: &ExecutionLease,
     ) -> Result<ExecutionStarted, JournalError> {
+        self.mark_execution_started_at(lease, OffsetDateTime::now_utc())
+    }
+
+    /// Cross the durable execution-start boundary using the caller's trusted
+    /// runtime clock. The timestamp is still checked against the story clock,
+    /// active session, and exact lease expiry inside one immediate transaction.
+    pub fn mark_execution_started_at(
+        &self,
+        lease: &ExecutionLease,
+        now: OffsetDateTime,
+    ) -> Result<ExecutionStarted, JournalError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let operation = load_operation_tx(&transaction, lease.operation_id)?;
@@ -983,7 +1115,6 @@ impl StateStore {
             return operation_state_conflict_tx(&transaction, &operation);
         }
         let story = load_story_record(&transaction, operation.story_id)?;
-        let now = OffsetDateTime::now_utc();
         validate_mutation_time(story.updated_at, now, "mark_execution_started")?;
         if now >= lease.expires_at {
             return Err(JournalError::InvalidTransition {
@@ -1209,6 +1340,7 @@ fn validate_binding_context(
     binding: &DurableApprovalBinding,
     operation: &SecurityOperation,
     authority: &runwarden_kernel::session::AuthoritySnapshot,
+    frozen_proposal: &FrozenProposalBinding,
 ) -> Result<(), JournalError> {
     validate_binding_shape(binding)?;
     let expected_classification = resource_classification(&operation.resource_claim);
@@ -1227,6 +1359,7 @@ fn validate_binding_context(
         || binding.risk_tags != expected_risk_tags
         || binding.policy_snapshot_hash != operation.policy_snapshot_hash
         || binding.policy_snapshot_hash.as_str() != authority.policy_snapshot_hash
+        || binding.proposal_commitment != frozen_proposal.proposal_commitment
     {
         return Err(JournalError::Integrity(
             "approval binding does not match the durable operation context".to_owned(),
@@ -2286,6 +2419,7 @@ pub(crate) fn decode_execution_lease_tx(
             to: "decode_execution_lease".to_owned(),
         });
     }
+    let frozen_proposal = load_frozen_proposal_tx(connection, operation.operation_id)?;
     let raw = raw_lease_fields_tx(connection, operation.operation_id)?;
     let (
         Some(raw_lease_id),
@@ -2340,6 +2474,7 @@ pub(crate) fn decode_execution_lease_tx(
     if reservation.state != ReservationState::Reserved
         || reservation.story_id != operation.story_id
         || reservation.session_id != operation.session_id
+        || reservation.charge != frozen_proposal.budget_charge
     {
         return Err(JournalError::Integrity(
             "operation lease has no matching active budget reservation".to_owned(),
@@ -2380,6 +2515,7 @@ pub(crate) fn decode_execution_lease_tx(
                 &approval.record.binding,
                 operation,
                 &session.record.authority,
+                &frozen_proposal,
             )?;
             let expected_state = if operation.state == OperationState::ExecutionLeased {
                 ApprovalState::Leased
@@ -2402,6 +2538,8 @@ pub(crate) fn decode_execution_lease_tx(
                 argument_hash: operation.argument_hash.clone(),
                 resource_claim_hash: operation.resource_claim.digest(),
                 policy_snapshot_hash: operation.policy_snapshot_hash.clone(),
+                proposal_commitment: frozen_proposal.proposal_commitment.clone(),
+                provider_contract_hash: frozen_proposal.provider_contract_hash.clone(),
                 expires_at,
             };
             require_exact_approval_lease(&approval, &provisional, expected_state)?;
@@ -2425,6 +2563,8 @@ pub(crate) fn decode_execution_lease_tx(
         argument_hash: operation.argument_hash.clone(),
         resource_claim_hash: operation.resource_claim.digest(),
         policy_snapshot_hash: operation.policy_snapshot_hash.clone(),
+        proposal_commitment: frozen_proposal.proposal_commitment,
+        provider_contract_hash: frozen_proposal.provider_contract_hash,
         expires_at,
     })
 }

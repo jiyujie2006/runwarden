@@ -14,7 +14,9 @@ use runwarden_kernel::story::{
 use runwarden_kernel::trace::{EventCode, Sha256Digest, StoryEvent};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
-use crate::operations::{InvocationBindingMaterial, invocation_binding_hash};
+use crate::operations::{
+    InvocationBindingMaterial, invocation_binding_hash, load_frozen_proposal_tx,
+};
 use crate::sessions::load_session_record;
 use crate::stories::load_story_record;
 use crate::{
@@ -420,6 +422,8 @@ fn verify_invocation_binding(
         persisted_string(invocation_key, "operation invocation key")?;
     let stored_hash: Sha256Digest =
         persisted_string(stored_hash, "operation invocation binding hash")?;
+    let frozen = load_frozen_proposal_tx(connection, operation_id)?;
+    let budget_charge_json = canonical_json(&frozen.budget_charge)?;
     let expected = invocation_binding_hash(InvocationBindingMaterial {
         schema_version: "1.0.0",
         story_id: &story_id,
@@ -433,6 +437,9 @@ fn verify_invocation_binding(
         safe_arguments_hash: Sha256Digest::from_bytes(raw.arguments_json.as_bytes()),
         resource_claim_hash: &raw.claim_hash,
         policy_snapshot_hash: &raw.policy_snapshot_hash,
+        proposal_commitment: frozen.proposal_commitment.as_str(),
+        provider_contract_hash: frozen.provider_contract_hash.as_str(),
+        budget_charge_hash: Sha256Digest::from_bytes(budget_charge_json.as_bytes()),
     })?;
     if stored_hash != expected {
         return Err(JournalError::Integrity(

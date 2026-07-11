@@ -92,7 +92,8 @@ not to a reusable permission. `DurableApprovalBinding` contains the story,
 session, and operation ids; actor and authz ids; provider and action; canonical
 resource-claim and complete-argument hashes; the applicable data
 classification; Rust-derived, sorted, unique risk tags; the policy snapshot
-hash; and `maximum_consumptions` fixed to one. Resource variants without a data
+hash; the frozen `proposal_commitment`; and `maximum_consumptions` fixed to
+one. Resource variants without a data
 classification, such as code execution, use `None` rather than inventing one.
 
 The binding is encoded with Canonical JSON v1 and its SHA-256 digest is stored
@@ -143,14 +144,29 @@ CAS-reserves call, file-byte, and network-byte budget against committed plus
 already-reserved usage. Overflow, exhaustion, or a concurrent budget version
 change leaves the operation, approval, and counters unchanged.
 
+Both authorization branches must repeat the exact frozen proposal commitment,
+provider-contract hash, and Rust-derived budget charge stored at operation
+creation. A smaller charge, replacement contract, or approval for another
+commitment fails before any reservation or state transition.
+
 Lease acquisition moves the operation to `ExecutionLeased`; a reviewed
 approval moves `Approved -> Leased`. This is still not permission to invoke a
-provider. `mark_execution_started` revalidates the durable lease and current
+provider. `mark_execution_started_at` revalidates the durable lease and current
 active-instance binding in a second immediate transaction, consumes a reviewed
 approval with `Leased -> Consumed`, moves the operation to `Executing`, and
 commits a `provider_execution_started` event. Only its successful return is an
 execution authorization boundary. A second start conflicts instead of
-consuming or executing twice.
+consuming or executing twice. The runtime supplies its injected trusted clock
+to this boundary; the compatibility `mark_execution_started` state API uses
+system UTC.
+
+Resume and reconciliation use the public `ExecutionRuntimeSnapshot` rather
+than combining independent reads. It contains the exact lease-bearing
+operation, persisted typed policy decision, exact `ExecutionLease`, and a
+verified `execution_started` flag from one deferred SQLite transaction. Only
+`ExecutionLeased` without a start event and `Executing` with exactly one start
+event are valid snapshots. This does not broaden `execution_lease`, which
+remains a pre-start-only compatibility query.
 
 Result persistence requires the exact lease id and owner, the committed start
 event, executing state, and expected operation version. Actual budget charge
@@ -177,8 +193,8 @@ state, binding digest, reviewer metadata, and expiry, but it is not itself an
 authorization input. Provider execution continues to consume the Rust-owned
 approval record and lease contract.
 
-The native SQLite contracts above currently exist in `runwarden-state`; they
-do not yet replace the contest edition's legacy interactive wiring.
+The native SQLite contracts above are consumed by `runwarden-runtime`; they do
+not yet replace the contest edition's legacy MCP and interactive WebUI wiring.
 `runwarden demo` and `runwarden-mcp` still exchange file-backed reviewer
 records under `.runwarden/approvals` (or `RUNWARDEN_STATE_DIR`). That legacy
 path binds session/provider/action/argument/authz/actor fields and must not be

@@ -88,6 +88,9 @@ CREATE TABLE operations (
     redacted_arguments_json TEXT NOT NULL,
     private_arguments_json BLOB NOT NULL,
     policy_snapshot_hash TEXT NOT NULL,
+    proposal_commitment TEXT NOT NULL,
+    provider_contract_hash TEXT NOT NULL,
+    proposed_budget_charge_json TEXT NOT NULL,
     policy_decision TEXT,
     policy_reason TEXT,
     state TEXT NOT NULL,
@@ -112,6 +115,14 @@ CREATE TABLE operations (
     CHECK(length(invocation_binding_hash) = 71
       AND substr(invocation_binding_hash, 1, 7) = 'sha256:'
       AND substr(invocation_binding_hash, 8) NOT GLOB '*[^0-9a-f]*'),
+    CHECK(length(proposal_commitment) = 71
+      AND substr(proposal_commitment, 1, 7) = 'sha256:'
+      AND substr(proposal_commitment, 8) NOT GLOB '*[^0-9a-f]*'),
+    CHECK(length(provider_contract_hash) = 71
+      AND substr(provider_contract_hash, 1, 7) = 'sha256:'
+      AND substr(provider_contract_hash, 8) NOT GLOB '*[^0-9a-f]*'),
+    CHECK(CASE WHEN json_valid(proposed_budget_charge_json)
+      THEN json_type(proposed_budget_charge_json) IS 'object' ELSE 0 END),
     CHECK(state IN (
       'proposed', 'policy_evaluated', 'denied', 'awaiting_approval',
       'denied_by_reviewer', 'expired', 'approved', 'observed_only',
@@ -262,7 +273,9 @@ CREATE INDEX events_story_event_idx ON events(story_id, event_type);
 CREATE INDEX approvals_state_expiry_idx ON approvals(state, expires_at);
 
 CREATE TRIGGER operations_invocation_binding_immutable
-BEFORE UPDATE OF invocation_key, invocation_binding_hash ON operations
+BEFORE UPDATE OF invocation_key, invocation_binding_hash,
+  proposal_commitment, provider_contract_hash, proposed_budget_charge_json
+ON operations
 BEGIN
   SELECT RAISE(ABORT, 'operation invocation binding is immutable');
 END;

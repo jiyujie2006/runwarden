@@ -14,9 +14,11 @@ use runwarden_kernel::session::BudgetCharge;
 use runwarden_kernel::story::OperationId;
 use runwarden_kernel::trace::Sha256Digest;
 
+use crate::executor::CleanupFileIdentity;
+
 pub use email::mailbox_view_for_test;
 pub(crate) use email::{
-    EmailReconciliation, finalize_email_cleanup, reconcile_email, send_email, verify_email,
+    EmailOperationBinding, EmailReconciliation, finalize_email_cleanup, send_email, verify_email,
 };
 pub(crate) use file::{read_file, write_file};
 pub(crate) use simulated_network::{simulate_api_request, simulate_browser_open};
@@ -40,6 +42,7 @@ pub(crate) struct ToolReceipt {
 pub(crate) struct ToolCleanup {
     pub(crate) relative_path: WorkspaceRelativePath,
     pub(crate) sha256: Sha256Digest,
+    pub(crate) file_identity: CleanupFileIdentity,
 }
 
 #[derive(Debug, Clone, PartialEq)]

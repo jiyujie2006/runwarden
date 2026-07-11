@@ -16,16 +16,19 @@ use super::{
     ensure_private_directory, one_call_charge, random_suffix, sync_directory,
     validate_regular_file,
 };
+use crate::executor::CleanupFileIdentity;
 use crate::resource_claims::canonicalize_email_recipients;
 
-const RECEIPT_SCHEMA_VERSION: &str = "1";
+const RECEIPT_SCHEMA_VERSION: &str = "2";
 const MAILBOX_READ_LIMIT: usize = 1_048_576;
+const MAX_CLEANUP_CANDIDATES: usize = 4_096;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct EmailReceiptRecord {
     schema_version: String,
     operation_id: OperationId,
+    request_binding_hash: Sha256Digest,
     argument_hash: Sha256Digest,
     recipients: Vec<String>,
     subject_hash: Sha256Digest,
@@ -37,6 +40,7 @@ struct EmailReceiptRecord {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ImmutableEmailBinding {
     operation_id: OperationId,
+    request_binding_hash: Sha256Digest,
     argument_hash: Sha256Digest,
     recipients: Vec<String>,
     subject_hash: Sha256Digest,
@@ -49,10 +53,16 @@ pub(crate) enum EmailReconciliation {
     NotFound,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct EmailOperationBinding<'a> {
+    pub(crate) operation_id: OperationId,
+    pub(crate) request_binding_hash: &'a Sha256Digest,
+    pub(crate) argument_hash: &'a Sha256Digest,
+}
+
 pub(crate) fn send_email(
     sandbox_root: &Path,
-    operation_id: OperationId,
-    argument_hash: &Sha256Digest,
+    operation: EmailOperationBinding<'_>,
     arguments: &Value,
     claim: &ResourceClaim,
     recorded_at: OffsetDateTime,
@@ -61,7 +71,13 @@ pub(crate) fn send_email(
     if max_receipt_bytes == 0 {
         return Err(ToolError::InvalidRequest);
     }
-    let binding = email_binding(operation_id, argument_hash, arguments, claim)?;
+    let binding = email_binding(
+        operation.operation_id,
+        operation.request_binding_hash,
+        operation.argument_hash,
+        arguments,
+        claim,
+    )?;
 
     let canonical_root = canonical_sandbox_root(sandbox_root)?;
     let receipts_relative = relative("mail/receipts")?;
@@ -90,6 +106,7 @@ pub(crate) fn send_email(
     let record = EmailReceiptRecord {
         schema_version: RECEIPT_SCHEMA_VERSION.to_owned(),
         operation_id: binding.operation_id,
+        request_binding_hash: binding.request_binding_hash.clone(),
         argument_hash: binding.argument_hash.clone(),
         recipients: binding.recipients.clone(),
         subject_hash: binding.subject_hash.clone(),
@@ -121,10 +138,13 @@ pub(crate) fn send_email(
     drop(temp_file);
 
     let temp_hash = Sha256Digest::from_bytes(&bytes);
-    let cleanup = ToolCleanup {
-        relative_path: temp_relative_path,
-        sha256: temp_hash.clone(),
-    };
+    let cleanup = file_identity(&temp_path)
+        .map_err(|_| ToolError::IoBeforeSideEffect)?
+        .map(|file_identity| ToolCleanup {
+            relative_path: temp_relative_path,
+            sha256: temp_hash.clone(),
+            file_identity,
+        });
     match fs::hard_link(&temp_path, &final_path) {
         Ok(()) => {
             if sync_directory(&receipts_directory).is_err()
@@ -138,7 +158,7 @@ pub(crate) fn send_email(
                 binding.operation_id,
                 final_relative,
                 &bytes,
-                Some(cleanup),
+                cleanup,
             ))
         }
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
@@ -163,7 +183,7 @@ pub(crate) fn send_email(
                 binding.operation_id,
                 final_relative,
                 &stored_bytes,
-                Some(cleanup),
+                cleanup,
             ))
         }
         Err(_) => {
@@ -175,6 +195,7 @@ pub(crate) fn send_email(
 
 fn email_binding(
     operation_id: OperationId,
+    request_binding_hash: &Sha256Digest,
     argument_hash: &Sha256Digest,
     arguments: &Value,
     claim: &ResourceClaim,
@@ -199,6 +220,7 @@ fn email_binding(
     let body = optional_string(arguments, "body")?;
     Ok(ImmutableEmailBinding {
         operation_id,
+        request_binding_hash: request_binding_hash.clone(),
         argument_hash: argument_hash.clone(),
         recipients,
         subject_hash: Sha256Digest::from_bytes(subject.as_bytes()),
@@ -206,42 +228,9 @@ fn email_binding(
     })
 }
 
-pub(crate) fn reconcile_email(
-    sandbox_root: &Path,
-    operation_id: OperationId,
-    max_receipt_bytes: usize,
-) -> Result<EmailReconciliation, ToolError> {
-    if max_receipt_bytes == 0 {
-        return Err(ToolError::LimitExceeded);
-    }
-    let canonical_root = canonical_sandbox_root(sandbox_root)?;
-    let relative_path = relative(&format!("mail/receipts/{operation_id}.json"))?;
-    let receipt_path = canonical_root.join(relative_path.as_str());
-    match fs::symlink_metadata(&receipt_path) {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return Ok(EmailReconciliation::NotFound);
-        }
-        Err(_) => return Err(ToolError::ReceiptIntegrity),
-        Ok(_) => {}
-    }
-    let (_, bytes) = read_receipt(
-        &canonical_root,
-        &receipt_path,
-        operation_id,
-        max_receipt_bytes,
-    )?;
-    Ok(EmailReconciliation::Completed(Box::new(completed_email(
-        operation_id,
-        relative_path,
-        &bytes,
-        None,
-    ))))
-}
-
 pub(crate) fn verify_email(
     sandbox_root: &Path,
-    operation_id: OperationId,
-    argument_hash: &Sha256Digest,
+    operation: EmailOperationBinding<'_>,
     arguments: &Value,
     claim: &ResourceClaim,
     max_receipt_bytes: usize,
@@ -249,8 +238,15 @@ pub(crate) fn verify_email(
     if max_receipt_bytes == 0 {
         return Err(ToolError::LimitExceeded);
     }
-    let binding = email_binding(operation_id, argument_hash, arguments, claim)?;
+    let binding = email_binding(
+        operation.operation_id,
+        operation.request_binding_hash,
+        operation.argument_hash,
+        arguments,
+        claim,
+    )?;
     let canonical_root = canonical_sandbox_root(sandbox_root)?;
+    let operation_id = operation.operation_id;
     let relative_path = relative(&format!("mail/receipts/{operation_id}.json"))?;
     let receipt_path = canonical_root.join(relative_path.as_str());
     match fs::symlink_metadata(&receipt_path) {
@@ -267,12 +263,125 @@ pub(crate) fn verify_email(
         max_receipt_bytes,
     )?;
     verify_immutable_binding(&stored, &binding)?;
+    let cleanup = recover_email_cleanup(
+        &canonical_root,
+        &receipt_path,
+        operation_id,
+        &bytes,
+        max_receipt_bytes,
+    )?;
     Ok(EmailReconciliation::Completed(Box::new(completed_email(
         operation_id,
         relative_path,
         &bytes,
-        None,
+        cleanup,
     ))))
+}
+
+fn recover_email_cleanup(
+    canonical_root: &Path,
+    receipt_path: &Path,
+    operation_id: OperationId,
+    receipt_bytes: &[u8],
+    max_receipt_bytes: usize,
+) -> Result<Option<ToolCleanup>, ToolError> {
+    let temp_directory = canonical_root.join("mail/tmp");
+    let metadata = match fs::symlink_metadata(&temp_directory) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(ToolError::ReceiptIntegrity),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(ToolError::ReceiptIntegrity);
+    }
+    let canonical_temp = temp_directory
+        .canonicalize()
+        .map_err(|_| ToolError::ReceiptIntegrity)?;
+    if canonical_temp != temp_directory || !canonical_temp.starts_with(canonical_root) {
+        return Err(ToolError::ReceiptIntegrity);
+    }
+
+    let prefix = format!("{operation_id}-");
+    let receipt_hash = Sha256Digest::from_bytes(receipt_bytes);
+    let Some(receipt_identity) =
+        file_identity(receipt_path).map_err(|_| ToolError::ReceiptIntegrity)?
+    else {
+        return Ok(None);
+    };
+    let mut selected: Option<(String, CleanupFileIdentity)> = None;
+    let mut matching_entries = 0_usize;
+    let entries = fs::read_dir(&canonical_temp).map_err(|_| ToolError::ReceiptIntegrity)?;
+    for entry in entries {
+        let entry = entry.map_err(|_| ToolError::ReceiptIntegrity)?;
+        let Ok(file_name) = entry.file_name().into_string() else {
+            continue;
+        };
+        let Some(random) = file_name
+            .strip_prefix(&prefix)
+            .and_then(|value| value.strip_suffix(".json.tmp"))
+        else {
+            continue;
+        };
+        matching_entries = matching_entries
+            .checked_add(1)
+            .ok_or(ToolError::ReceiptIntegrity)?;
+        if matching_entries > MAX_CLEANUP_CANDIDATES
+            || random.len() != 32
+            || !random
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(ToolError::ReceiptIntegrity);
+        }
+
+        let candidate_path = entry.path();
+        validate_regular_file(canonical_root, &candidate_path, true)
+            .map_err(|_| ToolError::ReceiptIntegrity)?;
+        let candidate_bytes = read_bounded(&candidate_path, max_receipt_bytes)
+            .map_err(|_| ToolError::ReceiptIntegrity)?;
+        let Some(candidate_identity) =
+            file_identity(&candidate_path).map_err(|_| ToolError::ReceiptIntegrity)?
+        else {
+            return Ok(None);
+        };
+        if Sha256Digest::from_bytes(&candidate_bytes) != receipt_hash
+            || candidate_identity != receipt_identity
+        {
+            return Err(ToolError::ReceiptIntegrity);
+        }
+        if selected
+            .as_ref()
+            .is_none_or(|(current, _)| file_name < *current)
+        {
+            selected = Some((file_name, candidate_identity));
+        }
+    }
+
+    selected
+        .map(|(file_name, file_identity)| {
+            Ok(ToolCleanup {
+                relative_path: relative(&format!("mail/tmp/{file_name}"))?,
+                sha256: receipt_hash,
+                file_identity,
+            })
+        })
+        .transpose()
+}
+
+#[cfg(unix)]
+fn file_identity(path: &Path) -> io::Result<Option<CleanupFileIdentity>> {
+    use std::os::unix::fs::MetadataExt;
+
+    let metadata = fs::metadata(path)?;
+    Ok(Some(CleanupFileIdentity {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+    }))
+}
+
+#[cfg(not(unix))]
+fn file_identity(_path: &Path) -> io::Result<Option<CleanupFileIdentity>> {
+    Ok(None)
 }
 
 pub(crate) fn finalize_email_cleanup(
@@ -280,6 +389,7 @@ pub(crate) fn finalize_email_cleanup(
     operation_id: OperationId,
     relative_path: &WorkspaceRelativePath,
     expected_hash: &Sha256Digest,
+    expected_identity: CleanupFileIdentity,
     max_receipt_bytes: usize,
 ) -> Result<(), ToolError> {
     let prefix = format!("mail/tmp/{operation_id}-");
@@ -312,6 +422,9 @@ pub(crate) fn finalize_email_cleanup(
     let receipt_bytes =
         read_bounded(&receipt_path, max_receipt_bytes).map_err(|_| ToolError::Integrity)?;
     if Sha256Digest::from_bytes(&receipt_bytes) != *expected_hash {
+        return Err(ToolError::Integrity);
+    }
+    if file_identity(&cleanup_path).map_err(|_| ToolError::Integrity)? != Some(expected_identity) {
         return Err(ToolError::Integrity);
     }
     fs::remove_file(&cleanup_path).map_err(|_| ToolError::Integrity)?;
@@ -375,6 +488,7 @@ pub fn mailbox_view_for_test(sandbox_root: &Path) -> io::Result<String> {
         }
         let view = serde_json::json!({
             "operation_id": record.operation_id,
+            "request_binding_hash": record.request_binding_hash,
             "argument_hash": record.argument_hash,
             "recipients": record.recipients,
             "subject_hash": record.subject_hash,
@@ -416,7 +530,9 @@ fn verify_immutable_binding(
     stored: &EmailReceiptRecord,
     expected: &ImmutableEmailBinding,
 ) -> Result<(), ToolError> {
-    if stored.argument_hash != expected.argument_hash {
+    if stored.request_binding_hash != expected.request_binding_hash
+        || stored.argument_hash != expected.argument_hash
+    {
         return Err(ToolError::BindingConflict);
     }
     if stored.operation_id != expected.operation_id
@@ -484,4 +600,117 @@ fn relative(value: &str) -> Result<WorkspaceRelativePath, ToolError> {
 
 fn invalid_mailbox() -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, "mailbox receipt is invalid")
+}
+
+#[cfg(test)]
+mod tests {
+    use runwarden_kernel::resource::DataClass;
+
+    use super::*;
+
+    #[test]
+    fn durable_receipt_rejects_a_different_frozen_request_binding() {
+        let sandbox = tempfile::tempdir().unwrap();
+        let operation_id = OperationId::new();
+        let arguments = serde_json::json!({
+            "to": ["reviewer@example.test"],
+            "subject": "review",
+            "body": "sensitive",
+        });
+        let argument_hash = Sha256Digest::from_bytes(&canonical_json_v1(&arguments));
+        let resource_claim = ResourceClaim::Email {
+            recipients: vec!["reviewer@example.test".to_owned()],
+            classification: DataClass::Internal,
+        };
+        let original_binding = Sha256Digest::from_bytes(b"complete request binding A");
+        send_email(
+            sandbox.path(),
+            EmailOperationBinding {
+                operation_id,
+                request_binding_hash: &original_binding,
+                argument_hash: &argument_hash,
+            },
+            &arguments,
+            &resource_claim,
+            OffsetDateTime::from_unix_timestamp(1_900_000_000).unwrap(),
+            64 * 1_024,
+        )
+        .unwrap();
+
+        let substituted_binding = Sha256Digest::from_bytes(b"complete request binding B");
+        assert_eq!(
+            verify_email(
+                sandbox.path(),
+                EmailOperationBinding {
+                    operation_id,
+                    request_binding_hash: &substituted_binding,
+                    argument_hash: &argument_hash,
+                },
+                &arguments,
+                &resource_claim,
+                64 * 1_024,
+            ),
+            Err(ToolError::BindingConflict)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn creator_bound_cleanup_handles_a_concurrent_loser_inode() {
+        let sandbox = tempfile::tempdir().unwrap();
+        let operation_id = OperationId::new();
+        let arguments = serde_json::json!({"to": ["reviewer@example.test"]});
+        let argument_hash = Sha256Digest::from_bytes(&canonical_json_v1(&arguments));
+        let request_binding = Sha256Digest::from_bytes(b"complete request binding");
+        let resource_claim = ResourceClaim::Email {
+            recipients: vec!["reviewer@example.test".to_owned()],
+            classification: DataClass::Internal,
+        };
+        send_email(
+            sandbox.path(),
+            EmailOperationBinding {
+                operation_id,
+                request_binding_hash: &request_binding,
+                argument_hash: &argument_hash,
+            },
+            &arguments,
+            &resource_claim,
+            OffsetDateTime::from_unix_timestamp(1_900_000_000).unwrap(),
+            64 * 1_024,
+        )
+        .unwrap();
+
+        let receipt_path = sandbox
+            .path()
+            .join(format!("mail/receipts/{operation_id}.json"));
+        let receipt_bytes = fs::read(&receipt_path).unwrap();
+        let loser_relative = relative(&format!(
+            "mail/tmp/{operation_id}-00000000000000000000000000000000.json.tmp"
+        ))
+        .unwrap();
+        let loser_path = sandbox.path().join(loser_relative.as_str());
+        let mut loser = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&loser_path)
+            .unwrap();
+        loser.write_all(&receipt_bytes).unwrap();
+        loser.sync_all().unwrap();
+        drop(loser);
+        let loser_identity = file_identity(&loser_path).unwrap().unwrap();
+        let receipt_hash = Sha256Digest::from_bytes(&receipt_bytes);
+
+        finalize_email_cleanup(
+            sandbox.path(),
+            operation_id,
+            &loser_relative,
+            &receipt_hash,
+            loser_identity,
+            64 * 1_024,
+        )
+        .unwrap();
+
+        assert!(!loser_path.exists());
+        assert_eq!(fs::read(receipt_path).unwrap(), receipt_bytes);
+    }
 }

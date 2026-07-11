@@ -10,7 +10,7 @@ use runwarden_kernel::operation::ProviderExecutionStatus;
 use runwarden_kernel::resource::{DataClass, FileAccess, MemoryAccess, ResourceClaim};
 use runwarden_kernel::session::BudgetCharge;
 use runwarden_kernel::story::{OperationId, SessionId, StoryId};
-use runwarden_kernel::trace::Sha256Digest;
+use runwarden_kernel::trace::{Sha256Digest, canonical_json_v1};
 use runwarden_kernel::{ProviderContract, ProviderManifest};
 use time::OffsetDateTime;
 
@@ -19,21 +19,24 @@ use crate::adapters::{
 };
 use crate::catalog::full_provider_registry;
 use crate::demo_tools::{
-    EmailReconciliation, StoreClass, ToolError, ToolExecution, ToolExecutionState,
-    ToolFailureStage, finalize_email_cleanup, read_file, read_store, reconcile_email, send_email,
-    simulate_api_request, simulate_browser_open, verify_email, write_file, write_store,
+    EmailOperationBinding, EmailReconciliation, StoreClass, ToolError, ToolExecution,
+    ToolExecutionState, ToolFailureStage, finalize_email_cleanup, read_file, read_store,
+    send_email, simulate_api_request, simulate_browser_open, verify_email, write_file, write_store,
 };
 use crate::resource_claims::{ResourceExtractionContext, ResourceExtractorRegistry};
 
 use super::{
     CleanupDisposition, CleanupError, CleanupToken, ExecutionPermit, ExecutionReceipt,
     PermitVerifier, ProviderExecutionOutcome, ProviderExecutionRequest, ProviderExecutionResult,
-    ProviderExecutor, ReconciliationResult, canonical_provider_contract_hash,
+    ProviderExecutor, ProviderReconciliationOutcome, ReconciliationResult, canonical_argument_hash,
+    canonical_provider_contract_hash,
 };
 
 const MAX_EXECUTOR_OUTPUT_BYTES: usize = 1_048_576;
 const MAX_EXECUTOR_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_OPERATION_REGISTRY_ENTRIES: usize = 4_096;
+const RECONCILIATION_BINDING_DOMAIN_V1: &[u8] =
+    b"runwarden.provider-reconciliation-binding.sha256.v1\0";
 
 #[cfg(unix)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -408,10 +411,14 @@ impl ProviderExecutor for DefaultProviderExecutor {
                 return blocked("integrity_error", "operation_binding_mismatch");
             }
             if request.provider == "external.email.send" {
+                let request_binding_hash = reconciliation_binding_hash(request);
                 return match verify_email(
                     &self.config.sandbox_root,
-                    request.operation_id,
-                    &request.argument_hash,
+                    EmailOperationBinding {
+                        operation_id: request.operation_id,
+                        request_binding_hash: &request_binding_hash,
+                        argument_hash: &request.argument_hash,
+                    },
                     &request.arguments,
                     &request.resource_claim,
                     self.config.max_output_bytes,
@@ -480,68 +487,40 @@ impl ProviderExecutor for DefaultProviderExecutor {
         outcome
     }
 
-    fn reconcile(&self, operation_id: OperationId) -> ReconciliationResult {
+    fn reconcile(&self, request: &ProviderExecutionRequest) -> ProviderReconciliationOutcome {
         if !self.config.roots_are_pinned() {
-            return ReconciliationResult::Unknown;
+            return reconciliation_unknown();
         }
-        let key = OperationKey { operation_id };
+        if !reconciliation_request_is_valid(&self.config, &self.catalog, request) {
+            return reconciliation_unknown();
+        }
+
+        let key = OperationKey {
+            operation_id: request.operation_id,
+        };
+        let expected_binding = OperationBinding::from_request(request, &self.config);
         let cached = match operation_registry().lock() {
             Ok(registry) => registry
                 .entries
                 .get(&key)
-                .map(|cached| (cached.binding.provider.clone(), cached.result.clone())),
-            Err(_) => return ReconciliationResult::Unknown,
+                .map(|cached| (cached.binding.clone(), cached.result.clone())),
+            Err(_) => return reconciliation_unknown(),
         };
 
-        if let Some((provider, cached_result)) = cached {
-            if provider == "external.email.send" {
-                return match reconcile_email(
-                    &self.config.sandbox_root,
-                    operation_id,
-                    self.config.max_output_bytes,
-                ) {
-                    Ok(EmailReconciliation::Completed(execution)) => {
-                        match reconciled_email_result(operation_id, *execution) {
-                            Some(result)
-                                if result.receipt() == cached_result.receipt()
-                                    && result.output_hash() == cached_result.output_hash() =>
-                            {
-                                ReconciliationResult::Completed(Box::new(result))
-                            }
-                            _ => ReconciliationResult::Unknown,
-                        }
-                    }
-                    Ok(EmailReconciliation::NotFound) | Err(_) => ReconciliationResult::Unknown,
-                };
-            }
-            return match cached_result.execution_status() {
-                ProviderExecutionStatus::Completed => {
-                    ReconciliationResult::Completed(Box::new(cached_result))
-                }
-                ProviderExecutionStatus::NotExecuted
-                | ProviderExecutionStatus::FailedBeforeSideEffect => {
-                    ReconciliationResult::NotExecuted
-                }
-                ProviderExecutionStatus::Running
-                | ProviderExecutionStatus::ExecutedWithError
-                | ProviderExecutionStatus::OutcomeUnknown
-                | ProviderExecutionStatus::Simulated => ReconciliationResult::Unknown,
-            };
+        let cached_result = match cached {
+            Some((binding, _)) if binding != expected_binding => return reconciliation_unknown(),
+            Some((_, result)) => Some(result),
+            None => None,
+        };
+
+        if request.provider == "external.email.send" {
+            return reconcile_bound_email(&self.config, request, cached_result.as_ref());
         }
 
-        match reconcile_email(
-            &self.config.sandbox_root,
-            operation_id,
-            self.config.max_output_bytes,
-        ) {
-            Ok(EmailReconciliation::Completed(execution)) => {
-                reconciled_email_result(operation_id, *execution)
-                    .map(|result| ReconciliationResult::Completed(Box::new(result)))
-                    .unwrap_or(ReconciliationResult::Unknown)
-            }
-            Ok(EmailReconciliation::NotFound) => ReconciliationResult::NotExecuted,
-            Err(_) => ReconciliationResult::Unknown,
-        }
+        // Process memory is not durable proof that an arbitrary provider did
+        // or did not perform an effect. Only a provider-specific, read-only
+        // evidence verifier may produce a recovery result.
+        reconciliation_unknown()
     }
 
     fn finalize_cleanup(
@@ -562,6 +541,7 @@ impl ProviderExecutor for DefaultProviderExecutor {
             token.provider().to_owned(),
             token.relative_path().clone(),
             token.sha256().clone(),
+            token.file_identity(),
         );
         if expected.id() != token.id() {
             return Err(CleanupError::UnknownToken);
@@ -574,11 +554,102 @@ impl ProviderExecutor for DefaultProviderExecutor {
             token.operation_id(),
             token.relative_path(),
             token.sha256(),
+            token.file_identity(),
             self.config.max_output_bytes,
         )
         .map_err(|error| CleanupError::Failed {
             reason_code: error.reason_code().to_owned(),
         })
+    }
+}
+
+fn reconciliation_request_is_valid(
+    config: &ExecutorConfig,
+    catalog: &ProviderRegistry,
+    request: &ProviderExecutionRequest,
+) -> bool {
+    let Some(provider) = catalog.get(&request.provider) else {
+        return false;
+    };
+    if provider.id != request.provider
+        || !canonical_provider_contract_hash(provider)
+            .is_ok_and(|hash| hash == request.provider_contract_hash)
+        || canonical_argument_hash(&request.arguments) != request.argument_hash
+        || request.resource_claim.digest() != request.resource_claim_hash
+        || matches!(request.resource_claim, ResourceClaim::OpaqueLegacy { .. })
+        || request.budget_charge.calls != 1
+    {
+        return false;
+    }
+    let Ok(expected_family) = expected_claim_family(&request.provider, &request.action) else {
+        return false;
+    };
+    expected_family.matches(&request.resource_claim)
+        && claim_matches_arguments(config, provider, request)
+}
+
+fn reconciliation_binding_hash(request: &ProviderExecutionRequest) -> Sha256Digest {
+    let binding = serde_json::json!({
+        "operation_id": request.operation_id,
+        "story_id": request.story_id,
+        "session_id": request.session_id,
+        "provider": request.provider,
+        "action": request.action,
+        "argument_hash": request.argument_hash,
+        "resource_claim_hash": request.resource_claim_hash,
+        "policy_snapshot_hash": request.policy_snapshot_hash,
+        "provider_contract_hash": request.provider_contract_hash,
+        "budget_charge": request.budget_charge,
+    });
+    let mut bytes = RECONCILIATION_BINDING_DOMAIN_V1.to_vec();
+    bytes.extend_from_slice(&canonical_json_v1(&binding));
+    Sha256Digest::from_bytes(&bytes)
+}
+
+fn reconcile_bound_email(
+    config: &ExecutorConfig,
+    request: &ProviderExecutionRequest,
+    cached_result: Option<&ProviderExecutionResult>,
+) -> ProviderReconciliationOutcome {
+    let request_binding_hash = reconciliation_binding_hash(request);
+    match verify_email(
+        &config.sandbox_root,
+        EmailOperationBinding {
+            operation_id: request.operation_id,
+            request_binding_hash: &request_binding_hash,
+            argument_hash: &request.argument_hash,
+        },
+        &request.arguments,
+        &request.resource_claim,
+        config.max_output_bytes,
+    ) {
+        Ok(EmailReconciliation::Completed(execution)) => {
+            let ProviderExecutionOutcome { result, cleanup } =
+                outcome_from_tool_execution(request, *execution);
+            if result.execution_status() != ProviderExecutionStatus::Completed
+                || cached_result.is_some_and(|cached| cached != &result)
+            {
+                return reconciliation_unknown();
+            }
+            ProviderReconciliationOutcome {
+                result: ReconciliationResult::Completed(Box::new(result)),
+                cleanup,
+            }
+        }
+        Ok(EmailReconciliation::NotFound) if cached_result.is_none() => {
+            ProviderReconciliationOutcome {
+                result: ReconciliationResult::NotExecuted,
+                cleanup: None,
+            }
+        }
+        Ok(EmailReconciliation::NotFound) | Err(_) => reconciliation_unknown(),
+    }
+}
+
+fn reconciliation_unknown() -> ProviderReconciliationOutcome {
+    ProviderReconciliationOutcome {
+        result: ReconciliationResult::Unknown,
+        cleanup: None,
     }
 }
 
@@ -700,8 +771,11 @@ fn dispatch_tool(
         ),
         "external.email.send" => send_email(
             &config.sandbox_root,
-            request.operation_id,
-            &request.argument_hash,
+            EmailOperationBinding {
+                operation_id: request.operation_id,
+                request_binding_hash: &reconciliation_binding_hash(request),
+                argument_hash: &request.argument_hash,
+            },
             &request.arguments,
             &request.resource_claim,
             now,
@@ -741,30 +815,6 @@ fn dispatch_tool(
         ),
         _ => Err(ToolError::InvalidRequest),
     }
-}
-
-fn reconciled_email_result(
-    operation_id: OperationId,
-    execution: ToolExecution,
-) -> Option<ProviderExecutionResult> {
-    if execution.state != ToolExecutionState::Completed || execution.cleanup.is_some() {
-        return None;
-    }
-    let receipt = execution.receipt?;
-    if receipt.operation_id != operation_id || receipt.kind != "email_receipt" {
-        return None;
-    }
-    ProviderExecutionResult::completed(
-        execution.output,
-        Some(ExecutionReceipt {
-            operation_id: receipt.operation_id,
-            kind: receipt.kind,
-            relative_path: receipt.relative_path,
-            sha256: receipt.sha256,
-        }),
-        execution.actual_budget_charge,
-    )
-    .ok()
 }
 
 fn outcome_from_tool_execution(
@@ -830,6 +880,7 @@ fn outcome_from_tool_execution(
             request.provider.clone(),
             cleanup.relative_path,
             cleanup.sha256,
+            cleanup.file_identity,
         )
     });
     ProviderExecutionOutcome { result, cleanup }

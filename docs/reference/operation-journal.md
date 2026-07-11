@@ -25,7 +25,19 @@ directory, database, WAL, and shared-memory sidecars must remain owner-only;
 symlinks and unsupported permission models fail closed. SQLite integers that
 represent Rust `u64` values use checked conversions.
 
+The contract-freeze build deliberately does not guess proposal bindings for an
+older development database that lacks these fields: such a shape fails strict
+schema validation and must be archived and reinitialized. Provider contracts
+and proposed charges cannot be reconstructed safely inside the state crate,
+so an in-place permissive backfill would weaken old approvals.
+
 Full provider arguments live only in `operations.private_arguments_json`.
+The same row freezes the provider-contract hash, conservative `BudgetCharge`,
+and their domain-separated proposal commitment. Those fields are immutable,
+are included in the invocation binding, and are recomputed by trusted
+snapshots. Policy, approval, lease, request reconstruction, and permit issuance
+must all refer to that exact proposal, so an upgrade cannot reinterpret an old
+allow or approval.
 Snapshots, approvals, events, frames, recovery candidates, and JSONL export use
 typed redacted views or hashes. Recovery errors and reason codes must not carry
 raw provider exceptions or private input.
@@ -72,15 +84,64 @@ moves the operation to `Executing`, consumes any reviewed approval, and commits
 `provider_execution_started` with its replay frame. Only that successful return
 authorizes the provider adapter to proceed.
 
+The runtime calls the timestamped start form with its injected trusted clock;
+the state transaction checks that time against the story clock, active session,
+and exact lease expiry. The compatibility state entry point uses system UTC.
+
+Runtime resume and reconciliation read `ExecutionLeased` and `Executing`
+through `StateStore::execution_runtime_snapshot`. One deferred SQLite snapshot
+verifies the complete story evidence, exact typed policy decision, durable
+lease (including approval and budget-reservation binding), and the unique
+execution-start event. `ExecutionLeased` must have no start event and
+`Executing` must have exactly one; any other state or torn relationship fails
+closed. The older `execution_lease` query deliberately keeps its pre-start-only
+semantics and still returns a lease only for `ExecutionLeased`.
+
 The active-instance check protects lease acquisition and start. Once start is
 durable, session or process loss must not prevent truthful result persistence
 or conservative reconciliation. Result recording therefore requires the exact
 lease identity and version but does not require the old process to remain
 active.
 
+`runwarden-runtime` drives this state machine without trusting a browser or
+agent transition request. Approval waiting is bounded by a monotonic wall-time
+deadline while durable expiry is judged by the injected trusted clock. Pending
+rows are polled without creating another operation; at the exact expiry the
+runtime performs the approval/operation versioned expiry CAS. Reviewer denial,
+expiry, and timeout all return the same operation id without an executor call.
+
+Before leasing or resuming, the runtime reloads private arguments and
+authoritatively re-extracts the typed claim, safe projection, canonical
+argument hash, provider contract hash, policy snapshot, and conservative
+budget charge. Every value must equal the frozen journal operation. A live
+pre-start lease is reusable only by its exact process owner; a foreign owner
+conflicts, and an expired unstarted lease is version-released before any new
+reservation. Only persisted `Allowed` in enforced mode or the exact approved
+record can acquire a lease. Monitor-only operations never reach this path.
+
+After the durable start CAS, provider results are validated against the lease
+reservation and mapped conservatively: completed results become `Completed`;
+proven pre-effect failures become `Failed`; executed errors remain executed
+failures; running, simulated, invalid, or uncertain results become
+`OutcomeUnknown`. If the result write fails, the runtime attempts the exact
+lease/version unknown-outcome CAS and always returns a post-execution error,
+never an unverified success response. Cleanup is committed only after a
+terminal journal state; otherwise its opaque token is retained for bound
+reconciliation. A cleanup failure after a terminal commit is surfaced as the
+structured `CleanupAfterCommit` runtime alert and never rewrites the truthful
+operation result. If a result commit response is lost while cleanup also
+fails, `JournalAndCleanupAfterExecution` reports both failures without
+overwriting the durable terminal result.
+
 ## Crash recovery
 
 Recovery never calls or retries a provider.
+
+Runtime reconciliation is allowed only for an expired `Executing` snapshot.
+It rebuilds the exact frozen request and passes it to the executor's read-only
+evidence reconciler. Live executions remain `Executing`; terminal operations
+are returned without a second operation, approval, lease, permit, or provider
+call.
 
 - An expired `ExecutionLeased` operation with no start event may be released by
   exact operation-version and lease-id CAS. Its reservation becomes

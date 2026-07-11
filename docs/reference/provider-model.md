@@ -46,6 +46,14 @@ bounded local backing files consume the file-byte reservation. API and browser
 remain typed simulations and never open a socket. Review-blocked and denied
 operations always remain pre-effect.
 
+Crash reconciliation is request-bound and read-only. The runtime must supply
+the complete frozen provider request, not only an operation id. The executor
+returns `Completed` only from provider-specific verified evidence; exact email
+receipt absence may produce `NotExecuted`, while providers without durable
+evidence produce `Unknown`. Reconciliation never reruns a filesystem, store,
+email, API, browser, process, or network action. A verified email receipt may
+also restore an opaque cleanup token for its exact temporary hard link.
+
 At trusted executor construction time, an operator may offer an exact
 catalogued external MCP manifest to the consuming registration API.
 Registration is not agent-controlled and cannot add a provider: the complete

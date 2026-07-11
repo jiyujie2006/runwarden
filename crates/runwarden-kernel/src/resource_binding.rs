@@ -200,13 +200,34 @@ pub fn resource_proposal_commitment(
     claim: &ResourceClaim,
     budget_charge: &BudgetCharge,
 ) -> Sha256Digest {
-    let material = ResourceProposalMaterial {
-        provider_contract_hash: canonical_provider_contract_hash(provider),
-        provider: provider.id.as_str(),
+    resource_proposal_commitment_from_hashes(
+        canonical_provider_contract_hash(provider),
+        provider.id.as_str(),
         action,
-        argument_hash: Sha256Digest::from_bytes(&canonical_json_v1(arguments)),
-        resource_claim_hash: claim.digest(),
-        budget_charge: *budget_charge,
+        Sha256Digest::from_bytes(&canonical_json_v1(arguments)),
+        claim.digest(),
+        *budget_charge,
+    )
+}
+
+/// Reconstruct the proposal commitment from already-validated durable
+/// components. This lets the journal detect contract or budget drift without
+/// retaining raw arguments or a second provider catalog.
+pub fn resource_proposal_commitment_from_hashes(
+    provider_contract_hash: Sha256Digest,
+    provider: &str,
+    action: &str,
+    argument_hash: Sha256Digest,
+    resource_claim_hash: Sha256Digest,
+    budget_charge: BudgetCharge,
+) -> Sha256Digest {
+    let material = ResourceProposalMaterial {
+        provider_contract_hash,
+        provider,
+        action,
+        argument_hash,
+        resource_claim_hash,
+        budget_charge,
     };
     let value = serde_json::to_value(material).expect("resource proposal material serializes");
     let encoded = canonical_json_v1(&value);

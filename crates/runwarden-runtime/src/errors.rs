@@ -16,6 +16,19 @@ pub enum RuntimeError {
         operation_id: OperationId,
         reason: String,
     },
+    #[error("provider result committed for {operation_id}, but cleanup failed: {reason}")]
+    CleanupAfterCommit {
+        operation_id: OperationId,
+        reason: String,
+    },
+    #[error(
+        "journal response and cleanup both failed after execution for {operation_id}: {journal_reason}; cleanup: {cleanup_reason}"
+    )]
+    JournalAndCleanupAfterExecution {
+        operation_id: OperationId,
+        journal_reason: String,
+        cleanup_reason: String,
+    },
     #[error("approval was denied for {operation_id}: {reason}")]
     ApprovalDenied {
         operation_id: OperationId,

@@ -56,7 +56,21 @@ fn policy_operation(
     decision: PolicyDecision,
     create_second: i64,
 ) -> SecurityOperation {
+    policy_operation_with_charge(fixture, suffix, decision, create_second, charge(1))
+}
+
+fn policy_operation_with_charge(
+    fixture: &JournalFixture,
+    suffix: u8,
+    decision: PolicyDecision,
+    create_second: i64,
+    budget_charge: BudgetCharge,
+) -> SecurityOperation {
     let mut input = fixture.operation(suffix, "send");
+    let frozen = common::fixture_frozen_proposal_with_budget("send", budget_charge);
+    input.proposal_commitment = frozen.proposal_commitment;
+    input.provider_contract_hash = frozen.provider_contract_hash;
+    input.budget_charge = frozen.budget_charge;
     input.now = mutation_time(&fixture.story, create_second);
     let operation = fixture.store.create_operation(input).unwrap().operation;
     let (next_state, status) = match decision {
@@ -87,6 +101,8 @@ fn policy_operation(
                 reason: "durable security decision".to_owned(),
                 observation_ref: None,
             }],
+            proposal_commitment: common::frozen_proposal(&fixture.store, operation.operation_id)
+                .proposal_commitment,
             now: mutation_time(&fixture.story, create_second + 1),
         })
         .unwrap()
@@ -109,6 +125,10 @@ fn direct_request(
         instance_token_hash: token_hash(),
         expected_budget_version,
         budget_charge,
+        proposal_commitment: common::frozen_proposal(&fixture.store, operation_id)
+            .proposal_commitment,
+        provider_contract_hash: common::frozen_proposal(&fixture.store, operation_id)
+            .provider_contract_hash,
         expires_at: mutation_time(&fixture.story, 120),
         now: mutation_time(&fixture.story, 10),
     }
@@ -131,6 +151,8 @@ fn approval_binding(
         data_classification: Some(DataClass::Internal),
         risk_tags: vec!["email_send".to_owned(), "network_egress".to_owned()],
         policy_snapshot_hash: operation.policy_snapshot_hash.clone(),
+        proposal_commitment: common::frozen_proposal(&fixture.store, operation.operation_id)
+            .proposal_commitment,
         maximum_consumptions: OneShotConsumption::new(),
     }
 }
@@ -183,6 +205,10 @@ fn reviewed_request(
         instance_token_hash: token_hash(),
         expected_budget_version: 0,
         budget_charge: charge(1),
+        proposal_commitment: common::frozen_proposal(&fixture.store, operation_id)
+            .proposal_commitment,
+        provider_contract_hash: common::frozen_proposal(&fixture.store, operation_id)
+            .provider_contract_hash,
         expires_at: mutation_time(&fixture.story, 120),
         now: mutation_time(&fixture.story, 10),
     }
@@ -322,6 +348,57 @@ fn acquisition_requires_exact_active_context_and_rolls_back_atomically() {
 }
 
 #[test]
+fn lease_rejects_contract_commitment_and_budget_drift_atomically() {
+    let fixture = JournalFixture::new(EnforcementMode::Enforced);
+    let operation = policy_operation(&fixture, 111, PolicyDecision::Allowed, 1);
+    activate(&fixture);
+
+    let mut changed_contract = direct_request(
+        &fixture,
+        operation.operation_id,
+        ExecutionLeaseId::new(),
+        0,
+        charge(1),
+    );
+    changed_contract.provider_contract_hash = Sha256Digest::from_bytes(b"changed-contract");
+    assert!(matches!(
+        fixture.store.acquire_execution_lease(changed_contract),
+        Err(JournalError::Integrity(_))
+    ));
+
+    let mut changed_commitment = direct_request(
+        &fixture,
+        operation.operation_id,
+        ExecutionLeaseId::new(),
+        0,
+        charge(1),
+    );
+    changed_commitment.proposal_commitment = Sha256Digest::from_bytes(b"changed-proposal");
+    assert!(matches!(
+        fixture.store.acquire_execution_lease(changed_commitment),
+        Err(JournalError::Integrity(_))
+    ));
+
+    let changed_budget = direct_request(
+        &fixture,
+        operation.operation_id,
+        ExecutionLeaseId::new(),
+        0,
+        charge(0),
+    );
+    assert!(matches!(
+        fixture.store.acquire_execution_lease(changed_budget),
+        Err(JournalError::Integrity(_))
+    ));
+    assert_unleased(
+        &fixture,
+        operation.operation_id,
+        OperationState::PolicyEvaluated,
+        2,
+    );
+}
+
+#[test]
 fn monitor_only_story_cannot_acquire_an_execution_lease() {
     let fixture = JournalFixture::new(EnforcementMode::MonitorOnly);
     let operation = policy_operation(&fixture, 102, PolicyDecision::Allowed, 1);
@@ -404,11 +481,102 @@ fn expired_lease_cannot_cross_the_execution_start_boundary() {
 }
 
 #[test]
+fn execution_runtime_snapshot_is_exact_before_and_after_start() {
+    let fixture = JournalFixture::new(EnforcementMode::Enforced);
+    let operation = policy_operation(&fixture, 109, PolicyDecision::Allowed, 1);
+    activate(&fixture);
+    let lease = fixture
+        .store
+        .acquire_execution_lease(direct_request(
+            &fixture,
+            operation.operation_id,
+            ExecutionLeaseId::new(),
+            0,
+            charge(1),
+        ))
+        .unwrap();
+
+    let leased = fixture
+        .store
+        .execution_runtime_snapshot(operation.operation_id)
+        .unwrap();
+    assert_eq!(leased.operation.state, OperationState::ExecutionLeased);
+    assert_eq!(leased.policy_decision, PolicyDecision::Allowed);
+    assert_eq!(leased.lease, lease);
+    assert!(!leased.execution_started);
+
+    let started = fixture.store.mark_execution_started(&lease).unwrap();
+    let executing = fixture
+        .store
+        .execution_runtime_snapshot(operation.operation_id)
+        .unwrap();
+    assert_eq!(executing.operation.state, OperationState::Executing);
+    assert_eq!(executing.operation.version, started.operation_version);
+    assert_eq!(executing.policy_decision, PolicyDecision::Allowed);
+    assert_eq!(executing.lease, lease);
+    assert!(executing.execution_started);
+}
+
+#[test]
+fn execution_runtime_snapshot_rejects_an_operation_without_a_lease() {
+    let fixture = JournalFixture::new(EnforcementMode::Enforced);
+    let operation = policy_operation(&fixture, 110, PolicyDecision::Allowed, 1);
+
+    assert!(matches!(
+        fixture
+            .store
+            .execution_runtime_snapshot(operation.operation_id),
+        Err(JournalError::InvalidTransition {
+            entity: "operation",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn execution_runtime_snapshot_rejects_torn_state_and_start_evidence() {
+    let fixture = JournalFixture::new(EnforcementMode::Enforced);
+    let operation = policy_operation(&fixture, 111, PolicyDecision::Allowed, 1);
+    activate(&fixture);
+    fixture
+        .store
+        .acquire_execution_lease(direct_request(
+            &fixture,
+            operation.operation_id,
+            ExecutionLeaseId::new(),
+            0,
+            charge(1),
+        ))
+        .unwrap();
+
+    let connection = Connection::open(fixture.state_dir.join("runwarden.db")).unwrap();
+    connection
+        .execute(
+            "UPDATE operations SET state = 'executing' WHERE operation_id = ?1",
+            params![operation.operation_id.to_string()],
+        )
+        .unwrap();
+
+    assert!(matches!(
+        fixture
+            .store
+            .execution_runtime_snapshot(operation.operation_id),
+        Err(JournalError::Integrity(_))
+    ));
+}
+
+#[test]
 fn reviewed_lease_rejects_binding_hash_tamper_without_partial_transition() {
     let fixture = JournalFixture::new(EnforcementMode::Enforced);
     let operation = policy_operation(&fixture, 103, PolicyDecision::RequiresReview, 1);
     let approval = approve_operation(&fixture, &operation);
     activate(&fixture);
+    let request = reviewed_request(
+        &fixture,
+        operation.operation_id,
+        approval.approval_id,
+        ExecutionLeaseId::new(),
+    );
 
     let connection = Connection::open(fixture.state_dir.join("runwarden.db")).unwrap();
     connection
@@ -420,12 +588,7 @@ fn reviewed_lease_rejects_binding_hash_tamper_without_partial_transition() {
             ],
         )
         .unwrap();
-    let error = fixture.store.acquire_execution_lease(reviewed_request(
-        &fixture,
-        operation.operation_id,
-        approval.approval_id,
-        ExecutionLeaseId::new(),
-    ));
+    let error = fixture.store.acquire_execution_lease(request);
     assert!(matches!(error, Err(JournalError::Integrity(_))));
 
     let (operation_state, operation_version, operation_lease): (String, i64, Option<String>) =
@@ -628,7 +791,8 @@ fn execution_result_identity_and_matrix_failures_are_atomic() {
 #[test]
 fn pre_side_effect_failure_releases_the_unused_reservation() {
     let fixture = JournalFixture::new(EnforcementMode::Enforced);
-    let operation = policy_operation(&fixture, 107, PolicyDecision::Allowed, 1);
+    let operation =
+        policy_operation_with_charge(&fixture, 107, PolicyDecision::Allowed, 1, charge(3));
     activate(&fixture);
     let lease = fixture
         .store

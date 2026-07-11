@@ -805,7 +805,7 @@ fn default_executor_rejects_tampered_permits_before_any_dispatch() {
         "permit validation must precede provider dispatch"
     );
     assert!(matches!(
-        executor.reconcile(request.operation_id),
+        executor.reconcile(&request).result,
         ReconciliationResult::NotExecuted
     ));
 
@@ -906,7 +906,7 @@ fn default_executor_dispatches_permitted_email_through_the_private_tool() {
         "the private email implementation must persist reconciliation material"
     );
     assert!(matches!(
-        executor.reconcile(request.operation_id),
+        executor.reconcile(&request).result,
         ReconciliationResult::Completed(_)
     ));
 }

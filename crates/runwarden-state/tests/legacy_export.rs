@@ -30,6 +30,8 @@ fn export_fixture() -> JournalFixture {
                 reason: "safe export path".to_owned(),
                 observation_ref: None,
             }],
+            proposal_commitment: common::frozen_proposal(&fixture.store, operation.operation_id)
+                .proposal_commitment,
             now: mutation_time(&fixture.story, 2),
         })
         .unwrap();

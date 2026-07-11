@@ -5,8 +5,9 @@ use std::thread;
 use std::time::Duration as StdDuration;
 
 use runwarden_kernel::KernelProvider;
+use runwarden_kernel::artifact::WorkspaceRelativePath;
 use runwarden_kernel::operation::{ProviderExecutionStatus, SafeProviderOutput, SideEffectState};
-use runwarden_kernel::resource::{DataClass, ResourceClaim};
+use runwarden_kernel::resource::{DataClass, FileAccess, ResourceClaim};
 use runwarden_kernel::session::BudgetCharge;
 use runwarden_kernel::story::{ExecutionLeaseId, OperationId, SessionId, StoryId};
 use runwarden_kernel::trace::Sha256Digest;
@@ -65,6 +66,41 @@ fn email_request(operation_id: OperationId, arguments: Value) -> ProviderExecuti
             calls: 1,
             file_bytes: 0,
             network_bytes: 256 * 1_024,
+        },
+    }
+}
+
+fn file_write_request(operation_id: OperationId) -> ProviderExecutionRequest {
+    let provider = full_provider_registry()
+        .get("external.mcp.filesystem.write_file")
+        .expect("filesystem provider is registered")
+        .clone();
+    let arguments = json!({
+        "path": "reconcile-must-not-write.txt",
+        "content": "must never be written by reconciliation",
+    });
+    let resource_claim = ResourceClaim::File {
+        root: "contest-workspace".to_owned(),
+        path: WorkspaceRelativePath::try_from("reconcile-must-not-write.txt".to_owned()).unwrap(),
+        access: FileAccess::Write,
+        classification: DataClass::Internal,
+    };
+    ProviderExecutionRequest {
+        operation_id,
+        story_id: StoryId::new(),
+        session_id: SessionId::new(),
+        provider: provider.id.clone(),
+        action: "write_file".to_owned(),
+        argument_hash: canonical_argument_hash(&arguments),
+        arguments,
+        resource_claim_hash: resource_claim.digest(),
+        resource_claim,
+        policy_snapshot_hash: Sha256Digest::from_bytes(b"file-reconciliation-policy"),
+        provider_contract_hash: canonical_provider_contract_hash(&provider).unwrap(),
+        budget_charge: BudgetCharge {
+            calls: 1,
+            file_bytes: 64 * 1_024,
+            network_bytes: 0,
         },
     }
 }
@@ -422,7 +458,7 @@ fn committed_cleanup_removes_only_the_hash_matched_temp_and_preserves_receipt() 
 
     assert!(temp_receipt_paths(&harness.sandbox).is_empty());
     assert_eq!(receipt_paths(&harness.sandbox).len(), 1);
-    let reconciled = match harness.executor.reconcile(request.operation_id) {
+    let reconciled = match harness.executor.reconcile(&request).result {
         ReconciliationResult::Completed(result) => result,
         ReconciliationResult::NotExecuted => panic!("committed email receipt disappeared"),
         ReconciliationResult::Unknown => panic!("committed email receipt became unverifiable"),
@@ -441,13 +477,13 @@ fn cleanup_refuses_a_replaced_temp_file_and_never_deletes_the_receipt() {
     let receipt_before = fs::read(&receipt_path).unwrap();
     let temp_path = temp_receipt_paths(&harness.sandbox).pop().unwrap();
     fs::remove_file(&temp_path).unwrap();
-    fs::write(&temp_path, b"replaced cleanup target").unwrap();
+    fs::write(&temp_path, &receipt_before).unwrap();
     let cleanup = outcome.cleanup.take().unwrap();
 
     let error = harness
         .executor
         .finalize_cleanup(cleanup, CleanupDisposition::ResultCommitted)
-        .expect_err("cleanup hash mismatch fails closed");
+        .expect_err("same-content replacement is not the authorized hard link");
     assert!(matches!(error, CleanupError::Failed { .. }));
     assert!(temp_path.exists());
     assert_eq!(fs::read(receipt_path).unwrap(), receipt_before);
@@ -476,7 +512,7 @@ fn cleanup_retains_the_temp_if_the_durable_receipt_has_disappeared() {
         "cleanup deleted the last receipt link after the durable receipt disappeared"
     );
     assert!(matches!(
-        harness.executor.reconcile(request.operation_id),
+        harness.executor.reconcile(&request).result,
         ReconciliationResult::Unknown
     ));
 }
@@ -490,7 +526,7 @@ fn reconcile_distinguishes_valid_missing_and_tampered_email_receipts() {
     assert_email_completed(&executed, request.budget_charge);
     let expected_receipt = executed.result.receipt().cloned().unwrap();
 
-    let reconciled = match harness.executor.reconcile(request.operation_id) {
+    let reconciled = match harness.executor.reconcile(&request).result {
         ReconciliationResult::Completed(result) => result,
         ReconciliationResult::NotExecuted => panic!("valid receipt must reconcile as completed"),
         ReconciliationResult::Unknown => panic!("valid receipt must remain verifiable"),
@@ -500,15 +536,108 @@ fn reconcile_distinguishes_valid_missing_and_tampered_email_receipts() {
         reconciled.execution_status(),
         ProviderExecutionStatus::Completed
     );
+    let missing = email_request(OperationId::new(), email_arguments(SUBJECT, BODY));
     assert!(matches!(
-        harness.executor.reconcile(OperationId::new()),
+        harness.executor.reconcile(&missing).result,
         ReconciliationResult::NotExecuted
     ));
 
     let receipt_path = receipt_paths(&harness.sandbox).pop().unwrap();
     fs::write(receipt_path, b"not a receipt").unwrap();
     assert!(matches!(
-        harness.executor.reconcile(request.operation_id),
+        harness.executor.reconcile(&request).result,
         ReconciliationResult::Unknown
     ));
+}
+
+#[test]
+fn reconciliation_uses_the_frozen_email_binding_and_recovers_cleanup() {
+    let harness = Harness::new();
+    let request = email_request(OperationId::new(), email_arguments(SUBJECT, BODY));
+    let permit = seal(&harness.issuer, &request);
+    let executed = harness.executor.execute(&permit, &request, fixed_now());
+    assert_email_completed(&executed, request.budget_charge);
+    let expected_receipt = executed.result.receipt().cloned().unwrap();
+    drop(executed.cleanup);
+
+    let receipt_path = receipt_paths(&harness.sandbox).pop().unwrap();
+    let receipt_before = fs::read(&receipt_path).unwrap();
+    let changed = ProviderExecutionRequest {
+        arguments: email_arguments(SUBJECT, "substituted recovery body"),
+        ..request.clone()
+    };
+    let changed = ProviderExecutionRequest {
+        argument_hash: canonical_argument_hash(&changed.arguments),
+        ..changed
+    };
+    let rejected = harness.executor.reconcile(&changed);
+    assert!(matches!(rejected.result, ReconciliationResult::Unknown));
+    assert!(rejected.cleanup.is_none());
+    assert_eq!(fs::read(&receipt_path).unwrap(), receipt_before);
+    assert_eq!(temp_receipt_paths(&harness.sandbox).len(), 1);
+
+    let mut recovered = harness.executor.reconcile(&request);
+    let result = match recovered.result {
+        ReconciliationResult::Completed(result) => result,
+        ReconciliationResult::NotExecuted => panic!("verified receipt was lost"),
+        ReconciliationResult::Unknown => panic!("verified receipt did not reconcile"),
+    };
+    assert_eq!(result.receipt(), Some(&expected_receipt));
+    let cleanup = recovered
+        .cleanup
+        .take()
+        .expect("reconciliation rebuilds the opaque cleanup capability");
+    harness
+        .executor
+        .finalize_cleanup(cleanup, CleanupDisposition::ResultCommitted)
+        .expect("recovered cleanup capability is hash and hard-link bound");
+    assert!(temp_receipt_paths(&harness.sandbox).is_empty());
+    assert_eq!(fs::read(receipt_path).unwrap(), receipt_before);
+}
+
+#[cfg(unix)]
+#[test]
+fn reconciliation_rejects_a_same_content_cleanup_file_without_hard_link_identity() {
+    let harness = Harness::new();
+    let request = email_request(OperationId::new(), email_arguments(SUBJECT, BODY));
+    let permit = seal(&harness.issuer, &request);
+    let executed = harness.executor.execute(&permit, &request, fixed_now());
+    assert_email_completed(&executed, request.budget_charge);
+    drop(executed.cleanup);
+
+    let receipt_path = receipt_paths(&harness.sandbox).pop().unwrap();
+    let receipt_bytes = fs::read(&receipt_path).unwrap();
+    let temp_path = temp_receipt_paths(&harness.sandbox).pop().unwrap();
+    fs::remove_file(&temp_path).unwrap();
+    fs::write(&temp_path, &receipt_bytes).unwrap();
+
+    let reconciled = harness.executor.reconcile(&request);
+
+    assert!(matches!(reconciled.result, ReconciliationResult::Unknown));
+    assert!(reconciled.cleanup.is_none());
+    assert_eq!(fs::read(&receipt_path).unwrap(), receipt_bytes);
+    assert_eq!(fs::read(&temp_path).unwrap(), receipt_bytes);
+}
+
+#[test]
+fn non_email_reconciliation_without_durable_evidence_is_unknown_and_read_only() {
+    let harness = Harness::new();
+    let request = file_write_request(OperationId::new());
+
+    let reconciled = harness.executor.reconcile(&request);
+
+    assert!(matches!(reconciled.result, ReconciliationResult::Unknown));
+    assert!(reconciled.cleanup.is_none());
+    assert!(
+        !harness
+            .sandbox
+            .join("reconcile-must-not-write.txt")
+            .exists(),
+        "reconciliation dispatched a filesystem business side effect"
+    );
+    assert_eq!(
+        fs::read_dir(&harness.sandbox).unwrap().count(),
+        0,
+        "reconciliation must not create provider backing material"
+    );
 }

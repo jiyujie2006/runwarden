@@ -6,6 +6,8 @@ use runwarden_kernel::operation::{
     SideEffectState,
 };
 use runwarden_kernel::resource::ResourceClaim;
+use runwarden_kernel::resource_binding::resource_proposal_commitment_from_hashes;
+use runwarden_kernel::session::BudgetCharge;
 use runwarden_kernel::story::{
     EventId, InvocationKey, ObservationId, OperationId, SessionId, StoryId,
 };
@@ -50,6 +52,9 @@ pub struct NewOperation {
     pub arguments: SafeArgumentView,
     pub private_material: PrivateOperationMaterial,
     pub policy_snapshot_hash: Sha256Digest,
+    pub proposal_commitment: Sha256Digest,
+    pub provider_contract_hash: Sha256Digest,
+    pub budget_charge: BudgetCharge,
     pub now: OffsetDateTime,
 }
 
@@ -60,7 +65,15 @@ pub struct RecordPolicyInput {
     pub reason: String,
     pub next_state: OperationState,
     pub checks: Vec<PolicyCheck>,
+    pub proposal_commitment: Sha256Digest,
     pub now: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrozenProposalBinding {
+    pub proposal_commitment: Sha256Digest,
+    pub provider_contract_hash: Sha256Digest,
+    pub budget_charge: BudgetCharge,
 }
 
 struct PreparedOperation {
@@ -71,6 +84,7 @@ struct PreparedOperation {
     claim_json: String,
     claim_hash: Sha256Digest,
     invocation_binding_hash: Sha256Digest,
+    budget_charge_json: String,
     now: String,
 }
 
@@ -85,6 +99,9 @@ struct StoredBinding {
     safe_arguments_json: String,
     private_arguments: Vec<u8>,
     policy_snapshot_hash: String,
+    proposal_commitment: String,
+    provider_contract_hash: String,
+    budget_charge_json: String,
     claim_json: String,
     claim_hash: String,
 }
@@ -104,6 +121,9 @@ pub(crate) struct InvocationBindingMaterial<'a> {
     pub safe_arguments_hash: Sha256Digest,
     pub resource_claim_hash: &'a str,
     pub policy_snapshot_hash: &'a str,
+    pub proposal_commitment: &'a str,
+    pub provider_contract_hash: &'a str,
+    pub budget_charge_hash: Sha256Digest,
 }
 
 pub(crate) fn invocation_binding_hash(
@@ -112,6 +132,69 @@ pub(crate) fn invocation_binding_hash(
     Ok(Sha256Digest::from_bytes(
         canonical_json(&material)?.as_bytes(),
     ))
+}
+
+pub(crate) fn load_frozen_proposal_tx(
+    connection: &rusqlite::Connection,
+    operation_id: OperationId,
+) -> Result<FrozenProposalBinding, JournalError> {
+    type RawFrozenProposal = (String, String, String, String, String, String, String);
+    let raw: RawFrozenProposal = connection
+        .query_row(
+            r#"SELECT o.proposal_commitment, o.provider_contract_hash,
+                      o.proposed_budget_charge_json, o.provider, o.action,
+                      o.argument_hash, r.claim_hash
+               FROM operations o
+               JOIN resource_claims r
+                 ON r.story_id = o.story_id AND r.operation_id = o.operation_id
+               WHERE o.operation_id = ?1"#,
+            params![operation_id.to_string()],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or_else(|| JournalError::NotFound {
+            entity: "operation_proposal",
+            id: operation_id.to_string(),
+        })?;
+    let proposal_commitment: Sha256Digest = persisted_string(raw.0, "proposal commitment")?;
+    let provider_contract_hash: Sha256Digest = persisted_string(raw.1, "provider contract hash")?;
+    let budget_charge: BudgetCharge = persisted_json(&raw.2, "proposed budget charge")?;
+    if canonical_json(&budget_charge)? != raw.2 || budget_charge.calls == 0 {
+        return Err(JournalError::Integrity(
+            "stored proposed budget charge is noncanonical or empty".to_owned(),
+        ));
+    }
+    let argument_hash: Sha256Digest = persisted_string(raw.5, "proposal argument hash")?;
+    let resource_claim_hash: Sha256Digest =
+        persisted_string(raw.6, "proposal resource claim hash")?;
+    let expected = resource_proposal_commitment_from_hashes(
+        provider_contract_hash.clone(),
+        &raw.3,
+        &raw.4,
+        argument_hash,
+        resource_claim_hash,
+        budget_charge,
+    );
+    if proposal_commitment != expected {
+        return Err(JournalError::Integrity(
+            "stored proposal commitment does not match its frozen components".to_owned(),
+        ));
+    }
+    Ok(FrozenProposalBinding {
+        proposal_commitment,
+        provider_contract_hash,
+        budget_charge,
+    })
 }
 
 impl StateStore {
@@ -215,11 +298,13 @@ impl StateStore {
                 invocation_binding_hash,
                 parent_model_call_id, proposed_tool_call_id, provider, action,
                 argument_hash, redacted_arguments_json, private_arguments_json,
-                policy_snapshot_hash, state, side_effect_state, version,
+                policy_snapshot_hash, proposal_commitment,
+                provider_contract_hash, proposed_budget_charge_json,
+                state, side_effect_state, version,
                 created_at, updated_at
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-                'proposed', 'not_attempted', 0, ?14, ?14
+                ?14, ?15, ?16, 'proposed', 'not_attempted', 0, ?17, ?17
             )"#,
             params![
                 input.operation_id.to_string(),
@@ -235,6 +320,9 @@ impl StateStore {
                 prepared.safe_arguments_json,
                 prepared.private_arguments,
                 input.policy_snapshot_hash.as_str(),
+                input.proposal_commitment.as_str(),
+                input.provider_contract_hash.as_str(),
+                prepared.budget_charge_json,
                 prepared.now,
             ],
         )?;
@@ -330,6 +418,12 @@ impl StateStore {
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let existing = load_operation_tx(&transaction, input.operation_id)?;
         verify_story_evidence_tx(&transaction, existing.story_id)?;
+        let frozen = load_frozen_proposal_tx(&transaction, input.operation_id)?;
+        if input.proposal_commitment != frozen.proposal_commitment {
+            return Err(JournalError::Integrity(
+                "policy evaluation does not match the frozen proposal".to_owned(),
+            ));
+        }
         if existing.version != input.expected_version {
             return Err(JournalError::Conflict {
                 entity: "operation",
@@ -519,6 +613,28 @@ fn prepare_operation(input: &NewOperation) -> Result<PreparedOperation, JournalE
     }
     let claim_json = canonical_json(&input.resource_claim)?;
     let claim_hash = input.resource_claim.digest();
+    let budget_charge_json = canonical_json(&input.budget_charge)?;
+    if input.budget_charge.calls == 0 {
+        return Err(JournalError::Integrity(
+            "a frozen proposal must charge at least one call".to_owned(),
+        ));
+    }
+    sqlite_u64(input.budget_charge.calls, "proposed calls")?;
+    sqlite_u64(input.budget_charge.file_bytes, "proposed file bytes")?;
+    sqlite_u64(input.budget_charge.network_bytes, "proposed network bytes")?;
+    let expected_commitment = resource_proposal_commitment_from_hashes(
+        input.provider_contract_hash.clone(),
+        &input.provider,
+        &input.action,
+        input.argument_hash.clone(),
+        claim_hash.clone(),
+        input.budget_charge,
+    );
+    if expected_commitment != input.proposal_commitment {
+        return Err(JournalError::Integrity(
+            "frozen proposal commitment does not match its components".to_owned(),
+        ));
+    }
     let invocation_binding_hash = invocation_binding_hash(InvocationBindingMaterial {
         schema_version: "1.0.0",
         story_id: &input.story_id,
@@ -532,6 +648,9 @@ fn prepare_operation(input: &NewOperation) -> Result<PreparedOperation, JournalE
         safe_arguments_hash: Sha256Digest::from_bytes(safe_arguments_json.as_bytes()),
         resource_claim_hash: claim_hash.as_str(),
         policy_snapshot_hash: input.policy_snapshot_hash.as_str(),
+        proposal_commitment: input.proposal_commitment.as_str(),
+        provider_contract_hash: input.provider_contract_hash.as_str(),
+        budget_charge_hash: Sha256Digest::from_bytes(budget_charge_json.as_bytes()),
     })?;
     Ok(PreparedOperation {
         provider_code,
@@ -541,6 +660,7 @@ fn prepare_operation(input: &NewOperation) -> Result<PreparedOperation, JournalE
         claim_json,
         claim_hash,
         invocation_binding_hash,
+        budget_charge_json,
         now: format_time(input.now)?,
     })
 }
@@ -558,6 +678,8 @@ fn load_binding_for_invocation(
                       o.proposed_tool_call_id, o.provider, o.action,
                       o.argument_hash, o.redacted_arguments_json,
                       o.private_arguments_json, o.policy_snapshot_hash,
+                      o.proposal_commitment, o.provider_contract_hash,
+                      o.proposed_budget_charge_json,
                       r.claim_json, r.claim_hash
                FROM operations o
                JOIN resource_claims r
@@ -581,8 +703,11 @@ fn load_binding_for_invocation(
                     safe_arguments_json: row.get(7)?,
                     private_arguments: row.get(8)?,
                     policy_snapshot_hash: row.get(9)?,
-                    claim_json: row.get(10)?,
-                    claim_hash: row.get(11)?,
+                    proposal_commitment: row.get(10)?,
+                    provider_contract_hash: row.get(11)?,
+                    budget_charge_json: row.get(12)?,
+                    claim_json: row.get(13)?,
+                    claim_hash: row.get(14)?,
                 })
             },
         )
@@ -604,6 +729,9 @@ fn validate_retry_binding(
         && stored.safe_arguments_json == prepared.safe_arguments_json
         && stored.private_arguments == prepared.private_arguments
         && stored.policy_snapshot_hash == input.policy_snapshot_hash.as_str()
+        && stored.proposal_commitment == input.proposal_commitment.as_str()
+        && stored.provider_contract_hash == input.provider_contract_hash.as_str()
+        && stored.budget_charge_json == prepared.budget_charge_json
         && stored.claim_json == prepared.claim_json
         && stored.claim_hash == prepared.claim_hash.as_str();
     if matches {

@@ -166,15 +166,43 @@ file write cannot forge another provider's state. Memory and knowledge use
 separate directories and server-owned namespace hashes; values are not
 returned in evidence, and reads declare and consume bounded file-byte budget.
 Email
-stores no subject or body plaintext. It creates one canonical, fsynced receipt
-per operation with `hard_link`, binds the argument and message hashes, and
-reconciles duplicate execution from that immutable receipt. A different
-argument binding is blocked before execution; malformed or contradictory
-receipt material becomes `OutcomeUnknown` with the full reservation charged.
-Cleanup tokens name only a hash-bound temporary file below `mail/tmp` and are
-usable only by the executor after the journal result disposition is known.
-Cleanup verifies that the matching durable receipt still exists before
-removing its temporary hard link.
+stores no subject or body plaintext. It creates one canonical, fsynced v2
+receipt per operation with `hard_link`; the receipt binds message hashes and a
+domain-separated commitment to the complete frozen provider request. A
+different request binding is blocked before execution; malformed or
+contradictory receipt material becomes `OutcomeUnknown` with the full
+reservation charged. Cleanup tokens name only a hash-bound temporary file
+below `mail/tmp` and are usable only by the executor after the journal result
+disposition is known. Cleanup verifies that the matching durable receipt still
+exists before removing its temporary hard link.
+
+Runtime recovery passes the complete persisted `ProviderExecutionRequest` to
+`ProviderExecutor::reconcile`; it cannot query by operation id alone. The
+returned `ProviderReconciliationOutcome` carries both the reconciliation state
+and an optional opaque cleanup capability. Reconciliation repeats canonical
+catalog, contract, argument, claim, trusted-scope, root, and cached binding
+checks, then performs only provider-specific evidence reads. It never calls the
+business dispatcher. A verified email receipt may restore `Completed`, and
+absence of that exact receipt may prove `NotExecuted` when no conflicting
+process record exists. Filesystem, store, API, browser, and other providers
+without durable provider-specific evidence return `Unknown`; absence from the
+email directory is not evidence about them.
+
+After restart, email reconciliation can reconstruct a cleanup token only for a
+canonical operation-prefixed temp file whose bounded bytes hash to the verified
+receipt and whose Unix device/inode identity proves it is the receipt's hard
+link. The token commits that file identity; an original token can therefore
+clean either the winning hard link or its independently created concurrent
+loser temp, while a same-content replacement fails the identity check. This
+lets the runtime retain evidence after a failed journal write and remove the
+temporary file only after a later terminal result commit. Platforms without a
+stable file identity receive no cleanup token in this build.
+
+The `mail/` subtree is private to the native executor: generic file calls
+reject it and the contest build admits no external process adapter. Cleanup's
+final identity-check-then-unlink sequence relies on that no-out-of-band-writer
+invariant. A deployment that permits a hostile same-UID host process must add a
+handle-based deletion sandbox before claiming protection from a pathname race.
 
 The process registry keys replay protection by operation id across executor
 instances and roots, binds the complete request plus pinned executor roots,

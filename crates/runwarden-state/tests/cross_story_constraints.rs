@@ -44,12 +44,14 @@ fn open_seeded() -> (tempfile::TempDir, Connection) {
             INSERT INTO operations (
                 operation_id, story_id, session_id, invocation_key, provider,
                 action, argument_hash, redacted_arguments_json,
-                private_arguments_json, policy_snapshot_hash, state,
+                private_arguments_json, policy_snapshot_hash,
+                proposal_commitment, provider_contract_hash,
+                proposed_budget_charge_json, state,
                 side_effect_state, created_at, updated_at
             ) VALUES
-                ('operation-a',  'story-a', 'session-a',  'invoke-a',  'provider', 'action', 'args', '{}', x'7b7d', 'policy-a',  'proposed', 'not_attempted', 't', 't'),
-                ('operation-a2', 'story-a', 'session-a2', 'invoke-a2', 'provider', 'action', 'args', '{}', x'7b7d', 'policy-a2', 'proposed', 'not_attempted', 't', 't'),
-                ('operation-b',  'story-b', 'session-b',  'invoke-b',  'provider', 'action', 'args', '{}', x'7b7d', 'policy-b',  'proposed', 'not_attempted', 't', 't');
+                ('operation-a',  'story-a', 'session-a',  'invoke-a',  'provider', 'action', 'args', '{}', x'7b7d', 'policy-a',  'sha256:0000000000000000000000000000000000000000000000000000000000000000', 'sha256:1111111111111111111111111111111111111111111111111111111111111111', '{"calls":1,"file_bytes":0,"network_bytes":0}', 'proposed', 'not_attempted', 't', 't'),
+                ('operation-a2', 'story-a', 'session-a2', 'invoke-a2', 'provider', 'action', 'args', '{}', x'7b7d', 'policy-a2', 'sha256:0000000000000000000000000000000000000000000000000000000000000000', 'sha256:1111111111111111111111111111111111111111111111111111111111111111', '{"calls":1,"file_bytes":0,"network_bytes":0}', 'proposed', 'not_attempted', 't', 't'),
+                ('operation-b',  'story-b', 'session-b',  'invoke-b',  'provider', 'action', 'args', '{}', x'7b7d', 'policy-b',  'sha256:0000000000000000000000000000000000000000000000000000000000000000', 'sha256:1111111111111111111111111111111111111111111111111111111111111111', '{"calls":1,"file_bytes":0,"network_bytes":0}', 'proposed', 'not_attempted', 't', 't');
 
             INSERT INTO events (
                 story_id, sequence, obs_id, event_id, session_id, operation_id,
@@ -75,10 +77,16 @@ fn insert_operation(
         r#"INSERT INTO operations (
             operation_id, story_id, session_id, invocation_key, provider,
             action, argument_hash, redacted_arguments_json,
-            private_arguments_json, policy_snapshot_hash, policy_decision,
+            private_arguments_json, policy_snapshot_hash,
+            proposal_commitment, provider_contract_hash,
+            proposed_budget_charge_json, policy_decision,
             state, side_effect_state, created_at, updated_at
         ) VALUES (?1, 'story-a', 'session-a', ?1, 'provider', 'action',
-            'args', '{}', x'7b7d', 'policy-a', ?2, ?3, ?4, 't', 't')"#,
+            'args', '{}', x'7b7d', 'policy-a',
+            'sha256:0000000000000000000000000000000000000000000000000000000000000000',
+            'sha256:1111111111111111111111111111111111111111111111111111111111111111',
+            '{"calls":1,"file_bytes":0,"network_bytes":0}',
+            ?2, ?3, ?4, 't', 't')"#,
         params![operation_id, policy_decision, state, side_effect_state],
     )
 }
@@ -113,10 +121,15 @@ fn every_story_scoped_relationship_rejects_mismatched_tuples() {
             r#"INSERT INTO operations (
                 operation_id, story_id, session_id, invocation_key, provider,
                 action, argument_hash, redacted_arguments_json,
-                private_arguments_json, policy_snapshot_hash, state,
+                private_arguments_json, policy_snapshot_hash,
+                proposal_commitment, provider_contract_hash,
+                proposed_budget_charge_json, state,
                 side_effect_state, created_at, updated_at
             ) VALUES ('operation-cross', 'story-b', 'session-a', 'invoke-cross',
                 'provider', 'action', 'args', '{}', x'7b7d', 'policy',
+                'sha256:0000000000000000000000000000000000000000000000000000000000000000',
+                'sha256:1111111111111111111111111111111111111111111111111111111111111111',
+                '{"calls":1,"file_bytes":0,"network_bytes":0}',
                 'proposed', 'not_attempted', 't', 't')"#,
             [],
         ),
@@ -267,11 +280,17 @@ fn every_json_column_rejects_malformed_json() {
                 r#"INSERT INTO operations (
                     operation_id, story_id, session_id, invocation_key,
                     provider, action, argument_hash, redacted_arguments_json,
-                    private_arguments_json, policy_snapshot_hash, state,
+                    private_arguments_json, policy_snapshot_hash,
+                    proposal_commitment, provider_contract_hash,
+                    proposed_budget_charge_json, state,
                     side_effect_state, provider_result_json, created_at,
                     updated_at
                 ) VALUES (?1, 'story-a', 'session-a', ?2, 'provider', 'action',
-                    'args', ?3, ?4, 'policy-a', 'proposed', 'not_attempted', ?5, 't', 't')"#,
+                    'args', ?3, ?4, 'policy-a',
+                    'sha256:0000000000000000000000000000000000000000000000000000000000000000',
+                    'sha256:1111111111111111111111111111111111111111111111111111111111111111',
+                    '{"calls":1,"file_bytes":0,"network_bytes":0}',
+                    'proposed', 'not_attempted', ?5, 't', 't')"#,
                 params![operation_id, invocation_key, redacted, private, result],
             ),
             ffi::SQLITE_CONSTRAINT_CHECK,
@@ -394,10 +413,15 @@ fn every_typed_json_column_rejects_well_formed_non_objects() {
                         operation_id, story_id, session_id, invocation_key,
                         provider, action, argument_hash,
                         redacted_arguments_json, private_arguments_json,
-                        policy_snapshot_hash, state, side_effect_state,
+                        policy_snapshot_hash, proposal_commitment,
+                        provider_contract_hash, proposed_budget_charge_json,
+                        state, side_effect_state,
                         provider_result_json, created_at, updated_at
                     ) VALUES (?1, 'story-a', 'session-a', ?1, 'provider',
-                        'action', 'args', ?2, x'7b7d', 'policy-a', 'proposed',
+                        'action', 'args', ?2, x'7b7d', 'policy-a',
+                        'sha256:0000000000000000000000000000000000000000000000000000000000000000',
+                        'sha256:1111111111111111111111111111111111111111111111111111111111111111',
+                        '{"calls":1,"file_bytes":0,"network_bytes":0}', 'proposed',
                         'not_attempted', ?3, 't', 't')"#,
                     params![operation_id, redacted, result],
                 ),
@@ -482,10 +506,15 @@ fn private_argument_json_accepts_every_well_formed_json_shape() {
                 r#"INSERT INTO operations (
                     operation_id, story_id, session_id, invocation_key,
                     provider, action, argument_hash, redacted_arguments_json,
-                    private_arguments_json, policy_snapshot_hash, state,
+                    private_arguments_json, policy_snapshot_hash,
+                    proposal_commitment, provider_contract_hash,
+                    proposed_budget_charge_json, state,
                     side_effect_state, created_at, updated_at
                 ) VALUES (?1, 'story-a', 'session-a', ?1, 'provider', 'action',
-                    'args', '{}', ?2, 'policy-a', 'proposed',
+                    'args', '{}', ?2, 'policy-a',
+                    'sha256:0000000000000000000000000000000000000000000000000000000000000000',
+                    'sha256:1111111111111111111111111111111111111111111111111111111111111111',
+                    '{"calls":1,"file_bytes":0,"network_bytes":0}', 'proposed',
                     'not_attempted', 't', 't')"#,
                 params![format!("private-shape-{index}"), json.as_bytes()],
             )
@@ -553,11 +582,17 @@ fn integer_versions_counters_sequences_and_ordinals_are_bounded() {
             r#"INSERT INTO operations (
                 operation_id, story_id, session_id, invocation_key, provider,
                 action, argument_hash, redacted_arguments_json,
-                private_arguments_json, policy_snapshot_hash, state,
+                private_arguments_json, policy_snapshot_hash,
+                proposal_commitment, provider_contract_hash,
+                proposed_budget_charge_json, state,
                 side_effect_state, version, created_at, updated_at
             ) VALUES ('negative-operation-version', 'story-a', 'session-a',
                 'negative-operation-version', 'provider', 'action', 'args',
-                '{}', x'7b7d', 'policy', 'proposed', 'not_attempted', -1, 't', 't')"#,
+                '{}', x'7b7d', 'policy',
+                'sha256:0000000000000000000000000000000000000000000000000000000000000000',
+                'sha256:1111111111111111111111111111111111111111111111111111111111111111',
+                '{"calls":1,"file_bytes":0,"network_bytes":0}',
+                'proposed', 'not_attempted', -1, 't', 't')"#,
             [],
         ),
         ffi::SQLITE_CONSTRAINT_CHECK,
