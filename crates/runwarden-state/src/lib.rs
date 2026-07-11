@@ -4,6 +4,7 @@
 //! still compiles on other targets, but [`StateStore::open`] fails closed with
 //! [`JournalError::Permission`] there.
 
+mod approvals;
 mod events;
 mod operations;
 mod sessions;
@@ -11,6 +12,11 @@ pub mod snapshots;
 mod store;
 mod stories;
 
+pub use approvals::{
+    ApprovalDecisionInput, ApprovalRecordV1, DurableApprovalBinding, ExecutionLease,
+    ExecutionResultInput, ExecutionStarted, ExpireApprovalInput, LeaseAuthorization, LeaseRequest,
+    MarkOutcomeUnknownInput, NewApproval, OneShotConsumption, ReleaseLeaseInput, ReviewerDecision,
+};
 pub use events::{CommittedStoryEvent, NewStoryEvent};
 pub use operations::{
     CreateOperationOutcome, NewOperation, PrivateOperationMaterial, RecordPolicyInput,
