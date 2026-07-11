@@ -101,7 +101,7 @@ fn relational_event_rows_cannot_be_hidden_to_enable_an_unframed_story_cas() {
         .store
         .create_operation(fixture.operation(60, "send"))
         .unwrap();
-    let original = fixture.store.story(fixture.story.story_id).unwrap();
+    fixture.store.story(fixture.story.story_id).unwrap();
     let connection = Connection::open(fixture.state_dir.join("runwarden.db")).unwrap();
     let raw: String = connection
         .query_row(
@@ -135,10 +135,10 @@ fn relational_event_rows_cannot_be_hidden_to_enable_an_unframed_story_cas() {
             ..
         })
     ));
-    assert_eq!(
-        fixture.store.story(fixture.story.story_id).unwrap(),
-        original
-    );
+    assert!(matches!(
+        fixture.store.story(fixture.story.story_id),
+        Err(JournalError::Integrity(_))
+    ));
     let version: i64 = connection
         .query_row(
             "SELECT version FROM stories WHERE story_id = ?1",

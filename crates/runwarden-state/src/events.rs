@@ -1,14 +1,20 @@
 use runwarden_kernel::story::{
-    EventId, ObservationId, OperationId, SessionId, StoryId, StoryReplayFrame,
+    EventId, EvidenceStatus, ObservationId, OperationId, SessionId, StoryId, StoryProvenance,
+    StoryReplayFrame,
 };
 use runwarden_kernel::trace::{EventCode, Sha256Digest, StoryEvent, StoryEventPayload};
-use rusqlite::{OptionalExtension, Transaction, params};
+use rusqlite::{
+    Connection, ErrorCode, OptionalExtension, Transaction, TransactionBehavior, params,
+};
 use time::{OffsetDateTime, UtcOffset};
 
-use crate::snapshots::{load_story_snapshot_tx, verify_event_frame_chains_tx};
+use crate::snapshots::{
+    load_story_evidence_tx, load_story_snapshot_tx, verify_event_frame_chains_tx,
+};
 use crate::stories::load_story_record;
 use crate::{
-    JournalError, canonical_json, enum_text, format_time, persisted_string, rust_u64, sqlite_u64,
+    JournalError, StateStore, canonical_json, enum_text, format_time, persisted_string, rust_u64,
+    sqlite_u64,
 };
 
 pub struct NewStoryEvent {
@@ -28,11 +34,95 @@ pub struct CommittedStoryEvent {
     pub story_version: u64,
 }
 
+impl StateStore {
+    pub fn append_event(&self, input: NewStoryEvent) -> Result<CommittedStoryEvent, JournalError> {
+        if !is_standalone_payload(&input.payload) {
+            return Err(JournalError::InvalidTransition {
+                entity: "standalone_event",
+                from: enum_text(&input.payload.kind())?,
+                to: "public_append".to_owned(),
+            });
+        }
+
+        let connection = self.connection()?;
+        let transaction = begin_public_append_transaction(&connection)?;
+        // Public callers may append only to a chain whose complete current
+        // evidence is already valid. Domain-owned transactions enter through
+        // append_event_and_frame_tx, which performs the internal chain check.
+        let evidence = load_story_evidence_tx(&transaction, input.story_id)?;
+        if evidence.story.provenance != StoryProvenance::Native {
+            return Err(JournalError::InvalidTransition {
+                entity: "story_provenance",
+                from: enum_text(&evidence.story.provenance)?,
+                to: "standalone_event".to_owned(),
+            });
+        }
+        if evidence.story.evidence_status != EvidenceStatus::Pending {
+            return Err(JournalError::InvalidTransition {
+                entity: "story_evidence",
+                from: enum_text(&evidence.story.evidence_status)?,
+                to: "standalone_event".to_owned(),
+            });
+        }
+        let committed = append_verified_event_and_frame_tx(&transaction, input)?;
+        transaction.commit()?;
+        self.harden_files()?;
+        Ok(committed)
+    }
+
+    pub fn events_after(
+        &self,
+        story_id: StoryId,
+        after_sequence: u64,
+        limit: u64,
+    ) -> Result<Vec<StoryEvent>, JournalError> {
+        let limit = checked_read_limit(limit)?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
+        let evidence = load_story_evidence_tx(&transaction, story_id)?;
+        let events = evidence
+            .events
+            .into_iter()
+            .filter(|event| event.sequence > after_sequence)
+            .take(limit)
+            .collect();
+        transaction.commit()?;
+        Ok(events)
+    }
+
+    pub fn replay_frames(
+        &self,
+        story_id: StoryId,
+        after_sequence: u64,
+        limit: u64,
+    ) -> Result<Vec<StoryReplayFrame>, JournalError> {
+        let limit = checked_read_limit(limit)?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
+        let evidence = load_story_evidence_tx(&transaction, story_id)?;
+        let frames = evidence
+            .replay_frames
+            .into_iter()
+            .filter(|frame| frame.sequence > after_sequence)
+            .take(limit)
+            .collect();
+        transaction.commit()?;
+        Ok(frames)
+    }
+}
+
 pub(crate) fn append_event_and_frame_tx(
     transaction: &Transaction<'_>,
     input: NewStoryEvent,
 ) -> Result<CommittedStoryEvent, JournalError> {
     verify_event_frame_chains_tx(transaction, input.story_id)?;
+    append_verified_event_and_frame_tx(transaction, input)
+}
+
+fn append_verified_event_and_frame_tx(
+    transaction: &Transaction<'_>,
+    input: NewStoryEvent,
+) -> Result<CommittedStoryEvent, JournalError> {
     let stored = load_story_record(transaction, input.story_id)?;
     if stored.story.authority.session_id != input.session_id {
         return Err(JournalError::Integrity(
@@ -53,6 +143,38 @@ pub(crate) fn append_event_and_frame_tx(
                 "event operation does not match story and session".to_owned(),
             ));
         }
+    }
+
+    let duplicate: Option<(String, String)> = transaction
+        .query_row(
+            r#"SELECT obs_id, event_id FROM events
+               WHERE obs_id = ?1 OR event_id = ?2 LIMIT 1"#,
+            params![input.obs_id.to_string(), input.event_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    if let Some((stored_obs_id, stored_event_id)) = duplicate {
+        let (entity, id) = if stored_obs_id == input.obs_id.to_string() {
+            ("observation", input.obs_id.to_string())
+        } else {
+            debug_assert_eq!(stored_event_id, input.event_id.to_string());
+            ("event", input.event_id.to_string())
+        };
+        return Err(JournalError::Conflict {
+            entity,
+            id,
+            expected: 0,
+            actual: 1,
+        });
+    }
+
+    let recorded_at = input.recorded_at.to_offset(UtcOffset::UTC);
+    if recorded_at < stored.updated_at {
+        return Err(JournalError::InvalidTransition {
+            entity: "event_time",
+            from: format_time(stored.updated_at)?,
+            to: format_time(recorded_at)?,
+        });
     }
 
     let event_tail: Option<(i64, String)> = transaction
@@ -119,7 +241,6 @@ pub(crate) fn append_event_and_frame_tx(
         .checked_add(1)
         .ok_or_else(|| JournalError::Integrity("story version overflowed u64".to_owned()))?;
     let story_version_sql = sqlite_u64(story_version, "story version")?;
-    let recorded_at = input.recorded_at.to_offset(UtcOffset::UTC);
     let recorded_at_text = format_time(recorded_at)?;
 
     let event = StoryEvent::seal(
@@ -234,4 +355,53 @@ pub(crate) fn append_event_and_frame_tx(
         frame,
         story_version,
     })
+}
+
+fn is_standalone_payload(payload: &StoryEventPayload) -> bool {
+    matches!(
+        payload,
+        StoryEventPayload::ModelCall { .. }
+            | StoryEventPayload::ToolProposal { .. }
+            | StoryEventPayload::CausalLink { .. }
+            | StoryEventPayload::InputConsumed { .. }
+            | StoryEventPayload::SandboxDecision { .. }
+            | StoryEventPayload::MonitorObservation { .. }
+    )
+}
+
+fn checked_read_limit(limit: u64) -> Result<usize, JournalError> {
+    if !(1..=10_000).contains(&limit) {
+        return Err(JournalError::Integrity(
+            "story event read limit must be between 1 and 10000".to_owned(),
+        ));
+    }
+    usize::try_from(limit)
+        .map_err(|_| JournalError::Integrity("story event read limit is too large".to_owned()))
+}
+
+/// Each SQLite attempt retains the configured five-second busy timeout. A
+/// retry is safe only here: no transaction exists yet and `input` has not been
+/// consumed, so no sequence, event, frame, or external side effect can have
+/// committed. Uniqueness, integrity, and CAS failures are never retried.
+fn begin_public_append_transaction(
+    connection: &Connection,
+) -> Result<Transaction<'_>, JournalError> {
+    const MAX_BEGIN_ATTEMPTS: usize = 4;
+
+    for attempt in 0..MAX_BEGIN_ATTEMPTS {
+        match Transaction::new_unchecked(connection, TransactionBehavior::Immediate) {
+            Ok(transaction) => return Ok(transaction),
+            Err(error)
+                if attempt + 1 < MAX_BEGIN_ATTEMPTS
+                    && matches!(
+                        error.sqlite_error_code(),
+                        Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
+                    ) =>
+            {
+                std::thread::yield_now();
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    unreachable!("bounded append transaction loop returns on its final attempt")
 }

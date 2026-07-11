@@ -53,11 +53,13 @@ impl JournalFixture {
         }
     }
 
+    #[allow(dead_code)]
     pub fn operation(&self, invocation_suffix: u8, action: &str) -> NewOperation {
         operation_fixture(&self.story, invocation_suffix, action)
     }
 }
 
+#[allow(dead_code)]
 pub fn operation_fixture(
     story: &SecurityStory,
     invocation_suffix: u8,

@@ -17,6 +17,33 @@ model, proposed tool, policy, approval, execution, and evidence. Native
 observation references are typed `ObservationId` values. An aggregate contains
 an event count and final event hash, not copied historical events.
 
+## Native Event Journal
+
+`StateStore::append_event` appends standalone observations only while a native
+story's evidence state is `Pending`, through one SQLite immediate transaction.
+Legacy-derived, incomplete, invalid, and verified stories are immutable through
+this entry point. Its public payload allowlist is `ModelCall`,
+`ToolProposal`, `CausalLink`, `InputConsumed`, `SandboxDecision`, and
+`MonitorObservation`. Operation proposal, policy decision, approval lifecycle,
+provider execution, and evidence-verification events are domain-owned and are
+rejected by the public append API; their Rust state transitions append them
+through the crate-private transactional helper instead.
+
+Before a public append, Runwarden verifies the complete current story evidence.
+The shared helper then allocates the next story-local sequence, seals the event,
+CAS-advances the story version, builds the display-safe aggregate, and seals
+one replay frame before commit. Event and observation ids are globally unique;
+a duplicate returns a structured conflict and is never retried with a newly
+invented id. `recorded_at` must not precede the stored story update time, so an
+event cannot move the authoritative journal clock backwards.
+
+`events_after` and `replay_frames` use an exclusive `sequence > after_sequence`
+cursor and accept limits from 1 through 10,000. Each read uses one SQLite read
+transaction and verifies the full story, event chain, replay-frame chain, and
+current snapshot before returning a page. This deliberately prevents a cursor
+from hiding corruption before the requested page. Replay-frame story snapshots
+contain event count and final hash scalars, never a copied `events` array.
+
 ## Private Inputs And Safe Views
 
 Raw provider arguments, outputs, trace payloads, reasons, and arbitrary JSON

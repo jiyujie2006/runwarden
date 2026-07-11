@@ -176,10 +176,28 @@ pub(crate) fn load_story_evidence_tx(
     connection: &Connection,
     story_id: StoryId,
 ) -> Result<StoryEvidenceView, JournalError> {
-    let stored_version = load_story_record(connection, story_id)?.version;
+    let stored = load_story_record(connection, story_id)?;
+    let stored_version = stored.version;
+    let stored_event_count = stored.story.event_count;
+    let stored_final_event_hash = stored.story.final_event_hash;
+    let stored_updated_at = stored.updated_at;
     let story = load_story_snapshot_tx(connection, story_id)?;
+    if stored_event_count != story.event_count || stored_final_event_hash != story.final_event_hash
+    {
+        return Err(JournalError::Integrity(
+            "stored story event head disagrees with the relational event tail".to_owned(),
+        ));
+    }
     let events = load_events(connection, story_id)?;
     let replay_frames = load_frames(connection, story_id)?;
+    if replay_frames
+        .last()
+        .is_some_and(|frame| frame.recorded_at != stored_updated_at)
+    {
+        return Err(JournalError::Integrity(
+            "stored story timestamp disagrees with the final replay frame".to_owned(),
+        ));
+    }
     verify_frame_story_versions(&replay_frames, stored_version)?;
     let evidence = StoryEvidenceView {
         story,

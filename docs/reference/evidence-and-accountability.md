@@ -104,6 +104,23 @@ or repeated start creates no partial state or orphan event. Approval lifecycle
 events carry the operation id, so their `obs_*` ids appear in that operation's
 ordered observation references.
 
+Standalone native observations use the same atomic event/frame helper through
+`StateStore::append_event` while evidence is `Pending`; non-native or
+non-pending stories are rejected so a verified chain head cannot drift. The
+public method admits only model-call,
+tool-proposal, causal-link, input-consumed, sandbox-decision, and
+monitor-observation payloads; state-owning operation, policy, approval,
+execution, and evidence-verification payloads must accompany their dedicated
+Rust transaction. Duplicate event or observation ids conflict without opening
+a sequence gap, and timestamps cannot move the story clock backwards.
+
+Resumable `events_after` and `replay_frames` reads accept only limits from 1 to
+10,000 and return rows strictly after the supplied sequence. They verify the
+entire evidence view inside one read transaction before slicing the requested
+page, so corruption in an earlier event, frame, snapshot, or story-version link
+still fails a later-page read. Frame snapshots never embed historical event
+arrays or private operation arguments.
+
 These native journal events are distinct from the current legacy MCP
 `events.jsonl` and file-backed approval flow. Until runtime/MCP integration is
 complete, documentation and contest evidence must identify which source
