@@ -541,6 +541,11 @@ impl StoryEvidenceView {
             if frame.story.event_count != frame.sequence {
                 return Err("replay frame story event count must match frame sequence".to_string());
             }
+            if frame.story.final_event_hash.as_deref() != Some(frame.event_hash.as_str()) {
+                return Err(
+                    "replay frame story final event hash must match frame event hash".to_string(),
+                );
+            }
             if event.story_id != self.story.story_id
                 || event.session_id != self.story.authority.session_id
                 || frame.story.story_id != self.story.story_id

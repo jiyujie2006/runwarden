@@ -402,3 +402,35 @@ fn evidence_view_rejects_resealed_frame_with_wrong_aggregate_event_count() {
 
     assert!(mismatched.verify_structure().is_err());
 }
+
+#[test]
+fn evidence_view_rejects_resealed_frame_with_wrong_aggregate_final_event_hash() {
+    let mut mismatched = fixed_evidence_view();
+    let mut first_story = mismatched.replay_frames[0].story.clone();
+    first_story.final_event_hash = Some(
+        Sha256Digest::from_bytes(b"wrong frame event")
+            .as_str()
+            .to_string(),
+    );
+    let first_frame = StoryReplayFrame::seal(
+        1,
+        1,
+        mismatched.events[0].event_hash().to_string(),
+        None,
+        at("2026-07-10T00:00:00Z"),
+        first_story,
+    )
+    .unwrap();
+    let second_frame = StoryReplayFrame::seal(
+        2,
+        2,
+        mismatched.events[1].event_hash().to_string(),
+        Some(first_frame.frame_hash.clone()),
+        at("2026-07-10T00:00:01Z"),
+        mismatched.story.clone(),
+    )
+    .unwrap();
+    mismatched.replay_frames = vec![first_frame, second_frame];
+
+    assert!(mismatched.verify_structure().is_err());
+}

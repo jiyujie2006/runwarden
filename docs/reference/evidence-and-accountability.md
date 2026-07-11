@@ -59,10 +59,10 @@ kind so a caller cannot bless a semantic mismatch by recomputing the hash.
 one replay frame per event. Export verification recomputes each event from the
 same canonical RFC3339 material, verifies its event and frame chains, and
 requires every replay frame to retain the same unmodified event hash. Each
-frame aggregate count must match its sequence, and the exported story's
+frame aggregate count must match its sequence, and each frame aggregate's
+`final_event_hash` must match that frame's event hash. The exported story's
 `final_event_hash` must be absent for an empty chain or exactly equal the last
-sealed event hash. Export does not redact again or replace hashes after
-sealing.
+sealed event hash. Export does not redact again or replace hashes after sealing.
 
 Scenario replay trace payloads include the provider call arguments that led to
 the cited decision so judges can inspect the attempted target without executing

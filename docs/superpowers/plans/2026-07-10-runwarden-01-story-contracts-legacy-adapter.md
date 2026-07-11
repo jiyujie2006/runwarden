@@ -1624,7 +1624,8 @@ pub struct StoryEvidenceView {
 `StoryEvidenceView::verify_structure` requires matching story/session ids,
 contiguous event and frame sequences, one frame per event, matching event/frame
 hashes, a valid event chain and frame chain, `story.event_count` equality, each
-frame aggregate's `story.event_count` equal to its frame sequence, and the final
+frame aggregate's `story.event_count` equal to its frame sequence, each frame
+aggregate's `final_event_hash` equal to that frame's event hash, and the final
 frame story exactly equal to `story`. It also requires
 `story.final_event_hash=None` for an empty chain and an exact match to the last
 sealed event hash for a non-empty chain. Assurance, bundles, scenario
