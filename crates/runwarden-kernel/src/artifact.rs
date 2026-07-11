@@ -6,9 +6,13 @@ use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, JsonSchema)]
-#[serde(transparent)]
-#[schemars(with = "String")]
-pub struct WorkspaceRelativePath(String);
+pub struct WorkspaceRelativePath(
+    #[schemars(
+        length(min = 1),
+        regex(pattern = r"^(?!/)(?!.*(?:^|/)\.{1,2}(?:/|$))[^/\\:\x00]+(?:/[^/\\:\x00]+)*$")
+    )]
+    String,
+);
 
 impl WorkspaceRelativePath {
     pub fn as_str(&self) -> &str {

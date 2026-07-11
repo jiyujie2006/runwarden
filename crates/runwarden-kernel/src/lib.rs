@@ -1,5 +1,6 @@
 pub mod artifact;
 pub mod authority;
+pub mod bundle;
 pub mod contracts;
 pub mod evidence;
 pub mod kernel;

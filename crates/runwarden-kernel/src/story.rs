@@ -12,8 +12,13 @@ use crate::trace::{StoryEvent, StoryEventKind, canonical_json_v1};
 pub const SECURITY_STORY_SCHEMA_VERSION: &str = "1.0.0";
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, JsonSchema)]
-#[schemars(with = "String")]
-pub struct SchemaVersion(String);
+pub struct SchemaVersion(
+    #[schemars(
+        length(min = 5, max = 43),
+        regex(pattern = r"^1\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$")
+    )]
+    String,
+);
 
 impl SchemaVersion {
     pub fn current() -> Self {

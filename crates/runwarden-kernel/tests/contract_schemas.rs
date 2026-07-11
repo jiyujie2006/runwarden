@@ -3,13 +3,41 @@ use std::path::{Path, PathBuf};
 
 use runwarden_kernel::artifact::ArtifactManifest;
 use runwarden_kernel::authority::ApprovalRecord;
+use runwarden_kernel::bundle::StoryBundleManifest;
 use runwarden_kernel::evidence::TraceEvent;
 use runwarden_kernel::manifest::{AssessmentManifest, SessionManifest};
+use runwarden_kernel::operation::SecurityOperation;
+use runwarden_kernel::resource::ResourceClaim;
+use runwarden_kernel::session::AuthoritySnapshot;
+use runwarden_kernel::story::{SecurityStory, StoryEvidenceView, StoryReplayFrame};
+use runwarden_kernel::trace::StoryEvent;
 use runwarden_kernel::{
     OperationResult, ProviderCall, ProviderContract, ProviderManifest, ProviderOutcome,
 };
 use schemars::schema_for;
 use serde_json::Value;
+
+const EXPECTED_SCHEMA_FILES: [&str; 19] = [
+    "approval-record.schema.json",
+    "artifact-manifest.schema.json",
+    "assessment-manifest.schema.json",
+    "authority-snapshot.schema.json",
+    "operation-result.schema.json",
+    "provider-call.schema.json",
+    "provider-contract.schema.json",
+    "provider-manifest.schema.json",
+    "provider-outcome.schema.json",
+    "report.schema.json",
+    "resource-claim.schema.json",
+    "security-operation.schema.json",
+    "security-story.schema.json",
+    "session-manifest.schema.json",
+    "story-bundle-manifest.schema.json",
+    "story-event.schema.json",
+    "story-evidence-view.schema.json",
+    "story-replay-frame.schema.json",
+    "trace-event.schema.json",
+];
 
 #[test]
 fn rust_contracts_generate_json_schemas() {
@@ -28,6 +56,46 @@ fn rust_contracts_generate_json_schemas() {
 fn checked_in_schema_artifacts_match_rust_contracts() {
     let root = workspace_root();
 
+    assert_schema_file_matches(
+        &root,
+        "security-story.schema.json",
+        serde_json::to_value(schema_for!(SecurityStory)).expect("schema value"),
+    );
+    assert_schema_file_matches(
+        &root,
+        "security-operation.schema.json",
+        serde_json::to_value(schema_for!(SecurityOperation)).expect("schema value"),
+    );
+    assert_schema_file_matches(
+        &root,
+        "story-event.schema.json",
+        serde_json::to_value(schema_for!(StoryEvent)).expect("schema value"),
+    );
+    assert_schema_file_matches(
+        &root,
+        "resource-claim.schema.json",
+        serde_json::to_value(schema_for!(ResourceClaim)).expect("schema value"),
+    );
+    assert_schema_file_matches(
+        &root,
+        "authority-snapshot.schema.json",
+        serde_json::to_value(schema_for!(AuthoritySnapshot)).expect("schema value"),
+    );
+    assert_schema_file_matches(
+        &root,
+        "story-bundle-manifest.schema.json",
+        serde_json::to_value(schema_for!(StoryBundleManifest)).expect("schema value"),
+    );
+    assert_schema_file_matches(
+        &root,
+        "story-replay-frame.schema.json",
+        serde_json::to_value(schema_for!(StoryReplayFrame)).expect("schema value"),
+    );
+    assert_schema_file_matches(
+        &root,
+        "story-evidence-view.schema.json",
+        serde_json::to_value(schema_for!(StoryEvidenceView)).expect("schema value"),
+    );
     assert_schema_file_matches(
         &root,
         "provider-call.schema.json",
@@ -120,6 +188,24 @@ fn checked_in_schema_artifacts_match_rust_contracts() {
 }
 
 #[test]
+fn checked_in_schema_inventory_is_frozen() {
+    let mut actual = fs::read_dir(workspace_root().join("schemas"))
+        .expect("read schemas directory")
+        .map(|entry| {
+            entry
+                .expect("read schema directory entry")
+                .file_name()
+                .into_string()
+                .expect("schema file name must be UTF-8")
+        })
+        .filter(|file_name| file_name.ends_with(".schema.json"))
+        .collect::<Vec<_>>();
+    actual.sort();
+
+    assert_eq!(actual, EXPECTED_SCHEMA_FILES.map(str::to_string));
+}
+
+#[test]
 fn active_typescript_webui_surface_is_removed() {
     let root = workspace_root();
     assert!(!root.join("pnpm-workspace.yaml").exists());
@@ -156,6 +242,45 @@ fn artifact_paths_are_schema_restricted_to_relative_workspace_paths() {
             .as_str()
             .is_some_and(|pattern| pattern.contains(r"\.\."))
     );
+}
+
+#[test]
+fn story_bundle_schema_exposes_validated_wire_boundaries() {
+    let root = workspace_root();
+    let manifest = read_schema(&root, "story-bundle-manifest.schema.json");
+
+    assert_eq!(manifest["additionalProperties"], false);
+    assert!(manifest["properties"].get("signature").is_none());
+    for definition in ["BundleFileDigest", "BundleVerificationSummary"] {
+        assert_eq!(
+            manifest["definitions"][definition]["additionalProperties"], false,
+            "{definition} must reject unknown fields"
+        );
+    }
+
+    assert_eq!(
+        manifest["definitions"]["BundleFileDigest"]["properties"]["relative_path"]["$ref"],
+        "#/definitions/WorkspaceRelativePath"
+    );
+    let relative_path = &manifest["definitions"]["WorkspaceRelativePath"];
+    assert_eq!(relative_path["minLength"], 1);
+    assert_eq!(
+        relative_path["pattern"],
+        r"^(?!/)(?!.*(?:^|/)\.{1,2}(?:/|$))[^/\\:\x00]+(?:/[^/\\:\x00]+)*$"
+    );
+
+    let schema_version = &manifest["definitions"]["SchemaVersion"];
+    assert_eq!(schema_version["minLength"], 5);
+    assert_eq!(schema_version["maxLength"], 43);
+    assert_eq!(
+        schema_version["pattern"],
+        r"^1\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$"
+    );
+
+    let digest = &manifest["definitions"]["Sha256Digest"];
+    assert_eq!(digest["minLength"], 71);
+    assert_eq!(digest["maxLength"], 71);
+    assert_eq!(digest["pattern"], r"^sha256:[0-9a-f]{64}$");
 }
 
 #[test]
@@ -244,8 +369,8 @@ fn assert_schema_file_matches(root: &Path, file_name: &str, generated: Value) {
 }
 
 fn read_schema(root: &Path, file_name: &str) -> Value {
-    let body =
-        fs::read_to_string(root.join("schemas").join(file_name)).expect("read schema artifact");
+    let body = fs::read_to_string(root.join("schemas").join(file_name))
+        .unwrap_or_else(|error| panic!("read schema artifact {file_name}: {error}"));
     serde_json::from_str(&body).expect("schema JSON")
 }
 

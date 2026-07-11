@@ -20,6 +20,13 @@ and `.` or `..` components are rejected. This newtype proves lexical safety
 only; filesystem writes must still use the stable-root containment and symlink
 checks above.
 
+The frozen `StoryBundleManifest` uses the same `WorkspaceRelativePath` for each
+`BundleFileDigest`. Its detached-signature material sorts those validated paths
+before canonical JSON encoding, so caller input order does not change the bytes
+to be signed. This contract only describes payload paths and digests; it does
+not create bundle files or replace the containment checks required by a future
+exporter.
+
 Local provider filesystem tools use an analogous Rust-owned sandbox containment
 boundary, not the workspace artifact helper: requested paths are relative to
 the sandbox root, existing components are canonicalized against that root

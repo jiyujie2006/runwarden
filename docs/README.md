@@ -35,7 +35,8 @@ This index is the canonical map for the contest edition.
 
 ## Contracts
 
-- [JSON Contracts](reference/json-contracts.md): Rust schema artifacts.
+- [JSON Contracts](reference/json-contracts.md): Rust schema artifacts,
+  including security-story and detached-signature bundle contracts.
 - [Rust Kernel and TypeScript Interaction](reference/rust-kernel-ts-interaction.md): Rust-owned policy with no active TypeScript policy surface.
 - [Kernel Manifest](reference/kernel-manifest.md)
 - [Assessment Manifest](reference/assessment-manifest.md)

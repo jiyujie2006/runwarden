@@ -1,0 +1,419 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AuthoritySnapshot",
+  "type": "object",
+  "required": [
+    "actor_id",
+    "allowed_providers",
+    "artifacts",
+    "authz_id",
+    "authz_state",
+    "budgets",
+    "evidence",
+    "expires_at",
+    "files",
+    "inputs",
+    "networks",
+    "policy_snapshot_hash",
+    "session_id",
+    "stores"
+  ],
+  "properties": {
+    "actor_id": {
+      "type": "string"
+    },
+    "allowed_providers": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ArtifactAuthority"
+      }
+    },
+    "authz_id": {
+      "type": "string"
+    },
+    "authz_state": {
+      "type": "string"
+    },
+    "budgets": {
+      "$ref": "#/definitions/BudgetSnapshot"
+    },
+    "code": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/CodeAuthority"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "email": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/EmailAuthority"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "evidence": {
+      "$ref": "#/definitions/EvidenceAuthority"
+    },
+    "expires_at": {
+      "type": "string"
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/FileAuthority"
+      }
+    },
+    "inputs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/InputAuthority"
+      }
+    },
+    "networks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/NetworkAuthority"
+      }
+    },
+    "policy_snapshot_hash": {
+      "type": "string"
+    },
+    "session_id": {
+      "$ref": "#/definitions/SessionId"
+    },
+    "stores": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/StoreAuthority"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "ArtifactAuthority": {
+      "type": "object",
+      "required": [
+        "allowed_formats",
+        "path_prefix"
+      ],
+      "properties": {
+        "allowed_formats": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "path_prefix": {
+          "$ref": "#/definitions/WorkspaceRelativePath"
+        }
+      },
+      "additionalProperties": false
+    },
+    "BudgetSnapshot": {
+      "type": "object",
+      "required": [
+        "max_argument_bytes",
+        "max_calls",
+        "max_file_bytes",
+        "max_model_calls",
+        "max_model_input_bytes",
+        "max_model_output_bytes",
+        "max_network_bytes",
+        "max_wall_time_ms"
+      ],
+      "properties": {
+        "max_argument_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "max_calls": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "max_file_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "max_model_calls": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "max_model_input_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "max_model_output_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "max_network_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "max_wall_time_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "CodeAuthority": {
+      "type": "object",
+      "required": [
+        "allowed_runtimes",
+        "maximum_limits",
+        "network",
+        "workspace"
+      ],
+      "properties": {
+        "allowed_runtimes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "maximum_limits": {
+          "$ref": "#/definitions/ExecutionLimits"
+        },
+        "network": {
+          "$ref": "#/definitions/NetworkCapability"
+        },
+        "workspace": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "DataClass": {
+      "type": "string",
+      "enum": [
+        "public",
+        "internal",
+        "confidential",
+        "restricted"
+      ]
+    },
+    "EmailAuthority": {
+      "type": "object",
+      "required": [
+        "allowed_recipients",
+        "maximum_classification"
+      ],
+      "properties": {
+        "allowed_recipients": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "maximum_classification": {
+          "$ref": "#/definitions/DataClass"
+        }
+      },
+      "additionalProperties": false
+    },
+    "EvidenceAuthority": {
+      "type": "object",
+      "required": [
+        "allowed_operations",
+        "current_story_only"
+      ],
+      "properties": {
+        "allowed_operations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/OperationId"
+          }
+        },
+        "current_story_only": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecutionLimits": {
+      "type": "object",
+      "required": [
+        "cpu_time_ms",
+        "memory_bytes",
+        "output_bytes",
+        "process_count",
+        "wall_time_ms"
+      ],
+      "properties": {
+        "cpu_time_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "memory_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "output_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "process_count": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "wall_time_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "FileAccess": {
+      "type": "string",
+      "enum": [
+        "read",
+        "write"
+      ]
+    },
+    "FileAuthority": {
+      "type": "object",
+      "required": [
+        "access",
+        "maximum_classification",
+        "path_prefix",
+        "root"
+      ],
+      "properties": {
+        "access": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/FileAccess"
+          }
+        },
+        "maximum_classification": {
+          "$ref": "#/definitions/DataClass"
+        },
+        "path_prefix": {
+          "type": "string"
+        },
+        "root": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "InputAuthority": {
+      "type": "object",
+      "required": [
+        "allowed_sources",
+        "maximum_classification"
+      ],
+      "properties": {
+        "allowed_sources": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "maximum_classification": {
+          "$ref": "#/definitions/DataClass"
+        }
+      },
+      "additionalProperties": false
+    },
+    "MemoryAccess": {
+      "type": "string",
+      "enum": [
+        "read",
+        "write"
+      ]
+    },
+    "NetworkAuthority": {
+      "type": "object",
+      "required": [
+        "allowed_origins",
+        "maximum_classification",
+        "provider"
+      ],
+      "properties": {
+        "allowed_origins": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "maximum_classification": {
+          "$ref": "#/definitions/DataClass"
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "NetworkCapability": {
+      "type": "string",
+      "enum": [
+        "none",
+        "brokered"
+      ]
+    },
+    "OperationId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "SessionId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "StoreAuthority": {
+      "type": "object",
+      "required": [
+        "access",
+        "key_prefix",
+        "namespace"
+      ],
+      "properties": {
+        "access": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/MemoryAccess"
+          }
+        },
+        "key_prefix": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "WorkspaceRelativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))[^/\\\\:\\x00]+(?:/[^/\\\\:\\x00]+)*$"
+    }
+  }
+}

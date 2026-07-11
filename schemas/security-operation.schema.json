@@ -1,0 +1,1067 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SecurityOperation",
+  "type": "object",
+  "required": [
+    "action",
+    "argument_hash",
+    "arguments",
+    "observation_refs",
+    "operation_id",
+    "policy_checks",
+    "policy_snapshot_hash",
+    "provider",
+    "resource_claim",
+    "session_id",
+    "side_effect_state",
+    "state",
+    "story_id",
+    "version"
+  ],
+  "properties": {
+    "action": {
+      "type": "string"
+    },
+    "approval": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ApprovalView"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "argument_hash": {
+      "$ref": "#/definitions/Sha256Digest"
+    },
+    "arguments": {
+      "$ref": "#/definitions/SafeArgumentView"
+    },
+    "observation_refs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ObservationId"
+      }
+    },
+    "operation_id": {
+      "$ref": "#/definitions/OperationId"
+    },
+    "parent_model_call_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "policy_checks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/PolicyCheck"
+      }
+    },
+    "policy_snapshot_hash": {
+      "$ref": "#/definitions/Sha256Digest"
+    },
+    "proposed_tool_call_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "provider": {
+      "type": "string"
+    },
+    "provider_result": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ProviderResultView"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "resource_claim": {
+      "$ref": "#/definitions/ResourceClaim"
+    },
+    "session_id": {
+      "$ref": "#/definitions/SessionId"
+    },
+    "side_effect_state": {
+      "$ref": "#/definitions/SideEffectState"
+    },
+    "state": {
+      "$ref": "#/definitions/OperationState"
+    },
+    "story_id": {
+      "$ref": "#/definitions/StoryId"
+    },
+    "version": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0.0
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "ApprovalId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "ApprovalState": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "approved",
+        "leased",
+        "consumed",
+        "denied",
+        "expired",
+        "revoked"
+      ]
+    },
+    "ApprovalView": {
+      "type": "object",
+      "required": [
+        "approval_id",
+        "binding_digest",
+        "state"
+      ],
+      "properties": {
+        "approval_id": {
+          "$ref": "#/definitions/ApprovalId"
+        },
+        "binding_digest": {
+          "type": "string"
+        },
+        "expires_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lease_id": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ExecutionLeaseId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reviewer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/definitions/ApprovalState"
+        }
+      },
+      "additionalProperties": false
+    },
+    "DataClass": {
+      "type": "string",
+      "enum": [
+        "public",
+        "internal",
+        "confidential",
+        "restricted"
+      ]
+    },
+    "ExecutionLeaseId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "ExecutionLimits": {
+      "type": "object",
+      "required": [
+        "cpu_time_ms",
+        "memory_bytes",
+        "output_bytes",
+        "process_count",
+        "wall_time_ms"
+      ],
+      "properties": {
+        "cpu_time_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "memory_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "output_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "process_count": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "wall_time_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "FileAccess": {
+      "type": "string",
+      "enum": [
+        "read",
+        "write"
+      ]
+    },
+    "MemoryAccess": {
+      "type": "string",
+      "enum": [
+        "read",
+        "write"
+      ]
+    },
+    "NetworkCapability": {
+      "type": "string",
+      "enum": [
+        "none",
+        "brokered"
+      ]
+    },
+    "ObservationId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "OperationId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "OperationState": {
+      "type": "string",
+      "enum": [
+        "proposed",
+        "policy_evaluated",
+        "denied",
+        "awaiting_approval",
+        "denied_by_reviewer",
+        "expired",
+        "approved",
+        "observed_only",
+        "execution_leased",
+        "executing",
+        "completed",
+        "failed",
+        "outcome_unknown"
+      ]
+    },
+    "PolicyCheck": {
+      "type": "object",
+      "required": [
+        "check_id",
+        "layer",
+        "reason",
+        "status"
+      ],
+      "properties": {
+        "check_id": {
+          "type": "string"
+        },
+        "layer": {
+          "type": "string"
+        },
+        "observation_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ObservationId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/definitions/PolicyCheckStatus"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PolicyCheckStatus": {
+      "type": "string",
+      "enum": [
+        "passed",
+        "failed",
+        "requires_review",
+        "not_evaluated"
+      ]
+    },
+    "ProviderExecutionStatus": {
+      "type": "string",
+      "enum": [
+        "not_executed",
+        "running",
+        "completed",
+        "failed_before_side_effect",
+        "executed_with_error",
+        "outcome_unknown",
+        "simulated"
+      ]
+    },
+    "ProviderResultView": {
+      "type": "object",
+      "required": [
+        "execution_status",
+        "output"
+      ],
+      "properties": {
+        "error_kind": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "execution_status": {
+          "$ref": "#/definitions/ProviderExecutionStatus"
+        },
+        "output": {
+          "$ref": "#/definitions/SafeProviderOutput"
+        },
+        "output_hash": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Sha256Digest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason_code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ResourceClaim": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "access",
+            "classification",
+            "kind",
+            "path",
+            "root"
+          ],
+          "properties": {
+            "access": {
+              "$ref": "#/definitions/FileAccess"
+            },
+            "classification": {
+              "$ref": "#/definitions/DataClass"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "file"
+              ]
+            },
+            "path": {
+              "$ref": "#/definitions/WorkspaceRelativePath"
+            },
+            "root": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "classification",
+            "kind",
+            "method",
+            "origin"
+          ],
+          "properties": {
+            "classification": {
+              "$ref": "#/definitions/DataClass"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "network"
+              ]
+            },
+            "method": {
+              "type": "string"
+            },
+            "origin": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "classification",
+            "kind",
+            "recipients"
+          ],
+          "properties": {
+            "classification": {
+              "$ref": "#/definitions/DataClass"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "email"
+              ]
+            },
+            "recipients": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "access",
+            "key",
+            "kind",
+            "namespace"
+          ],
+          "properties": {
+            "access": {
+              "$ref": "#/definitions/MemoryAccess"
+            },
+            "key": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "memory"
+              ]
+            },
+            "namespace": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "limits",
+            "network",
+            "runtime",
+            "workspace"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "code_execution"
+              ]
+            },
+            "limits": {
+              "$ref": "#/definitions/ExecutionLimits"
+            },
+            "network": {
+              "$ref": "#/definitions/NetworkCapability"
+            },
+            "runtime": {
+              "type": "string"
+            },
+            "workspace": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "classification",
+            "content_hash",
+            "kind",
+            "source"
+          ],
+          "properties": {
+            "classification": {
+              "$ref": "#/definitions/DataClass"
+            },
+            "content_hash": {
+              "$ref": "#/definitions/Sha256Digest"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "input_inspection"
+              ]
+            },
+            "source": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "operation_id",
+            "story_id"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "evidence"
+              ]
+            },
+            "operation_id": {
+              "$ref": "#/definitions/OperationId"
+            },
+            "story_id": {
+              "$ref": "#/definitions/StoryId"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "format",
+            "kind",
+            "relative_path"
+          ],
+          "properties": {
+            "format": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "artifact"
+              ]
+            },
+            "relative_path": {
+              "$ref": "#/definitions/WorkspaceRelativePath"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "provider",
+            "redacted_summary"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "opaque_legacy"
+              ]
+            },
+            "provider": {
+              "type": "string"
+            },
+            "redacted_summary": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "SafeArgumentView": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "path"
+          ],
+          "properties": {
+            "content_hash": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Sha256Digest"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "file"
+              ]
+            },
+            "path": {
+              "$ref": "#/definitions/WorkspaceRelativePath"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "body_hash",
+            "kind",
+            "recipients",
+            "subject_hash"
+          ],
+          "properties": {
+            "body_hash": {
+              "$ref": "#/definitions/Sha256Digest"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "email"
+              ]
+            },
+            "recipients": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "subject_hash": {
+              "$ref": "#/definitions/Sha256Digest"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "method",
+            "origin"
+          ],
+          "properties": {
+            "body_hash": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Sha256Digest"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "network"
+              ]
+            },
+            "method": {
+              "type": "string"
+            },
+            "origin": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "key_hash",
+            "kind",
+            "namespace"
+          ],
+          "properties": {
+            "key_hash": {
+              "$ref": "#/definitions/Sha256Digest"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "store"
+              ]
+            },
+            "namespace": {
+              "type": "string"
+            },
+            "value_hash": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Sha256Digest"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "content_hash",
+            "kind",
+            "source"
+          ],
+          "properties": {
+            "content_hash": {
+              "$ref": "#/definitions/Sha256Digest"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "input"
+              ]
+            },
+            "source": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "runtime",
+            "script_hash"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "code"
+              ]
+            },
+            "runtime": {
+              "type": "string"
+            },
+            "script_hash": {
+              "$ref": "#/definitions/Sha256Digest"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "operation_id",
+            "story_id"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "evidence"
+              ]
+            },
+            "operation_id": {
+              "$ref": "#/definitions/OperationId"
+            },
+            "story_id": {
+              "$ref": "#/definitions/StoryId"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "format",
+            "kind",
+            "relative_path"
+          ],
+          "properties": {
+            "format": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "artifact"
+              ]
+            },
+            "relative_path": {
+              "$ref": "#/definitions/WorkspaceRelativePath"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "SafeProviderOutput": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "bytes",
+            "content_hash",
+            "kind"
+          ],
+          "properties": {
+            "bytes": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "content_hash": {
+              "$ref": "#/definitions/Sha256Digest"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "file"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "receipt_hash"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "email"
+              ]
+            },
+            "receipt_hash": {
+              "$ref": "#/definitions/Sha256Digest"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "bytes",
+            "kind",
+            "response_hash",
+            "status_code"
+          ],
+          "properties": {
+            "bytes": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "network"
+              ]
+            },
+            "response_hash": {
+              "$ref": "#/definitions/Sha256Digest"
+            },
+            "status_code": {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 0.0
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "key_hash",
+            "kind",
+            "version"
+          ],
+          "properties": {
+            "key_hash": {
+              "$ref": "#/definitions/Sha256Digest"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "store"
+              ]
+            },
+            "version": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "content_hash",
+            "kind",
+            "risk_codes"
+          ],
+          "properties": {
+            "content_hash": {
+              "$ref": "#/definitions/Sha256Digest"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "input"
+              ]
+            },
+            "risk_codes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "output_bytes",
+            "stderr_hash",
+            "stdout_hash",
+            "truncated"
+          ],
+          "properties": {
+            "exit_code": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "code"
+              ]
+            },
+            "output_bytes": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "stderr_hash": {
+              "$ref": "#/definitions/Sha256Digest"
+            },
+            "stdout_hash": {
+              "$ref": "#/definitions/Sha256Digest"
+            },
+            "truncated": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "bytes",
+            "kind",
+            "output_hash"
+          ],
+          "properties": {
+            "bytes": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "external_mcp"
+              ]
+            },
+            "output_hash": {
+              "$ref": "#/definitions/Sha256Digest"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "none"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "SessionId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "Sha256Digest": {
+      "type": "string",
+      "maxLength": 71,
+      "minLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "SideEffectState": {
+      "type": "string",
+      "enum": [
+        "not_attempted",
+        "blocked_before_execution",
+        "simulated",
+        "completed",
+        "failed_before_side_effect",
+        "executed_with_error",
+        "outcome_unknown"
+      ]
+    },
+    "StoryId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "WorkspaceRelativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))[^/\\\\:\\x00]+(?:/[^/\\\\:\\x00]+)*$"
+    }
+  }
+}

@@ -1,0 +1,333 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ResourceClaim",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "access",
+        "classification",
+        "kind",
+        "path",
+        "root"
+      ],
+      "properties": {
+        "access": {
+          "$ref": "#/definitions/FileAccess"
+        },
+        "classification": {
+          "$ref": "#/definitions/DataClass"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "file"
+          ]
+        },
+        "path": {
+          "$ref": "#/definitions/WorkspaceRelativePath"
+        },
+        "root": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "classification",
+        "kind",
+        "method",
+        "origin"
+      ],
+      "properties": {
+        "classification": {
+          "$ref": "#/definitions/DataClass"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "network"
+          ]
+        },
+        "method": {
+          "type": "string"
+        },
+        "origin": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "classification",
+        "kind",
+        "recipients"
+      ],
+      "properties": {
+        "classification": {
+          "$ref": "#/definitions/DataClass"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "email"
+          ]
+        },
+        "recipients": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "access",
+        "key",
+        "kind",
+        "namespace"
+      ],
+      "properties": {
+        "access": {
+          "$ref": "#/definitions/MemoryAccess"
+        },
+        "key": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "memory"
+          ]
+        },
+        "namespace": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "kind",
+        "limits",
+        "network",
+        "runtime",
+        "workspace"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "code_execution"
+          ]
+        },
+        "limits": {
+          "$ref": "#/definitions/ExecutionLimits"
+        },
+        "network": {
+          "$ref": "#/definitions/NetworkCapability"
+        },
+        "runtime": {
+          "type": "string"
+        },
+        "workspace": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "classification",
+        "content_hash",
+        "kind",
+        "source"
+      ],
+      "properties": {
+        "classification": {
+          "$ref": "#/definitions/DataClass"
+        },
+        "content_hash": {
+          "$ref": "#/definitions/Sha256Digest"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "input_inspection"
+          ]
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "kind",
+        "operation_id",
+        "story_id"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "evidence"
+          ]
+        },
+        "operation_id": {
+          "$ref": "#/definitions/OperationId"
+        },
+        "story_id": {
+          "$ref": "#/definitions/StoryId"
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "format",
+        "kind",
+        "relative_path"
+      ],
+      "properties": {
+        "format": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "artifact"
+          ]
+        },
+        "relative_path": {
+          "$ref": "#/definitions/WorkspaceRelativePath"
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "kind",
+        "provider",
+        "redacted_summary"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "opaque_legacy"
+          ]
+        },
+        "provider": {
+          "type": "string"
+        },
+        "redacted_summary": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  ],
+  "definitions": {
+    "DataClass": {
+      "type": "string",
+      "enum": [
+        "public",
+        "internal",
+        "confidential",
+        "restricted"
+      ]
+    },
+    "ExecutionLimits": {
+      "type": "object",
+      "required": [
+        "cpu_time_ms",
+        "memory_bytes",
+        "output_bytes",
+        "process_count",
+        "wall_time_ms"
+      ],
+      "properties": {
+        "cpu_time_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "memory_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "output_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "process_count": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "wall_time_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "FileAccess": {
+      "type": "string",
+      "enum": [
+        "read",
+        "write"
+      ]
+    },
+    "MemoryAccess": {
+      "type": "string",
+      "enum": [
+        "read",
+        "write"
+      ]
+    },
+    "NetworkCapability": {
+      "type": "string",
+      "enum": [
+        "none",
+        "brokered"
+      ]
+    },
+    "OperationId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "Sha256Digest": {
+      "type": "string",
+      "maxLength": 71,
+      "minLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "StoryId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "WorkspaceRelativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))[^/\\\\:\\x00]+(?:/[^/\\\\:\\x00]+)*$"
+    }
+  }
+}

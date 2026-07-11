@@ -1,0 +1,611 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "StoryEvent",
+  "type": "object",
+  "required": [
+    "event_hash",
+    "event_id",
+    "event_type",
+    "obs_id",
+    "payload",
+    "recorded_at",
+    "sequence",
+    "session_id",
+    "story_id"
+  ],
+  "properties": {
+    "event_hash": {
+      "$ref": "#/definitions/Sha256Digest"
+    },
+    "event_id": {
+      "$ref": "#/definitions/EventId"
+    },
+    "event_type": {
+      "$ref": "#/definitions/StoryEventKind"
+    },
+    "obs_id": {
+      "$ref": "#/definitions/ObservationId"
+    },
+    "operation_id": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/OperationId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "payload": {
+      "$ref": "#/definitions/StoryEventPayload"
+    },
+    "previous_hash": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/Sha256Digest"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "provider": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/EventCode"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "recorded_at": {
+      "type": "string"
+    },
+    "sequence": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0.0
+    },
+    "session_id": {
+      "$ref": "#/definitions/SessionId"
+    },
+    "story_id": {
+      "$ref": "#/definitions/StoryId"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "ApprovalId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "ApprovalState": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "approved",
+        "leased",
+        "consumed",
+        "denied",
+        "expired",
+        "revoked"
+      ]
+    },
+    "EventCode": {
+      "type": "string"
+    },
+    "EventId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "EvidenceStatus": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "verified",
+        "incomplete",
+        "invalid"
+      ]
+    },
+    "ObservationId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "OperationId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "PolicyDecision": {
+      "type": "string",
+      "enum": [
+        "allowed",
+        "denied",
+        "requires_review"
+      ]
+    },
+    "SessionId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "Sha256Digest": {
+      "type": "string",
+      "maxLength": 71,
+      "minLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "SideEffectState": {
+      "type": "string",
+      "enum": [
+        "not_attempted",
+        "blocked_before_execution",
+        "simulated",
+        "completed",
+        "failed_before_side_effect",
+        "executed_with_error",
+        "outcome_unknown"
+      ]
+    },
+    "StoryEventKind": {
+      "type": "string",
+      "enum": [
+        "operation_proposed",
+        "policy_decision",
+        "approval_lifecycle",
+        "provider_execution",
+        "model_call",
+        "tool_proposal",
+        "causal_link",
+        "evidence_verification",
+        "input_consumed",
+        "sandbox_decision",
+        "monitor_observation"
+      ]
+    },
+    "StoryEventPayload": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "action",
+            "argument_hash",
+            "kind",
+            "provider",
+            "resource_claim_hash"
+          ],
+          "properties": {
+            "action": {
+              "$ref": "#/definitions/EventCode"
+            },
+            "argument_hash": {
+              "$ref": "#/definitions/Sha256Digest"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "operation_proposed"
+              ]
+            },
+            "provider": {
+              "$ref": "#/definitions/EventCode"
+            },
+            "resource_claim_hash": {
+              "$ref": "#/definitions/Sha256Digest"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "decision",
+            "kind",
+            "policy_snapshot_hash",
+            "reason_code"
+          ],
+          "properties": {
+            "decision": {
+              "$ref": "#/definitions/PolicyDecision"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "policy_decision"
+              ]
+            },
+            "policy_snapshot_hash": {
+              "$ref": "#/definitions/Sha256Digest"
+            },
+            "reason_code": {
+              "$ref": "#/definitions/EventCode"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "approval_id",
+            "kind",
+            "state"
+          ],
+          "properties": {
+            "approval_id": {
+              "$ref": "#/definitions/ApprovalId"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "approval_lifecycle"
+              ]
+            },
+            "reviewer_id_hash": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Sha256Digest"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "state": {
+              "$ref": "#/definitions/ApprovalState"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "execution_status",
+            "kind",
+            "side_effect_state"
+          ],
+          "properties": {
+            "execution_status": {
+              "$ref": "#/definitions/EventCode"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "provider_execution"
+              ]
+            },
+            "output_hash": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Sha256Digest"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "receipt_hash": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Sha256Digest"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "side_effect_state": {
+              "$ref": "#/definitions/SideEffectState"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "content_bytes",
+            "content_hash",
+            "kind",
+            "model_call_id",
+            "phase",
+            "risk_codes"
+          ],
+          "properties": {
+            "content_bytes": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "content_hash": {
+              "$ref": "#/definitions/Sha256Digest"
+            },
+            "filter_state": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventCode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "forwarded": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "model_call"
+              ]
+            },
+            "model_call_id": {
+              "$ref": "#/definitions/EventCode"
+            },
+            "model_id": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventCode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "phase": {
+              "$ref": "#/definitions/EventCode"
+            },
+            "proposal_count": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "risk_codes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/EventCode"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "action",
+            "argument_hash",
+            "kind",
+            "proposal_id",
+            "provider"
+          ],
+          "properties": {
+            "action": {
+              "$ref": "#/definitions/EventCode"
+            },
+            "argument_hash": {
+              "$ref": "#/definitions/Sha256Digest"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "tool_proposal"
+              ]
+            },
+            "proposal_id": {
+              "$ref": "#/definitions/EventCode"
+            },
+            "provider": {
+              "$ref": "#/definitions/EventCode"
+            },
+            "upstream_tool_call_id": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventCode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "candidate_count",
+            "kind",
+            "status"
+          ],
+          "properties": {
+            "candidate_count": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "causal_link"
+              ]
+            },
+            "proposal_id": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventCode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "reason_code": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventCode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "status": {
+              "$ref": "#/definitions/EventCode"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "candidate_chain_head",
+            "candidate_story_version",
+            "claim_count",
+            "error_codes",
+            "event_chain_verified",
+            "kind",
+            "report_claims_verified",
+            "status",
+            "verifier_version"
+          ],
+          "properties": {
+            "candidate_chain_head": {
+              "$ref": "#/definitions/Sha256Digest"
+            },
+            "candidate_story_version": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "claim_count": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "error_codes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/EventCode"
+              }
+            },
+            "event_chain_verified": {
+              "type": "boolean"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "evidence_verification"
+              ]
+            },
+            "report_claims_verified": {
+              "type": "boolean"
+            },
+            "status": {
+              "$ref": "#/definitions/EvidenceStatus"
+            },
+            "verifier_version": {
+              "$ref": "#/definitions/EventCode"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "asset_id",
+            "content_hash",
+            "kind"
+          ],
+          "properties": {
+            "asset_id": {
+              "$ref": "#/definitions/EventCode"
+            },
+            "content_hash": {
+              "$ref": "#/definitions/Sha256Digest"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "input_consumed"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "isolation_state",
+            "kind",
+            "profile_hash"
+          ],
+          "properties": {
+            "isolation_state": {
+              "$ref": "#/definitions/EventCode"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "sandbox_decision"
+              ]
+            },
+            "profile_hash": {
+              "$ref": "#/definitions/Sha256Digest"
+            },
+            "reason_code": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventCode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "baseline_disposition",
+            "kind",
+            "shadow_decision"
+          ],
+          "properties": {
+            "baseline_disposition": {
+              "$ref": "#/definitions/EventCode"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "monitor_observation"
+              ]
+            },
+            "shadow_decision": {
+              "$ref": "#/definitions/PolicyDecision"
+            },
+            "simulated_effect_hash": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Sha256Digest"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "StoryId": {
+      "type": "string",
+      "format": "uuid"
+    }
+  }
+}

@@ -2,8 +2,14 @@ use std::{fs, path::Path};
 
 use runwarden_kernel::artifact::ArtifactManifest;
 use runwarden_kernel::authority::ApprovalRecord;
+use runwarden_kernel::bundle::StoryBundleManifest;
 use runwarden_kernel::evidence::TraceEvent;
 use runwarden_kernel::manifest::{AssessmentManifest, SessionManifest};
+use runwarden_kernel::operation::SecurityOperation;
+use runwarden_kernel::resource::ResourceClaim;
+use runwarden_kernel::session::AuthoritySnapshot;
+use runwarden_kernel::story::{SecurityStory, StoryEvidenceView, StoryReplayFrame};
+use runwarden_kernel::trace::StoryEvent;
 use runwarden_kernel::{
     OperationResult, ProviderCall, ProviderContract, ProviderManifest, ProviderOutcome,
 };
@@ -13,6 +19,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out_dir = Path::new("schemas");
     fs::create_dir_all(out_dir)?;
 
+    write_schema(
+        out_dir.join("security-story.schema.json"),
+        schema_for!(SecurityStory),
+    )?;
+    write_schema(
+        out_dir.join("security-operation.schema.json"),
+        schema_for!(SecurityOperation),
+    )?;
+    write_schema(
+        out_dir.join("story-event.schema.json"),
+        schema_for!(StoryEvent),
+    )?;
+    write_schema(
+        out_dir.join("resource-claim.schema.json"),
+        schema_for!(ResourceClaim),
+    )?;
+    write_schema(
+        out_dir.join("authority-snapshot.schema.json"),
+        schema_for!(AuthoritySnapshot),
+    )?;
+    write_schema(
+        out_dir.join("story-bundle-manifest.schema.json"),
+        schema_for!(StoryBundleManifest),
+    )?;
+    write_schema(
+        out_dir.join("story-replay-frame.schema.json"),
+        schema_for!(StoryReplayFrame),
+    )?;
+    write_schema(
+        out_dir.join("story-evidence-view.schema.json"),
+        schema_for!(StoryEvidenceView),
+    )?;
     write_schema(
         out_dir.join("provider-call.schema.json"),
         schema_for!(ProviderCall),

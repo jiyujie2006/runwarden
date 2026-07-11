@@ -85,8 +85,9 @@ impl EventCode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, JsonSchema)]
-#[schemars(with = "String")]
-pub struct Sha256Digest(String);
+pub struct Sha256Digest(
+    #[schemars(length(equal = 71), regex(pattern = r"^sha256:[0-9a-f]{64}$"))] String,
+);
 
 impl TryFrom<String> for Sha256Digest {
     type Error = String;

@@ -1,0 +1,163 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "StoryBundleManifest",
+  "type": "object",
+  "required": [
+    "bundle_id",
+    "chain_head",
+    "created_at",
+    "files",
+    "final_frame_hash",
+    "git_sha",
+    "key_id",
+    "run_mode",
+    "scenario_id",
+    "schema_version",
+    "signature_algorithm",
+    "source_dirty",
+    "story_id",
+    "story_version",
+    "verification"
+  ],
+  "properties": {
+    "bundle_id": {
+      "type": "string"
+    },
+    "chain_head": {
+      "$ref": "#/definitions/Sha256Digest"
+    },
+    "created_at": {
+      "type": "string"
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/BundleFileDigest"
+      }
+    },
+    "final_frame_hash": {
+      "$ref": "#/definitions/Sha256Digest"
+    },
+    "git_sha": {
+      "type": "string"
+    },
+    "key_id": {
+      "type": "string"
+    },
+    "run_mode": {
+      "$ref": "#/definitions/RunMode"
+    },
+    "scenario_id": {
+      "type": "string"
+    },
+    "schema_version": {
+      "$ref": "#/definitions/SchemaVersion"
+    },
+    "signature_algorithm": {
+      "type": "string"
+    },
+    "source_dirty": {
+      "type": "boolean"
+    },
+    "story_id": {
+      "$ref": "#/definitions/StoryId"
+    },
+    "story_version": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0.0
+    },
+    "verification": {
+      "$ref": "#/definitions/BundleVerificationSummary"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "BundleFileDigest": {
+      "type": "object",
+      "required": [
+        "bytes",
+        "relative_path",
+        "sha256"
+      ],
+      "properties": {
+        "bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "relative_path": {
+          "$ref": "#/definitions/WorkspaceRelativePath"
+        },
+        "sha256": {
+          "$ref": "#/definitions/Sha256Digest"
+        }
+      },
+      "additionalProperties": false
+    },
+    "BundleVerificationSummary": {
+      "type": "object",
+      "required": [
+        "event_chain_verified",
+        "evidence_status",
+        "report_claims_verified"
+      ],
+      "properties": {
+        "event_chain_verified": {
+          "type": "boolean"
+        },
+        "evidence_status": {
+          "$ref": "#/definitions/EvidenceStatus"
+        },
+        "report_claims_verified": {
+          "type": "boolean"
+        },
+        "scenario_assertions_verified": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "EvidenceStatus": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "verified",
+        "incomplete",
+        "invalid"
+      ]
+    },
+    "RunMode": {
+      "type": "string",
+      "enum": [
+        "live",
+        "deterministic",
+        "recorded"
+      ]
+    },
+    "SchemaVersion": {
+      "type": "string",
+      "maxLength": 43,
+      "minLength": 5,
+      "pattern": "^1\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)$"
+    },
+    "Sha256Digest": {
+      "type": "string",
+      "maxLength": 71,
+      "minLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "StoryId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "WorkspaceRelativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))[^/\\\\:\\x00]+(?:/[^/\\\\:\\x00]+)*$"
+    }
+  }
+}
