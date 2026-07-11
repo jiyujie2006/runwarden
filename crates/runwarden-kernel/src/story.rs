@@ -7,7 +7,7 @@ use crate::contracts::PolicyDecision;
 use crate::evidence::hex_sha256;
 use crate::operation::{OperationState, SecurityOperation, SideEffectState};
 use crate::session::AuthoritySnapshot;
-use crate::trace::{StoryEventKind, canonical_json_v1};
+use crate::trace::{StoryEvent, StoryEventKind, canonical_json_v1};
 
 pub const SECURITY_STORY_SCHEMA_VERSION: &str = "1.0.0";
 
@@ -506,5 +506,66 @@ impl StoryReplayFrame {
             "sha256:{}",
             hex_sha256(&canonical_json_v1(&serde_json::to_value(material)?)),
         ))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StoryEvidenceView {
+    pub story: SecurityStory,
+    pub events: Vec<StoryEvent>,
+    pub replay_frames: Vec<StoryReplayFrame>,
+}
+
+impl StoryEvidenceView {
+    pub fn verify_structure(&self) -> Result<(), String> {
+        if self.events.len() != self.replay_frames.len() {
+            return Err("story evidence must contain one replay frame per event".to_string());
+        }
+        if self.story.event_count != self.events.len() as u64 {
+            return Err("story event count does not match exported events".to_string());
+        }
+
+        let mut previous_event_hash: Option<&str> = None;
+        let mut previous_frame_hash: Option<&str> = None;
+        for (index, (event, frame)) in self
+            .events
+            .iter()
+            .zip(self.replay_frames.iter())
+            .enumerate()
+        {
+            let expected_sequence = index as u64 + 1;
+            if event.sequence != expected_sequence || frame.sequence != expected_sequence {
+                return Err("story event and replay frame sequences must be contiguous".to_string());
+            }
+            if event.story_id != self.story.story_id
+                || event.session_id != self.story.authority.session_id
+                || frame.story.story_id != self.story.story_id
+                || frame.story.authority.session_id != self.story.authority.session_id
+            {
+                return Err("story evidence contains mismatched story or session ids".to_string());
+            }
+            event.verify()?;
+            if event.previous_hash.as_ref().map(|hash| hash.as_str()) != previous_event_hash {
+                return Err("story event chain is not contiguous".to_string());
+            }
+            frame.verify()?;
+            if frame.event_hash != event.event_hash() {
+                return Err("replay frame event hash does not match sealed event".to_string());
+            }
+            if frame.previous_frame_hash.as_deref() != previous_frame_hash {
+                return Err("replay frame chain is not contiguous".to_string());
+            }
+
+            previous_event_hash = Some(event.event_hash());
+            previous_frame_hash = Some(frame.frame_hash.as_str());
+        }
+
+        if let Some(final_frame) = self.replay_frames.last()
+            && final_frame.story != self.story
+        {
+            return Err("final replay frame story does not match exported story".to_string());
+        }
+        Ok(())
     }
 }

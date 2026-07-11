@@ -46,6 +46,19 @@ historical events or an embedded export signature. `StoryReplayFrame` binds the
 current aggregate snapshot and frame metadata with Canonical JSON v1 hashes;
 ordered sealed events and persistence remain separate trace/journal contracts.
 
+Full provider arguments are private operation material. A story event is built
+only from its Rust allowlisted payload variant and is redacted before hashing:
+argument bytes are represented only by `argument_hash`, while output and other
+content are represented by their typed hashes. Raw prompts, arguments, headers,
+queries, bodies, outputs, and arbitrary JSON objects cannot enter the sealed
+story-event payload.
+
+`StoryEvidenceView` transfers the aggregate story, ordered sealed events, and
+one replay frame per event. Export verification recomputes each event from the
+same canonical RFC3339 material, verifies its event and frame chains, and
+requires every replay frame to retain the same unmodified event hash. Export
+does not redact again or replace hashes after sealing.
+
 Scenario replay trace payloads include the provider call arguments that led to
 the cited decision so judges can inspect the attempted target without executing
 the provider.
