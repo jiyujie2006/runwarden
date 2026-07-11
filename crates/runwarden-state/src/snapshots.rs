@@ -425,6 +425,7 @@ fn load_approval(
         String,
         String,
         String,
+        String,
         Option<String>,
         Option<String>,
         String,
@@ -432,8 +433,8 @@ fn load_approval(
     );
     let raw: Option<RawApproval> = connection
         .query_row(
-            r#"SELECT approval_id, state, binding_hash, reviewer, reason,
-                      expires_at, lease_id
+            r#"SELECT approval_id, state, binding_json, binding_hash,
+                      reviewer, reason, expires_at, lease_id
                FROM approvals
                WHERE story_id = ?1 AND session_id = ?2 AND operation_id = ?3"#,
             params![
@@ -450,15 +451,37 @@ fn load_approval(
                     row.get(4)?,
                     row.get(5)?,
                     row.get(6)?,
+                    row.get(7)?,
                 ))
             },
         )
         .optional()?;
     raw.map(
-        |(approval_id, state, binding_hash, reviewer, reason, expires_at, lease_id)| {
+        |(
+            approval_id,
+            state,
+            binding_json,
+            binding_hash,
+            reviewer,
+            reason,
+            expires_at,
+            lease_id,
+        )| {
             let approval_id: ApprovalId = persisted_string(approval_id, "approval id")?;
             let state: ApprovalState = persisted_enum(state, "approval state")?;
-            let _: Sha256Digest = persisted_string(binding_hash.clone(), "approval binding hash")?;
+            let binding: serde_json::Value = persisted_json(&binding_json, "approval binding")?;
+            if canonical_json(&binding)? != binding_json {
+                return Err(JournalError::Integrity(
+                    "stored approval binding is not canonical".to_owned(),
+                ));
+            }
+            let stored_binding_hash: Sha256Digest =
+                persisted_string(binding_hash.clone(), "approval binding hash")?;
+            if Sha256Digest::from_bytes(binding_json.as_bytes()) != stored_binding_hash {
+                return Err(JournalError::Integrity(
+                    "stored approval binding hash does not match its binding".to_owned(),
+                ));
+            }
             let parsed_expiry = persisted_time(&expires_at, "approval expiry")?;
             if format_time(parsed_expiry)? != expires_at {
                 return Err(JournalError::Integrity(
