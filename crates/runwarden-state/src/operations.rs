@@ -609,9 +609,12 @@ fn validate_retry_binding(
     if matches {
         Ok(())
     } else {
-        Err(JournalError::Integrity(
-            "invocation retry binding does not match the durable operation".to_owned(),
-        ))
+        Err(JournalError::InvocationConflict {
+            operation_id: persisted_string(
+                stored.operation_id.clone(),
+                "conflicting invocation operation id",
+            )?,
+        })
     }
 }
 

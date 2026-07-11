@@ -1168,6 +1168,9 @@ pub mod evidence {
 
 pub mod external;
 
+mod projection;
+pub use projection::{SafeArgumentProjectionError, project_safe_arguments};
+
 pub mod catalog {
     use runwarden_kernel::kernel::ProviderRegistry;
     use runwarden_kernel::{

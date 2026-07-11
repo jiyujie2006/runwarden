@@ -30,6 +30,29 @@ Snapshots, approvals, events, frames, recovery candidates, and JSONL export use
 typed redacted views or hashes. Recovery errors and reason codes must not carry
 raw provider exceptions or private input.
 
+The runtime reads an operation and its persisted policy decision through the
+typed `StateStore::operation_runtime_snapshot` query. One SQLite snapshot
+verifies the complete story evidence chain and rejects a proposed operation
+with a decision or any post-policy operation missing one; runtime and UI code
+do not infer allow from state names or check text. The narrower
+`StateStore::policy_decision` query delegates to the same verified snapshot.
+
+The native runtime builds reviewer bindings with
+`DurableApprovalBinding::from_operation`. The compatibility structure remains
+public, so `create_approval` still independently derives and validates the
+expected classification and risk tags before accepting it. If a policy write
+commits `AwaitingApproval` before the approval response is observed, a retry
+first reads the operation-bound approval and creates one only when it is
+absent. A concurrent insert or commit-then-response-loss is accepted only
+after the exact durable binding can be read back. Reusing an `InvocationKey`
+with different provider arguments returns the identity of the conflicting
+operation and never starts a second proposal.
+
+At runtime startup, active instance, verified story, and live session are
+loaded from one deferred SQLite snapshot using only the SHA-256 hash of the
+inherited process token. The raw token is neither serialized nor retained in
+the runtime context.
+
 ## Authorization and execution boundaries
 
 Lease acquisition is an immediate transaction. It verifies the complete story

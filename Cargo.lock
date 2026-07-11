@@ -1024,6 +1024,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "runwarden-runtime"
+version = "0.1.0"
+dependencies = [
+ "runwarden-kernel",
+ "runwarden-providers",
+ "runwarden-state",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "time",
+ "uuid",
+]
+
+[[package]]
 name = "runwarden-state"
 version = "0.1.0"
 dependencies = [

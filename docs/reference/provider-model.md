@@ -109,3 +109,10 @@ queries, and store values remain private arguments and are additionally bound
 by the execution permit's canonical argument digest. Executors must rederive
 the same claim from those private arguments and require exact equality with the
 permit-bound claim before any side effect.
+
+`runwarden-providers::project_safe_arguments` is the shared Rust projection
+used before durable proposal storage. It copies only typed non-secret claim
+metadata and replaces file content, email subject/body, network body, store
+key/value, and code source with SHA-256 digests. Claim/argument confusion and
+opaque legacy claims fail instead of falling back to raw JSON. Runtime, MCP,
+and browser code must not recreate this redaction mapping.

@@ -9,6 +9,7 @@ members = [
   "crates/runwarden-llm-proxy",
   "crates/runwarden-anomaly",
   "crates/runwarden-state",
+  "crates/runwarden-runtime",
 ]
 
 [workspace.package]

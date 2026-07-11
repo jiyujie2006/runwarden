@@ -47,6 +47,13 @@ pub struct ActiveDemo {
     pub heartbeat_at: OffsetDateTime,
 }
 
+#[derive(Debug, Clone)]
+pub struct ActiveContextSnapshot {
+    pub active: ActiveDemo,
+    pub story: SecurityStory,
+    pub session: crate::SessionRecord,
+}
+
 pub(crate) struct StoredStory {
     pub story: SecurityStory,
     pub version: u64,
@@ -398,6 +405,104 @@ impl StateStore {
             instance_token_hash: raw.instance_token_hash,
             heartbeat_at,
         }))
+    }
+
+    /// Load and validate the active instance, verified story, and live session
+    /// from one deferred SQLite snapshot. The caller supplies only the hash of
+    /// its inherited process token and the current trusted time.
+    pub fn active_context_snapshot(
+        &self,
+        expected_instance_token_hash: &str,
+        now: OffsetDateTime,
+    ) -> Result<ActiveContextSnapshot, JournalError> {
+        validate_digest("expected instance token hash", expected_instance_token_hash)?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
+        let raw: RawActiveDemo = transaction
+            .query_row(
+                r#"SELECT singleton, instance_id, story_id, session_id,
+                          process_id, host_id, instance_token_hash, heartbeat_at
+                   FROM active_instances"#,
+                [],
+                |row| {
+                    Ok(RawActiveDemo {
+                        singleton: row.get(0)?,
+                        instance_id: row.get(1)?,
+                        story_id: row.get(2)?,
+                        session_id: row.get(3)?,
+                        process_id: row.get(4)?,
+                        host_id: row.get(5)?,
+                        instance_token_hash: row.get(6)?,
+                        heartbeat_at: row.get(7)?,
+                    })
+                },
+            )
+            .optional()?
+            .ok_or_else(|| JournalError::NotFound {
+                entity: "active_instance",
+                id: "singleton".to_owned(),
+            })?;
+        if raw.singleton != 1 {
+            return Err(JournalError::Integrity(
+                "active instance singleton key is not 1".to_owned(),
+            ));
+        }
+        validate_nonempty("instance id", &raw.instance_id)?;
+        validate_nonempty("host id", &raw.host_id)?;
+        validate_digest("instance token hash", &raw.instance_token_hash)?;
+        if raw.instance_token_hash != expected_instance_token_hash {
+            return Err(JournalError::Integrity(
+                "active instance token does not match trusted startup".to_owned(),
+            ));
+        }
+        let story_id: StoryId = persisted_string(raw.story_id, "active instance story id")?;
+        let session_id = persisted_string(raw.session_id, "active instance session id")?;
+        let process_id = u32::try_from(raw.process_id).map_err(|_| {
+            JournalError::Integrity("stored active instance process id is invalid".to_owned())
+        })?;
+        if process_id == 0 {
+            return Err(JournalError::Integrity(
+                "stored active instance process id is zero".to_owned(),
+            ));
+        }
+        let heartbeat_at = persisted_time(&raw.heartbeat_at, "active instance heartbeat")?;
+        if format_time(heartbeat_at)? != raw.heartbeat_at || heartbeat_at > now {
+            return Err(JournalError::Integrity(
+                "stored active instance heartbeat is noncanonical or in the future".to_owned(),
+            ));
+        }
+        let evidence = load_story_evidence_tx(&transaction, story_id)?;
+        evidence
+            .verify_structure()
+            .map_err(JournalError::Integrity)?;
+        let session = load_session_record(&transaction, session_id)?;
+        if session.record.story_id != story_id
+            || evidence.story.authority.session_id != session_id
+            || session.record.authority != evidence.story.authority
+            || !session.active
+            || session.record.authority.authz_state != "active"
+            || heartbeat_at >= session.record.expires_at
+            || now >= session.record.expires_at
+        {
+            return Err(JournalError::Integrity(
+                "active instance story, session, authority, or lifetime is inconsistent".to_owned(),
+            ));
+        }
+        let active = ActiveDemo {
+            instance_id: raw.instance_id,
+            story_id,
+            session_id,
+            process_id,
+            host_id: raw.host_id,
+            instance_token_hash: raw.instance_token_hash,
+            heartbeat_at,
+        };
+        transaction.commit()?;
+        Ok(ActiveContextSnapshot {
+            active,
+            story: evidence.story,
+            session: session.record,
+        })
     }
 }
 

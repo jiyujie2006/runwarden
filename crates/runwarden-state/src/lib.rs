@@ -17,7 +17,8 @@ mod stories;
 pub use approvals::{
     ApprovalDecisionInput, ApprovalRecordV1, DurableApprovalBinding, ExecutionLease,
     ExecutionResultInput, ExecutionStarted, ExpireApprovalInput, LeaseAuthorization, LeaseRequest,
-    MarkOutcomeUnknownInput, NewApproval, OneShotConsumption, ReleaseLeaseInput, ReviewerDecision,
+    MarkOutcomeUnknownInput, NewApproval, OneShotConsumption, OperationRuntimeSnapshot,
+    ReleaseLeaseInput, ReviewerDecision,
 };
 pub use events::{CommittedStoryEvent, NewStoryEvent};
 pub use operations::{
@@ -26,7 +27,7 @@ pub use operations::{
 pub use recovery::RecoveryCandidate;
 pub use sessions::SessionRecord;
 pub use store::{StateStore, StoreDiagnostics};
-pub use stories::{ActiveDemo, DemoActivation, StoryStatusUpdate};
+pub use stories::{ActiveContextSnapshot, ActiveDemo, DemoActivation, StoryStatusUpdate};
 
 use serde::{Serialize, de::DeserializeOwned};
 use time::{OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
@@ -114,6 +115,10 @@ pub enum JournalError {
         id: String,
         expected: u64,
         actual: u64,
+    },
+    #[error("invocation binding conflicts with durable operation {operation_id}")]
+    InvocationConflict {
+        operation_id: runwarden_kernel::story::OperationId,
     },
     #[error("invalid {entity} transition from {from} to {to}")]
     InvalidTransition {

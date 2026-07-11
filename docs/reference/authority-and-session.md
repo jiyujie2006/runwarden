@@ -102,6 +102,14 @@ larger or negative values, floating-point and string forms, null, and a missing
 field. Approval expiry must be later than creation and no later than the
 immutable session expiry.
 
+The native runtime constructs this value with
+`DurableApprovalBinding::from_operation`. The compatibility data structure
+remains public, but approval persistence independently derives and validates
+classification and sorted risk tags from the frozen typed claim, so
+caller-supplied fields cannot grant authority. The builder also requires the
+operation's story/session/provider/action/hashes and policy snapshot to match
+the server-owned authority before returning.
+
 Creating an approval requires the operation to have a stored
 `RequiresReview` policy decision and state `AwaitingApproval`. Reviewer and
 expiry transitions use versioned compare-and-swap on both records in one

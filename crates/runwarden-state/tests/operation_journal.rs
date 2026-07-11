@@ -83,7 +83,11 @@ fn invocation_retry_is_idempotent_and_binding_changes_fail_closed() {
         .store
         .create_operation(fixture.operation(2, "send_changed"))
         .unwrap_err();
-    assert!(matches!(mismatch, JournalError::Integrity(_)));
+    assert!(matches!(
+        mismatch,
+        JournalError::InvocationConflict { operation_id }
+            if operation_id == first.operation.operation_id
+    ));
     assert!(!mismatch.to_string().contains(PRIVATE_MARKER));
 }
 

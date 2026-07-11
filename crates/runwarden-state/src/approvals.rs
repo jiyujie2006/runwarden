@@ -44,6 +44,34 @@ pub struct DurableApprovalBinding {
     pub maximum_consumptions: OneShotConsumption,
 }
 
+impl DurableApprovalBinding {
+    /// Build the only approval binding shape accepted by the durable journal.
+    /// Callers supply no risk tags or classification; both are derived from
+    /// the frozen typed resource claim.
+    pub fn from_operation(
+        operation: &SecurityOperation,
+        authority: &runwarden_kernel::session::AuthoritySnapshot,
+    ) -> Result<Self, JournalError> {
+        let binding = Self {
+            story_id: operation.story_id,
+            session_id: operation.session_id,
+            operation_id: operation.operation_id,
+            actor_id: authority.actor_id.clone(),
+            authz_id: authority.authz_id.clone(),
+            provider: operation.provider.clone(),
+            action: operation.action.clone(),
+            resource_claim_hash: operation.resource_claim.digest(),
+            argument_hash: operation.argument_hash.clone(),
+            data_classification: resource_classification(&operation.resource_claim),
+            risk_tags: resource_risk_tags(&operation.resource_claim),
+            policy_snapshot_hash: operation.policy_snapshot_hash.clone(),
+            maximum_consumptions: OneShotConsumption::new(),
+        };
+        validate_binding_context(&binding, operation, authority)?;
+        Ok(binding)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OneShotConsumption(());
 
@@ -98,6 +126,12 @@ pub struct ApprovalRecordV1 {
     pub expires_at: OffsetDateTime,
     pub lease_id: Option<ExecutionLeaseId>,
     pub version: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct OperationRuntimeSnapshot {
+    pub operation: SecurityOperation,
+    pub policy_decision: Option<PolicyDecision>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -414,6 +448,68 @@ impl StateStore {
         validate_approval_operation_state(&stored.record, &operation)?;
         transaction.commit()?;
         Ok(Some(stored.record))
+    }
+
+    /// Return the typed persisted policy decision after verifying the story
+    /// evidence chain and the operation-state/decision relationship.
+    pub fn policy_decision(
+        &self,
+        operation_id: OperationId,
+    ) -> Result<Option<PolicyDecision>, JournalError> {
+        Ok(self
+            .operation_runtime_snapshot(operation_id)?
+            .policy_decision)
+    }
+
+    /// Load the display-safe operation and its event-anchored policy decision
+    /// from one verified SQLite snapshot.
+    pub fn operation_runtime_snapshot(
+        &self,
+        operation_id: OperationId,
+    ) -> Result<OperationRuntimeSnapshot, JournalError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
+        let operation = load_operation_tx(&transaction, operation_id)?;
+        let evidence = load_story_evidence_tx(&transaction, operation.story_id)?;
+        evidence
+            .verify_structure()
+            .map_err(JournalError::Integrity)?;
+        let decision = load_policy_decision(&transaction, operation_id)?;
+        let mut event_decision = None;
+        for event in evidence
+            .events
+            .iter()
+            .filter(|event| event.operation_id == Some(operation_id))
+        {
+            if let StoryEventPayload::PolicyDecision {
+                decision: observed,
+                policy_snapshot_hash,
+                ..
+            } = event.payload()
+                && (event_decision.replace(observed.clone()).is_some()
+                    || policy_snapshot_hash != &operation.policy_snapshot_hash)
+            {
+                return Err(JournalError::Integrity(
+                    "operation has duplicate or mismatched policy evidence".to_owned(),
+                ));
+            }
+        }
+        if operation.state == OperationState::Proposed {
+            if decision.is_some() || event_decision.is_some() {
+                return Err(JournalError::Integrity(
+                    "proposed operation unexpectedly has policy evidence".to_owned(),
+                ));
+            }
+        } else if decision.is_none() || decision != event_decision {
+            return Err(JournalError::Integrity(
+                "post-policy operation has missing or mismatched policy evidence".to_owned(),
+            ));
+        }
+        transaction.commit()?;
+        Ok(OperationRuntimeSnapshot {
+            operation,
+            policy_decision: decision,
+        })
     }
 
     pub fn decide_approval(
@@ -2594,7 +2690,7 @@ fn find_existing_approval(
         .map_err(Into::into)
 }
 
-fn load_policy_decision(
+pub(crate) fn load_policy_decision(
     connection: &Connection,
     operation_id: OperationId,
 ) -> Result<Option<PolicyDecision>, JournalError> {

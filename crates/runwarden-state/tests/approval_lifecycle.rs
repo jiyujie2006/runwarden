@@ -6,7 +6,6 @@ use runwarden_kernel::contracts::PolicyDecision;
 use runwarden_kernel::operation::{
     OperationState, PolicyCheck, PolicyCheckStatus, SecurityOperation, SideEffectState,
 };
-use runwarden_kernel::resource::DataClass;
 use runwarden_kernel::story::ApprovalId;
 use runwarden_kernel::trace::{Sha256Digest, StoryEventPayload, canonical_json_v1};
 use runwarden_state::{
@@ -28,7 +27,7 @@ fn review_operation(fixture: &JournalFixture, suffix: u8) -> SecurityOperation {
         .create_operation(fixture.operation(suffix, "send"))
         .unwrap()
         .operation;
-    fixture
+    let operation = fixture
         .store
         .record_policy(RecordPolicyInput {
             operation_id: operation.operation_id,
@@ -45,28 +44,22 @@ fn review_operation(fixture: &JournalFixture, suffix: u8) -> SecurityOperation {
             }],
             now: mutation_time(&fixture.story, 2),
         })
-        .unwrap()
+        .unwrap();
+    assert_eq!(
+        fixture
+            .store
+            .policy_decision(operation.operation_id)
+            .unwrap(),
+        Some(PolicyDecision::RequiresReview)
+    );
+    operation
 }
 
 fn approval_binding(
     fixture: &JournalFixture,
     operation: &SecurityOperation,
 ) -> DurableApprovalBinding {
-    DurableApprovalBinding {
-        story_id: operation.story_id,
-        session_id: operation.session_id,
-        operation_id: operation.operation_id,
-        actor_id: fixture.story.authority.actor_id.clone(),
-        authz_id: fixture.story.authority.authz_id.clone(),
-        provider: operation.provider.clone(),
-        action: operation.action.clone(),
-        resource_claim_hash: operation.resource_claim.digest(),
-        argument_hash: operation.argument_hash.clone(),
-        data_classification: Some(DataClass::Internal),
-        risk_tags: vec!["email_send".to_owned(), "network_egress".to_owned()],
-        policy_snapshot_hash: operation.policy_snapshot_hash.clone(),
-        maximum_consumptions: OneShotConsumption::new(),
-    }
+    DurableApprovalBinding::from_operation(operation, &fixture.story.authority).unwrap()
 }
 
 fn create_pending(
