@@ -264,6 +264,7 @@ impl RedactedEventPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct StoryEvent {
     pub obs_id: ObservationId,
     pub event_id: EventId,
@@ -315,7 +316,9 @@ impl StoryEvent {
     }
 
     pub fn verify(&self) -> Result<(), String> {
-        if self.event_hash == self.expected_hash() {
+        if self.event_type != self.payload.0.kind() {
+            Err("event type does not match typed payload kind".to_string())
+        } else if self.event_hash == self.expected_hash() {
             Ok(())
         } else {
             Err("event hash does not match canonical event material".to_string())

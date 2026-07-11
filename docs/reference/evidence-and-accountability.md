@@ -51,13 +51,18 @@ only from its Rust allowlisted payload variant and is redacted before hashing:
 argument bytes are represented only by `argument_hash`, while output and other
 content are represented by their typed hashes. Raw prompts, arguments, headers,
 queries, bodies, outputs, and arbitrary JSON objects cannot enter the sealed
-story-event payload.
+story-event payload. The event envelope also rejects unknown fields, and hash
+verification independently requires `event_type` to match the typed payload
+kind so a caller cannot bless a semantic mismatch by recomputing the hash.
 
 `StoryEvidenceView` transfers the aggregate story, ordered sealed events, and
 one replay frame per event. Export verification recomputes each event from the
 same canonical RFC3339 material, verifies its event and frame chains, and
-requires every replay frame to retain the same unmodified event hash. Export
-does not redact again or replace hashes after sealing.
+requires every replay frame to retain the same unmodified event hash. Each
+frame aggregate count must match its sequence, and the exported story's
+`final_event_hash` must be absent for an empty chain or exactly equal the last
+sealed event hash. Export does not redact again or replace hashes after
+sealing.
 
 Scenario replay trace payloads include the provider call arguments that led to
 the cited decision so judges can inspect the attempted target without executing

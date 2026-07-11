@@ -69,6 +69,17 @@ fn fixed_policy_event() -> StoryEvent {
     policy_event(1, 3, None, at("2026-07-10T00:00:00Z"))
 }
 
+fn rehash_exported_event(event: &mut serde_json::Value) {
+    let mut material = event.clone();
+    material
+        .as_object_mut()
+        .unwrap()
+        .remove("event_hash")
+        .unwrap();
+    event["event_hash"] =
+        serde_json::to_value(Sha256Digest::from_bytes(&canonical_json_v1(&material))).unwrap();
+}
+
 fn story(event_count: u64, final_event_hash: &str) -> SecurityStory {
     SecurityStory {
         schema_version: SchemaVersion::current(),
@@ -242,6 +253,32 @@ fn sealed_event_uses_rfc3339_hash_material_and_detects_change() {
 }
 
 #[test]
+fn event_deserialization_rejects_unknown_envelope_fields() {
+    for (field, raw_value) in [
+        ("prompt", json!("secret")),
+        ("headers", json!({"authorization": "secret"})),
+        ("extra", json!([{"query": "secret"}])),
+    ] {
+        let mut event = serde_json::to_value(fixed_policy_event()).unwrap();
+        event
+            .as_object_mut()
+            .unwrap()
+            .insert(field.to_string(), raw_value);
+        assert!(serde_json::from_value::<StoryEvent>(event).is_err());
+    }
+}
+
+#[test]
+fn verify_rejects_rehashed_event_type_payload_mismatch() {
+    let mut forged = serde_json::to_value(fixed_policy_event()).unwrap();
+    forged["event_type"] = json!("provider_execution");
+    rehash_exported_event(&mut forged);
+
+    let forged: StoryEvent = serde_json::from_value(forged).unwrap();
+    assert!(forged.verify().is_err());
+}
+
+#[test]
 fn event_hash_commits_observation_and_previous_hash() {
     let view = fixed_evidence_view();
     let second = &view.events[1];
@@ -303,4 +340,65 @@ fn evidence_view_rejects_tampered_links_and_sequence_gaps() {
     let mut frame_gap = fixed_evidence_view();
     frame_gap.replay_frames[1].sequence = 3;
     assert!(frame_gap.verify_structure().is_err());
+}
+
+#[test]
+fn evidence_view_anchors_final_event_hash_to_chain_tail() {
+    let mut mismatched = fixed_evidence_view();
+    mismatched.story.final_event_hash = Some(
+        Sha256Digest::from_bytes(b"wrong final event")
+            .as_str()
+            .to_string(),
+    );
+    mismatched.replay_frames[1] = StoryReplayFrame::seal(
+        2,
+        2,
+        mismatched.events[1].event_hash().to_string(),
+        Some(mismatched.replay_frames[0].frame_hash.clone()),
+        at("2026-07-10T00:00:01Z"),
+        mismatched.story.clone(),
+    )
+    .unwrap();
+    assert!(mismatched.verify_structure().is_err());
+
+    let placeholder_hash = Sha256Digest::from_bytes(b"no event");
+    let mut empty_story = story(0, placeholder_hash.as_str());
+    let mut empty = StoryEvidenceView {
+        story: empty_story.clone(),
+        events: Vec::new(),
+        replay_frames: Vec::new(),
+    };
+    assert!(empty.verify_structure().is_err());
+
+    empty_story.final_event_hash = None;
+    empty.story = empty_story;
+    empty.verify_structure().unwrap();
+}
+
+#[test]
+fn evidence_view_rejects_resealed_frame_with_wrong_aggregate_event_count() {
+    let mut mismatched = fixed_evidence_view();
+    let mut first_story = mismatched.replay_frames[0].story.clone();
+    first_story.event_count = 2;
+    let first_frame = StoryReplayFrame::seal(
+        1,
+        1,
+        mismatched.events[0].event_hash().to_string(),
+        None,
+        at("2026-07-10T00:00:00Z"),
+        first_story,
+    )
+    .unwrap();
+    let second_frame = StoryReplayFrame::seal(
+        2,
+        2,
+        mismatched.events[1].event_hash().to_string(),
+        Some(first_frame.frame_hash.clone()),
+        at("2026-07-10T00:00:01Z"),
+        mismatched.story.clone(),
+    )
+    .unwrap();
+    mismatched.replay_frames = vec![first_frame, second_frame];
+
+    assert!(mismatched.verify_structure().is_err());
 }

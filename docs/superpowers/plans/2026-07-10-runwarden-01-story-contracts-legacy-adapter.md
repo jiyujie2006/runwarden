@@ -1506,6 +1506,7 @@ Append to `trace.rs`:
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct StoryEvent {
     pub obs_id: ObservationId,
     pub event_id: EventId,
@@ -1556,7 +1557,9 @@ impl StoryEvent {
     }
 
     pub fn verify(&self) -> Result<(), String> {
-        if self.event_hash == self.expected_hash() {
+        if self.event_type != self.payload.0.kind() {
+            Err("event type does not match typed payload kind".to_string())
+        } else if self.event_hash == self.expected_hash() {
             Ok(())
         } else {
             Err("event hash does not match canonical event material".to_string())
@@ -1602,7 +1605,9 @@ Implement `StoryEventPayload::kind` as an exhaustive match. The dedicated
 guarantees the hash bytes match exported JSON regardless of `time` crate
 human-readable feature flags. `zero_for_construction` is `pub(crate)` and the
 event replaces it before returning; deserialization still validates ordinary
-digests.
+digests. The event envelope rejects unknown fields, and `verify` rejects an
+`event_type` that differs from the exhaustive typed payload kind even when a
+caller has recomputed a matching canonical hash.
 
 Add the shared evidence transfer model to `story.rs` after `StoryEvent` exists:
 
@@ -1618,8 +1623,11 @@ pub struct StoryEvidenceView {
 
 `StoryEvidenceView::verify_structure` requires matching story/session ids,
 contiguous event and frame sequences, one frame per event, matching event/frame
-hashes, a valid event chain and frame chain, `story.event_count` equality, and
-the final frame story exactly equal to `story`. Assurance, bundles, scenario
+hashes, a valid event chain and frame chain, `story.event_count` equality, each
+frame aggregate's `story.event_count` equal to its frame sequence, and the final
+frame story exactly equal to `story`. It also requires
+`story.final_event_hash=None` for an empty chain and an exact match to the last
+sealed event hash for a non-empty chain. Assurance, bundles, scenario
 evaluation, API bootstrap, and WebUI sources consume this view instead of
 putting events back inside every snapshot.
 

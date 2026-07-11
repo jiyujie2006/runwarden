@@ -538,6 +538,9 @@ impl StoryEvidenceView {
             if event.sequence != expected_sequence || frame.sequence != expected_sequence {
                 return Err("story event and replay frame sequences must be contiguous".to_string());
             }
+            if frame.story.event_count != frame.sequence {
+                return Err("replay frame story event count must match frame sequence".to_string());
+            }
             if event.story_id != self.story.story_id
                 || event.session_id != self.story.authority.session_id
                 || frame.story.story_id != self.story.story_id
@@ -561,6 +564,9 @@ impl StoryEvidenceView {
             previous_frame_hash = Some(frame.frame_hash.as_str());
         }
 
+        if self.story.final_event_hash.as_deref() != previous_event_hash {
+            return Err("story final event hash does not match event chain tail".to_string());
+        }
         if let Some(final_frame) = self.replay_frames.last()
             && final_frame.story != self.story
         {
