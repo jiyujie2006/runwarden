@@ -82,6 +82,26 @@ verifier, and is zeroized after the final handle drops. The permit API is not
 an MCP/CLI input and does not accept agent-selected authority, time, budget, or
 approval material.
 
+Before that request can reach policy or permit issuance, the native provider
+path uses the Rust-owned `ResourceExtractorRegistry`. It selects an extractor
+by the canonical catalog provider id, verifies the exact action, validates a
+strict per-provider argument shape, and constructs a typed kernel
+`ResourceClaim`. Filesystem roots, store namespaces, and classification come
+only from `ResourceExtractionContext`, which the server builds from trusted
+configuration. Arguments named like policy, authority, approval, budget,
+runtime, transport, root, namespace, or classification controls fail closed.
+Unsupported provider/action pairs and unknown argument fields do not fall back
+to an opaque or guessed claim.
+
+Claim canonicalizers are exported for reuse by the corresponding native
+executor. Relative file paths have `.` components removed and reject empty or
+`..` components, platform prefixes, and backslashes; email domains alone are
+ASCII-lowercased before sorting and deduplication; network targets must be
+canonical HTTP(S) origins without userinfo; and memory/knowledge namespaces
+cannot be caller-selected. The
+permit separately commits the complete canonical argument object so data not
+present in the least-authority claim remains bound to the approved operation.
+
 Result persistence then requires executing state, the exact lease identity and
 expected operation version, and a verified start event. Only coherent
 Completed or Failed provider-result/side-effect combinations are accepted.

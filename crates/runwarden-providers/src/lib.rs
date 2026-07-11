@@ -1,4 +1,5 @@
 pub mod executor;
+pub mod resource_claims;
 
 pub mod runtime {
     use std::collections::{BTreeMap, BTreeSet};

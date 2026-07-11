@@ -1016,6 +1016,7 @@ dependencies = [
  "thiserror",
  "time",
  "unicode-normalization",
+ "url",
  "zeroize",
 ]
 

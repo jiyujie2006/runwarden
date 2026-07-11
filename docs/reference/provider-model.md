@@ -49,3 +49,31 @@ Reviewable local-business evidence is kept in the scenario fixtures:
 `path-escape-file-boundary` shows filesystem root escape denial, and
 `memory-knowledge-poisoning` shows memory/knowledge review and denial without
 network egress.
+
+## Typed Resource Claims
+
+The native runtime derives exactly one kernel `ResourceClaim` from an exact
+provider id and action before policy evaluation. The provider-specific
+extractor registry maps filesystem calls to `File`, API and browser calls to
+`Network`, email to `Email`, memory and knowledge calls to `Memory`, and input
+inspection to `InputInspection`. Unknown provider/action pairs fail closed;
+the native path does not infer authority by searching arbitrary argument-key
+names.
+
+Runwarden-owned configuration supplies filesystem roots, memory and knowledge
+namespaces, and the default data classification. Provider arguments cannot
+override those values. Policy-envelope and execution-control fields, unknown
+fields, missing required values, and values with the wrong JSON shape are
+rejected before a claim is created.
+
+Canonical claims use slash-separated validated relative file paths with `.`
+components removed; sorted,
+deduplicated email recipients with only the ASCII domain lowercased; uppercase
+HTTP methods and canonical HTTP(S) origins; non-empty store keys; and a SHA-256
+commitment to inspected input bytes with the trusted `tool_input` source. A
+caller-supplied input source is rejected rather than used as provenance.
+Content, request bodies, URL paths and
+queries, and store values remain private arguments and are additionally bound
+by the execution permit's canonical argument digest. Executors must rederive
+the same claim from those private arguments and require exact equality with the
+permit-bound claim before any side effect.
