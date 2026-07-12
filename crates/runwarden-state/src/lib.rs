@@ -8,6 +8,7 @@ mod approvals;
 mod events;
 mod legacy_jsonl;
 mod operations;
+mod proposals;
 mod recovery;
 mod sessions;
 pub mod snapshots;
@@ -24,6 +25,10 @@ pub use events::{CommittedStoryEvent, NewStoryEvent};
 pub use operations::{
     CreateOperationOutcome, FrozenProposalBinding, NewOperation, PrivateOperationMaterial,
     RecordPolicyInput,
+};
+pub use proposals::{
+    CausalGapReason, CausalLinkResult, CreateOperationWithProposalOutcome, ModelCallIntent,
+    ProposalLinkQuery, ProposedToolCall,
 };
 pub use recovery::RecoveryCandidate;
 pub use sessions::SessionRecord;

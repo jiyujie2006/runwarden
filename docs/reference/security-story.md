@@ -23,11 +23,29 @@ an event count and final event hash, not copied historical events.
 story's evidence state is `Pending`, through one SQLite immediate transaction.
 Legacy-derived, incomplete, invalid, and verified stories are immutable through
 this entry point. Its public payload allowlist is `ModelCall`,
-`ToolProposal`, `CausalLink`, `InputConsumed`, `SandboxDecision`, and
-`MonitorObservation`. Operation proposal, policy decision, approval lifecycle,
-provider execution, and evidence-verification events are domain-owned and are
-rejected by the public append API; their Rust state transitions append them
-through the crate-private transactional helper instead.
+`ToolProposal`, `InputConsumed`, `SandboxDecision`, and `MonitorObservation`.
+Operation proposal, causal link, policy decision, approval lifecycle, provider
+execution, and evidence-verification events are domain-owned and are rejected
+by the public append API; their Rust state transitions append them through the
+crate-private transactional helper instead.
+
+Proposal-aware operation creation appends `OperationProposed` and then one
+`CausalLink` event in the same immediate transaction as the operation,
+resource claim, and optional proposal claim. A resolved link identifies the
+internal proposal id and has candidate count one; an unresolved link carries a
+typed stable reason and the full eligible-candidate count. The operation's
+parent model id and optional upstream tool-call id are derived from the
+selected row before its invocation binding is sealed. Those display fields,
+or a standalone causal event without the reciprocal row, are not sufficient
+to prove model causality: state snapshots verify the event, proposal, and
+operation relationship together.
+
+`record_model_call` and `record_tool_proposal` are not aliases for
+`append_event`: these low-level commitment writes create no `ModelCall` or
+`ToolProposal` observation or replay frame. Public append also rejects
+`CausalLink`; only the proposal-aware operation transaction establishes and
+verifies the reciprocal proposal-to-operation relationship or its explicit
+gap.
 
 Before a public append, Runwarden verifies the complete current story evidence.
 The shared helper then allocates the next story-local sequence, seals the event,
@@ -53,6 +71,12 @@ only typed SHA-256 commitments and fixed redacted views. Provider/action text
 is retained only for a small hardcoded set of known demo pairs; every unknown
 pair becomes fixed redacted labels. No raw legacy value is copied into a
 `SecurityOperation` or native `StoryEvent`.
+
+Native model commitments contain a prompt hash, never a raw prompt or
+completion. Tool-proposal rows contain a canonical typed safe argument view
+and the complete argument hash, never raw tool arguments. Raw prompts,
+completions, tool arguments, authorization headers, and API keys do not enter
+model/proposal rows or operation-proposed/causal-link event payloads.
 
 Legacy resources use `ResourceClaim::OpaqueLegacy`, which is display-only and
 is not an executable claim. The adapter does not create approvals, policy

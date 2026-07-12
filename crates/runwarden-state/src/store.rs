@@ -11,6 +11,8 @@ use crate::JournalError;
 
 const DATABASE_NAME: &str = "runwarden.db";
 const MIGRATION_V1: &str = include_str!("../migrations/0001_story_journal.sql");
+const MIGRATION_V2: &str = include_str!("../migrations/0002_model_proposals.sql");
+const CURRENT_SCHEMA_VERSION: i64 = 2;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 static APPEND_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> = OnceLock::new();
 
@@ -35,7 +37,7 @@ impl StateStore {
         let state_dir = prepare_state_directory(state_dir.as_ref())?;
         let mut connection = open_configured_connection(&state_dir)?;
         migrate(&mut connection)?;
-        validate_v1_schema(&connection)?;
+        validate_current_schema(&connection)?;
         harden_database_files(&state_dir)?;
         drop(connection);
 
@@ -44,7 +46,7 @@ impl StateStore {
 
     pub fn diagnostics(&self) -> Result<StoreDiagnostics, JournalError> {
         let connection = open_configured_connection(&self.state_dir)?;
-        validate_v1_schema(&connection)?;
+        validate_current_schema(&connection)?;
         let diagnostics = read_diagnostics(&connection)?;
         harden_database_files(&self.state_dir)?;
         Ok(diagnostics)
@@ -56,7 +58,7 @@ impl StateStore {
     #[doc(hidden)]
     pub fn force_wal_write_for_test(&self) -> Result<(), JournalError> {
         let mut connection = open_configured_connection(&self.state_dir)?;
-        validate_v1_schema(&connection)?;
+        validate_current_schema(&connection)?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let probe_id = uuid::Uuid::now_v7().to_string();
         transaction.execute(
@@ -78,7 +80,7 @@ impl StateStore {
 
     pub(crate) fn connection(&self) -> Result<Connection, JournalError> {
         let connection = open_configured_connection(&self.state_dir)?;
-        validate_v1_schema(&connection)?;
+        validate_current_schema(&connection)?;
         Ok(connection)
     }
 
@@ -210,8 +212,8 @@ fn read_diagnostics(connection: &Connection) -> Result<StoreDiagnostics, Journal
 
 fn migrate(connection: &mut Connection) -> Result<(), JournalError> {
     // The version and emptiness checks must happen only after the write lock is
-    // acquired. A second first opener then waits, rereads v1, and validates
-    // instead of attempting the v1 DDL a second time.
+    // acquired. A second first opener then waits, rereads the current version,
+    // and validates instead of attempting the DDL a second time.
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let version: i64 = transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
     match version {
@@ -223,12 +225,21 @@ fn migrate(connection: &mut Connection) -> Result<(), JournalError> {
             }
 
             transaction.execute_batch(MIGRATION_V1)?;
-            validate_v1_schema(&transaction)?;
+            validate_schema_version(&transaction, 1)?;
+            transaction.execute_batch(MIGRATION_V2)?;
+            validate_schema_version(&transaction, CURRENT_SCHEMA_VERSION)?;
             transaction.commit()?;
             Ok(())
         }
         1 => {
-            validate_v1_schema(&transaction)?;
+            validate_schema_version(&transaction, 1)?;
+            transaction.execute_batch(MIGRATION_V2)?;
+            validate_schema_version(&transaction, CURRENT_SCHEMA_VERSION)?;
+            transaction.commit()?;
+            Ok(())
+        }
+        CURRENT_SCHEMA_VERSION => {
+            validate_schema_version(&transaction, CURRENT_SCHEMA_VERSION)?;
             transaction.commit()?;
             Ok(())
         }
@@ -264,26 +275,40 @@ fn schema_objects(connection: &Connection) -> Result<Vec<SchemaObject>, JournalE
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
 }
 
-fn expected_schema_objects() -> Result<Vec<SchemaObject>, JournalError> {
+fn expected_schema_objects(version: i64) -> Result<Vec<SchemaObject>, JournalError> {
     let expected = Connection::open_in_memory()?;
     expected.execute_batch(MIGRATION_V1)?;
+    if version == CURRENT_SCHEMA_VERSION {
+        expected.execute_batch(MIGRATION_V2)?;
+    } else if version != 1 {
+        return Err(JournalError::Integrity(format!(
+            "cannot construct expected schema version {version}"
+        )));
+    }
     schema_objects(&expected)
 }
 
-fn validate_v1_schema(connection: &Connection) -> Result<(), JournalError> {
+fn validate_current_schema(connection: &Connection) -> Result<(), JournalError> {
+    validate_schema_version(connection, CURRENT_SCHEMA_VERSION)
+}
+
+fn validate_schema_version(
+    connection: &Connection,
+    expected_version: i64,
+) -> Result<(), JournalError> {
     let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if version != 1 {
+    if version != expected_version {
         return Err(JournalError::Integrity(format!(
-            "schema version is {version}, expected 1"
+            "schema version is {version}, expected {expected_version}"
         )));
     }
 
     let actual = schema_objects(connection)?;
-    let expected = expected_schema_objects()?;
+    let expected = expected_schema_objects(expected_version)?;
     if actual != expected {
-        return Err(JournalError::Integrity(
-            "schema objects do not match migration version 1".to_owned(),
-        ));
+        return Err(JournalError::Integrity(format!(
+            "schema objects do not match migration version {expected_version}"
+        )));
     }
 
     let violations: i64 =

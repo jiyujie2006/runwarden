@@ -367,7 +367,6 @@ fn is_standalone_payload(payload: &StoryEventPayload) -> bool {
         payload,
         StoryEventPayload::ModelCall { .. }
             | StoryEventPayload::ToolProposal { .. }
-            | StoryEventPayload::CausalLink { .. }
             | StoryEventPayload::InputConsumed { .. }
             | StoryEventPayload::SandboxDecision { .. }
             | StoryEventPayload::MonitorObservation { .. }

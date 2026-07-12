@@ -17,6 +17,7 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use crate::operations::{
     InvocationBindingMaterial, invocation_binding_hash, load_frozen_proposal_tx,
 };
+use crate::proposals::verify_operation_causal_link_tx;
 use crate::sessions::load_session_record;
 use crate::stories::load_story_record;
 use crate::{
@@ -142,6 +143,7 @@ impl StateStore {
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
         let snapshot = load_story_snapshot_tx(&transaction, story_id)?;
         verify_snapshot_anchor_tx(&transaction, &snapshot)?;
+        verify_story_operation_causal_links_tx(&transaction, &snapshot.operations)?;
         let operation = snapshot
             .operations
             .into_iter()
@@ -182,6 +184,7 @@ impl StateStore {
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
         let snapshot = load_story_snapshot_tx(&transaction, story_id)?;
         verify_snapshot_anchor_tx(&transaction, &snapshot)?;
+        verify_story_operation_causal_links_tx(&transaction, &snapshot.operations)?;
         transaction.commit()?;
         Ok(snapshot)
     }
@@ -236,6 +239,7 @@ pub(crate) fn load_story_evidence_tx(
     let stored_final_event_hash = stored.story.final_event_hash;
     let stored_updated_at = stored.updated_at;
     let story = load_story_snapshot_tx(connection, story_id)?;
+    verify_story_operation_causal_links_tx(connection, &story.operations)?;
     if stored_event_count != story.event_count || stored_final_event_hash != story.final_event_hash
     {
         return Err(JournalError::Integrity(
@@ -455,6 +459,16 @@ fn decode_operation(
         side_effect_state,
         observation_refs,
     })
+}
+
+fn verify_story_operation_causal_links_tx(
+    connection: &Connection,
+    operations: &[SecurityOperation],
+) -> Result<(), JournalError> {
+    for operation in operations {
+        verify_operation_causal_link_tx(connection, operation)?;
+    }
+    Ok(())
 }
 
 fn verify_invocation_binding(

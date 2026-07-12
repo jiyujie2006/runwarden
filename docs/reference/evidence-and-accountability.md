@@ -111,15 +111,33 @@ or repeated start creates no partial state or orphan event. Approval lifecycle
 events carry the operation id, so their `obs_*` ids appear in that operation's
 ordered observation references.
 
+Proposal-aware operation creation applies the same atomic evidence rule. It
+commits `operation_proposed` followed by exactly one `causal_link` event in the
+same transaction as the operation/resource rows and proposal claim. Resolved
+links require one reciprocal proposal row with the exact story, session,
+provider, action, argument hash, model-call id, optional upstream call id, and
+linked operation id. Missing, ambiguous, cross-session, or already-claimed
+matches are sealed as explicit unresolved observations; display ordering and
+timestamp proximity never establish causality. Retried invocations return the
+original sealed result and add no event.
+
+Rows in `model_calls` and `tool_proposals` are durable commitments, not
+observation ids, and are not independently citeable report evidence. The
+low-level record methods emit no model-call or tool-proposal event; only sealed
+`StoryEvent` rows provide `obs_*` references. Proposal-aware operation events
+contain bounded identifiers, provider/action codes, hashes, stable status or
+reason codes, and candidate counts, never raw model content, tool arguments,
+credentials, or arbitrary JSON.
+
 Standalone native observations use the same atomic event/frame helper through
 `StateStore::append_event` while evidence is `Pending`; non-native or
 non-pending stories are rejected so a verified chain head cannot drift. The
 public method admits only model-call,
-tool-proposal, causal-link, input-consumed, sandbox-decision, and
-monitor-observation payloads; state-owning operation, policy, approval,
-execution, and evidence-verification payloads must accompany their dedicated
-Rust transaction. Duplicate event or observation ids conflict without opening
-a sequence gap, and timestamps cannot move the story clock backwards.
+tool-proposal, input-consumed, sandbox-decision, and monitor-observation
+payloads; state-owning operation, causal-link, policy, approval, execution, and
+evidence-verification payloads must accompany their dedicated Rust
+transaction. Duplicate event or observation ids conflict without opening a
+sequence gap, and timestamps cannot move the story clock backwards.
 Stores targeting the same journal coordinate full-chain append verification
 inside one process, while SQLite `BEGIN IMMEDIATE` plus a bounded pre-input
 retry remains the cross-process serialization authority. No transaction,

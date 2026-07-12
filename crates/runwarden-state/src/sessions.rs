@@ -102,6 +102,13 @@ impl StateStore {
             ) VALUES (?1, ?2, 0, 0, 0, 0, 0, 0, 0)"#,
             params![session.story_id.to_string(), session.session_id.to_string()],
         )?;
+        transaction.execute(
+            r#"INSERT INTO model_usage (
+                story_id, session_id, version, calls_committed,
+                input_bytes_committed, output_bytes_committed
+            ) VALUES (?1, ?2, 0, 0, 0, 0)"#,
+            params![session.story_id.to_string(), session.session_id.to_string()],
+        )?;
         transaction.commit()?;
         self.harden_files()
     }

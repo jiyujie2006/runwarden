@@ -18,9 +18,9 @@ use serde_json::Value;
 use time::OffsetDateTime;
 
 use crate::events::{NewStoryEvent, append_event_and_frame_tx};
-use crate::sessions::load_session_record;
+use crate::sessions::{StoredSession, load_session_record};
 use crate::snapshots::{load_operation_tx, verify_story_evidence_tx};
-use crate::stories::load_story_record;
+use crate::stories::{StoredStory, load_story_record};
 use crate::{
     JournalError, StateStore, canonical_json, enum_text, format_time, persisted_json,
     persisted_string, sqlite_u64,
@@ -76,7 +76,7 @@ pub struct FrozenProposalBinding {
     pub budget_charge: BudgetCharge,
 }
 
-struct PreparedOperation {
+pub(crate) struct PreparedOperation {
     provider_code: EventCode,
     action_code: EventCode,
     safe_arguments_json: String,
@@ -86,6 +86,11 @@ struct PreparedOperation {
     invocation_binding_hash: Sha256Digest,
     budget_charge_json: String,
     now: String,
+}
+
+pub(crate) struct OperationCreationContext {
+    story: StoredStory,
+    session: StoredSession,
 }
 
 struct StoredBinding {
@@ -205,160 +210,18 @@ impl StateStore {
         let prepared = prepare_operation(&input)?;
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        verify_story_evidence_tx(&transaction, input.story_id)?;
-        let story = load_story_record(&transaction, input.story_id)?;
-        let session = load_session_record(&transaction, input.session_id)?;
-        if story.story.authority.session_id != input.session_id
-            || session.record.story_id != input.story_id
-            || session.record.authority != story.story.authority
-        {
-            return Err(JournalError::Integrity(
-                "operation story, session, and authority do not identify one context".to_owned(),
-            ));
-        }
-        if input.policy_snapshot_hash.as_str() != session.record.policy_snapshot_hash {
-            return Err(JournalError::Integrity(
-                "operation policy hash does not match the immutable session".to_owned(),
-            ));
-        }
-
-        if let Some(existing) = load_binding_for_invocation(
-            &transaction,
-            input.story_id,
-            input.session_id,
-            &input.invocation_key,
-        )? {
-            if existing.operation_id != input.operation_id.to_string()
-                && let Some(actual) = operation_version_if_exists(&transaction, input.operation_id)?
-            {
-                return Err(JournalError::Conflict {
-                    entity: "operation",
-                    id: input.operation_id.to_string(),
-                    expected: 0,
-                    actual,
-                });
-            }
-            validate_retry_binding(&input, &prepared, &existing)?;
-            let existing_id: OperationId =
-                persisted_string(existing.operation_id, "retry operation id")?;
-            let operation = load_operation_tx(&transaction, existing_id)?;
+        let context = load_operation_creation_context_tx(&transaction, &input)?;
+        if let Some(operation) = retry_operation_tx(&transaction, &input, &prepared)? {
             transaction.commit()?;
             return Ok(CreateOperationOutcome {
                 created: false,
                 operation,
             });
         }
-        if story.story.provenance != runwarden_kernel::story::StoryProvenance::Native
-            || story.story.evidence_status != runwarden_kernel::story::EvidenceStatus::Pending
-            || matches!(
-                story.story.status,
-                runwarden_kernel::story::StoryStatus::EvidenceInvalid
-                    | runwarden_kernel::story::StoryStatus::OutcomeUnknown
-            )
-        {
-            return Err(JournalError::InvalidTransition {
-                entity: "story",
-                from: enum_text(&story.story.status)?,
-                to: "create_operation".to_owned(),
-            });
-        }
-        if !session.active || session.record.authority.authz_state != "active" {
-            return Err(JournalError::InvalidTransition {
-                entity: "session",
-                from: session.record.authority.authz_state,
-                to: "create_operation".to_owned(),
-            });
-        }
-        if input.now >= session.record.expires_at {
-            return Err(JournalError::InvalidTransition {
-                entity: "session",
-                from: "expired".to_owned(),
-                to: "create_operation".to_owned(),
-            });
-        }
-        if input.now < story.updated_at {
-            return Err(JournalError::InvalidTransition {
-                entity: "operation_time",
-                from: format_time(story.updated_at)?,
-                to: prepared.now,
-            });
-        }
-        if let Some(actual) = operation_version_if_exists(&transaction, input.operation_id)? {
-            return Err(JournalError::Conflict {
-                entity: "operation",
-                id: input.operation_id.to_string(),
-                expected: 0,
-                actual,
-            });
-        }
-
-        transaction.execute(
-            r#"INSERT INTO operations (
-                operation_id, story_id, session_id, invocation_key,
-                invocation_binding_hash,
-                parent_model_call_id, proposed_tool_call_id, provider, action,
-                argument_hash, redacted_arguments_json, private_arguments_json,
-                policy_snapshot_hash, proposal_commitment,
-                provider_contract_hash, proposed_budget_charge_json,
-                state, side_effect_state, version,
-                created_at, updated_at
-            ) VALUES (
-                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-                ?14, ?15, ?16, 'proposed', 'not_attempted', 0, ?17, ?17
-            )"#,
-            params![
-                input.operation_id.to_string(),
-                input.story_id.to_string(),
-                input.session_id.to_string(),
-                input.invocation_key.as_str(),
-                prepared.invocation_binding_hash.as_str(),
-                input.parent_model_call_id,
-                input.proposed_tool_call_id,
-                input.provider,
-                input.action,
-                input.argument_hash.as_str(),
-                prepared.safe_arguments_json,
-                prepared.private_arguments,
-                input.policy_snapshot_hash.as_str(),
-                input.proposal_commitment.as_str(),
-                input.provider_contract_hash.as_str(),
-                prepared.budget_charge_json,
-                prepared.now,
-            ],
-        )?;
-        transaction.execute(
-            r#"INSERT INTO resource_claims (
-                story_id, operation_id, claim_json, claim_hash
-            ) VALUES (?1, ?2, ?3, ?4)"#,
-            params![
-                input.story_id.to_string(),
-                input.operation_id.to_string(),
-                prepared.claim_json,
-                prepared.claim_hash.as_str(),
-            ],
-        )?;
-        append_event_and_frame_tx(
-            &transaction,
-            NewStoryEvent {
-                obs_id: ObservationId::new(),
-                event_id: EventId::new(),
-                story_id: input.story_id,
-                session_id: input.session_id,
-                operation_id: Some(input.operation_id),
-                provider: Some(prepared.provider_code),
-                payload: StoryEventPayload::OperationProposed {
-                    provider: EventCode::try_from(input.provider).map_err(|error| {
-                        JournalError::Integrity(format!(
-                            "operation provider could not be sealed: {error}"
-                        ))
-                    })?,
-                    action: prepared.action_code,
-                    argument_hash: input.argument_hash,
-                    resource_claim_hash: prepared.claim_hash,
-                },
-                recorded_at: input.now,
-            },
-        )?;
+        validate_new_operation_context(&input, &prepared, &context)?;
+        require_operation_id_available_tx(&transaction, input.operation_id)?;
+        insert_operation_rows_tx(&transaction, &input, &prepared)?;
+        append_operation_proposed_tx(&transaction, &input, &prepared)?;
         let operation = load_operation_tx(&transaction, input.operation_id)?;
         transaction.commit()?;
         self.harden_files()?;
@@ -589,7 +452,211 @@ impl StateStore {
     }
 }
 
-fn prepare_operation(input: &NewOperation) -> Result<PreparedOperation, JournalError> {
+pub(crate) fn load_operation_creation_context_tx(
+    connection: &rusqlite::Connection,
+    input: &NewOperation,
+) -> Result<OperationCreationContext, JournalError> {
+    verify_story_evidence_tx(connection, input.story_id)?;
+    let story = load_story_record(connection, input.story_id)?;
+    let session = load_session_record(connection, input.session_id)?;
+    if story.story.authority.session_id != input.session_id
+        || session.record.story_id != input.story_id
+        || session.record.authority != story.story.authority
+    {
+        return Err(JournalError::Integrity(
+            "operation story, session, and authority do not identify one context".to_owned(),
+        ));
+    }
+    if input.policy_snapshot_hash.as_str() != session.record.policy_snapshot_hash {
+        return Err(JournalError::Integrity(
+            "operation policy hash does not match the immutable session".to_owned(),
+        ));
+    }
+    Ok(OperationCreationContext { story, session })
+}
+
+pub(crate) fn existing_invocation_operation_id_tx(
+    connection: &rusqlite::Connection,
+    input: &NewOperation,
+) -> Result<Option<OperationId>, JournalError> {
+    load_binding_for_invocation(
+        connection,
+        input.story_id,
+        input.session_id,
+        &input.invocation_key,
+    )?
+    .map(|binding| persisted_string(binding.operation_id, "retry operation id"))
+    .transpose()
+}
+
+pub(crate) fn retry_operation_tx(
+    connection: &rusqlite::Connection,
+    input: &NewOperation,
+    prepared: &PreparedOperation,
+) -> Result<Option<SecurityOperation>, JournalError> {
+    let Some(existing) = load_binding_for_invocation(
+        connection,
+        input.story_id,
+        input.session_id,
+        &input.invocation_key,
+    )?
+    else {
+        return Ok(None);
+    };
+    if existing.operation_id != input.operation_id.to_string()
+        && let Some(actual) = operation_version_if_exists(connection, input.operation_id)?
+    {
+        return Err(JournalError::Conflict {
+            entity: "operation",
+            id: input.operation_id.to_string(),
+            expected: 0,
+            actual,
+        });
+    }
+    validate_retry_binding(input, prepared, &existing)?;
+    let existing_id: OperationId = persisted_string(existing.operation_id, "retry operation id")?;
+    load_operation_tx(connection, existing_id).map(Some)
+}
+
+pub(crate) fn validate_new_operation_context(
+    input: &NewOperation,
+    prepared: &PreparedOperation,
+    context: &OperationCreationContext,
+) -> Result<(), JournalError> {
+    if context.story.story.provenance != runwarden_kernel::story::StoryProvenance::Native
+        || context.story.story.evidence_status != runwarden_kernel::story::EvidenceStatus::Pending
+        || matches!(
+            context.story.story.status,
+            runwarden_kernel::story::StoryStatus::EvidenceInvalid
+                | runwarden_kernel::story::StoryStatus::OutcomeUnknown
+        )
+    {
+        return Err(JournalError::InvalidTransition {
+            entity: "story",
+            from: enum_text(&context.story.story.status)?,
+            to: "create_operation".to_owned(),
+        });
+    }
+    if !context.session.active || context.session.record.authority.authz_state != "active" {
+        return Err(JournalError::InvalidTransition {
+            entity: "session",
+            from: context.session.record.authority.authz_state.clone(),
+            to: "create_operation".to_owned(),
+        });
+    }
+    if input.now >= context.session.record.expires_at {
+        return Err(JournalError::InvalidTransition {
+            entity: "session",
+            from: "expired".to_owned(),
+            to: "create_operation".to_owned(),
+        });
+    }
+    if input.now < context.story.updated_at {
+        return Err(JournalError::InvalidTransition {
+            entity: "operation_time",
+            from: format_time(context.story.updated_at)?,
+            to: prepared.now.clone(),
+        });
+    }
+    Ok(())
+}
+
+pub(crate) fn require_operation_id_available_tx(
+    connection: &rusqlite::Connection,
+    operation_id: OperationId,
+) -> Result<(), JournalError> {
+    if let Some(actual) = operation_version_if_exists(connection, operation_id)? {
+        Err(JournalError::Conflict {
+            entity: "operation",
+            id: operation_id.to_string(),
+            expected: 0,
+            actual,
+        })
+    } else {
+        Ok(())
+    }
+}
+
+pub(crate) fn insert_operation_rows_tx(
+    transaction: &rusqlite::Transaction<'_>,
+    input: &NewOperation,
+    prepared: &PreparedOperation,
+) -> Result<(), JournalError> {
+    transaction.execute(
+        r#"INSERT INTO operations (
+            operation_id, story_id, session_id, invocation_key,
+            invocation_binding_hash,
+            parent_model_call_id, proposed_tool_call_id, provider, action,
+            argument_hash, redacted_arguments_json, private_arguments_json,
+            policy_snapshot_hash, proposal_commitment,
+            provider_contract_hash, proposed_budget_charge_json,
+            state, side_effect_state, version,
+            created_at, updated_at
+        ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+            ?14, ?15, ?16, 'proposed', 'not_attempted', 0, ?17, ?17
+        )"#,
+        params![
+            input.operation_id.to_string(),
+            input.story_id.to_string(),
+            input.session_id.to_string(),
+            input.invocation_key.as_str(),
+            prepared.invocation_binding_hash.as_str(),
+            input.parent_model_call_id.as_deref(),
+            input.proposed_tool_call_id.as_deref(),
+            input.provider.as_str(),
+            input.action.as_str(),
+            input.argument_hash.as_str(),
+            prepared.safe_arguments_json.as_str(),
+            prepared.private_arguments.as_slice(),
+            input.policy_snapshot_hash.as_str(),
+            input.proposal_commitment.as_str(),
+            input.provider_contract_hash.as_str(),
+            prepared.budget_charge_json.as_str(),
+            prepared.now.as_str(),
+        ],
+    )?;
+    transaction.execute(
+        r#"INSERT INTO resource_claims (
+            story_id, operation_id, claim_json, claim_hash
+        ) VALUES (?1, ?2, ?3, ?4)"#,
+        params![
+            input.story_id.to_string(),
+            input.operation_id.to_string(),
+            prepared.claim_json.as_str(),
+            prepared.claim_hash.as_str(),
+        ],
+    )?;
+    Ok(())
+}
+
+pub(crate) fn append_operation_proposed_tx(
+    transaction: &rusqlite::Transaction<'_>,
+    input: &NewOperation,
+    prepared: &PreparedOperation,
+) -> Result<(), JournalError> {
+    append_event_and_frame_tx(
+        transaction,
+        NewStoryEvent {
+            obs_id: ObservationId::new(),
+            event_id: EventId::new(),
+            story_id: input.story_id,
+            session_id: input.session_id,
+            operation_id: Some(input.operation_id),
+            provider: Some(prepared.provider_code.clone()),
+            payload: StoryEventPayload::OperationProposed {
+                provider: prepared.provider_code.clone(),
+                action: prepared.action_code.clone(),
+                argument_hash: input.argument_hash.clone(),
+                resource_claim_hash: prepared.claim_hash.clone(),
+            },
+            recorded_at: input.now,
+        },
+    )?;
+    Ok(())
+}
+
+pub(crate) fn prepare_operation(input: &NewOperation) -> Result<PreparedOperation, JournalError> {
     let provider_code = EventCode::try_from(input.provider.clone()).map_err(|error| {
         JournalError::Integrity(format!("operation provider is invalid: {error}"))
     })?;

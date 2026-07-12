@@ -65,6 +65,19 @@ per-operation ceilings; call, file-byte, and network-byte budgets are cumulative
 session counters; model call/input/output budgets are reserved separately by
 the model proxy.
 
+SQLite schema v2 creates exactly one zeroed `model_usage` row for every new or
+migrated session. A redacted `model_calls` or `tool_proposals` row is evidence
+input only: recording it does not reserve budget, authorize network egress, or
+permit model forwarding. Those decisions remain bound to the active session
+and the proxy's per-call Rust transaction.
+
+Proposal linkage is provenance, not authority. Resolver predicates and
+composite foreign keys constrain candidates to the operation's exact story and
+session. A link does not expand the provider allowlist, consume an approval,
+reserve provider budget, or cross the provider execution-start boundary; the
+operation still passes through the ordinary Rust policy, approval, lease,
+budget, and execution enforcement.
+
 Static demo story generation creates one typed UUIDv7 session id before the
 legacy `SessionManifest` and reuses it for kernel calls, the
 `AuthoritySnapshot`, and every `SecurityOperation`. The story projection reads

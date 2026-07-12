@@ -307,7 +307,7 @@ fn frame_story_version_tampering_is_rejected() {
 }
 
 #[test]
-fn standalone_append_rejects_domain_owned_execution_events() {
+fn standalone_append_rejects_domain_owned_execution_and_causal_events() {
     let fixture = JournalFixture::new(runwarden_kernel::story::EnforcementMode::Enforced);
     let attempted = fixture.store.append_event(NewStoryEvent {
         obs_id: ObservationId::new(),
@@ -326,6 +326,28 @@ fn standalone_append_rejects_domain_owned_execution_events() {
     });
     assert!(matches!(
         attempted,
+        Err(JournalError::InvalidTransition {
+            entity: "standalone_event",
+            ..
+        })
+    ));
+    let causal = fixture.store.append_event(NewStoryEvent {
+        obs_id: ObservationId::new(),
+        event_id: EventId::new(),
+        story_id: fixture.story.story_id,
+        session_id: fixture.story.authority.session_id,
+        operation_id: None,
+        provider: None,
+        payload: StoryEventPayload::CausalLink {
+            proposal_id: None,
+            status: EventCode::try_from("unresolved".to_owned()).unwrap(),
+            reason_code: Some(EventCode::try_from("no_matching_proposal".to_owned()).unwrap()),
+            candidate_count: 0,
+        },
+        recorded_at: mutation_time(&fixture.story, 1),
+    });
+    assert!(matches!(
+        causal,
         Err(JournalError::InvalidTransition {
             entity: "standalone_event",
             ..

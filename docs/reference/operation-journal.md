@@ -8,7 +8,7 @@ they do not reproduce its allow, deny, lease, recovery, or budget decisions.
 
 ## Ownership and durability
 
-The Rust crate owns every v1 table:
+The Rust crate owns every current journal table:
 
 | Tables | Rust-owned purpose |
 | --- | --- |
@@ -18,9 +18,10 @@ The Rust crate owns every v1 table:
 | `budget_usage`, `budget_reservations` | CAS-protected reserved and committed resource accounting |
 | `events`, `story_frames`, `report_claims` | sealed observations, replay snapshots, and report support |
 | `exports` | native export publication journal |
+| `model_calls`, `model_usage`, `tool_proposals` | redacted model commitments, session-scoped model accounting, and causal proposal links added by schema v2 |
 
 Every `StateStore` connection enforces WAL mode, `synchronous=FULL`, foreign
-keys, a bounded 5,000 ms busy timeout, and the strict v1 schema. The state
+keys, a bounded 5,000 ms busy timeout, and the strict v2 schema. The state
 directory, database, WAL, and shared-memory sidecars must remain owner-only;
 symlinks and unsupported permission models fail closed. File hardening opens
 the verified parent directory and uses a directory-relative no-follow chmod,
@@ -33,11 +34,19 @@ as its normal lifecycle, while the main database or a replaced path still
 fails closed. SQLite integers that represent Rust `u64` values use checked
 conversions.
 
-The contract-freeze build deliberately does not guess proposal bindings for an
-older development database that lacks these fields: such a shape fails strict
-schema validation and must be archived and reinitialized. Provider contracts
-and proposed charges cannot be reconstructed safely inside the state crate,
-so an in-place permissive backfill would weaken old approvals.
+The current SQLite schema version is 2. A new database applies v1 and v2 in
+order inside one immediate transaction. A structurally exact v1 database is
+validated before it is upgraded, and each existing session receives one
+zeroed `model_usage` row. A partial schema, an unexpected schema object, a
+foreign-key violation, or a database newer than this binary fails closed.
+
+The contract-freeze build deliberately does not guess frozen provider-contract
+or budget-charge bindings for an older development database that predates the
+exact v1 migration: such a modified shape still fails strict schema validation
+and must be archived and reinitialized. Provider contracts and proposed
+charges cannot be reconstructed safely inside the state crate, so a permissive
+backfill would weaken old approvals. This is distinct from the supported,
+exact-schema v1-to-v2 migration above.
 
 Full provider arguments live only in `operations.private_arguments_json`.
 The same row freezes the provider-contract hash, conservative `BudgetCharge`,
@@ -67,6 +76,52 @@ absent. A concurrent insert or commit-then-response-loss is accepted only
 after the exact durable binding can be read back. Reusing an `InvocationKey`
 with different provider arguments returns the identity of the conflicting
 operation and never starts a second proposal.
+
+## Model proposal commitments and causal links
+
+Schema v2 stores only redacted model and proposal commitments. A model-call
+row contains bounded identifiers, endpoint/model codes, a prompt hash, filter
+state, and timestamps; a tool-proposal row contains bounded identifiers,
+provider/action, the canonical argument hash, and a typed safe argument view.
+Full prompts, completions, tool arguments, authorization headers, and API keys
+do not enter these tables. The low-level `record_model_call` and
+`record_tool_proposal` methods do not forward a request, reserve model budget,
+or independently claim that a model/tool story event occurred.
+
+`create_operation_with_proposal` is the authoritative proposal-to-operation
+link boundary. The caller must leave both operation causal ids empty, and the
+link query must exactly match the operation's story, session, provider,
+action, and argument hash. When an upstream tool-call id is present, only an
+exact id and commitment match is eligible; it does not fall back after a
+mismatched id. Without an upstream id, exactly one unclaimed exact commitment
+may link. Cross-story, cross-session, provider/action/hash mismatches, multiple
+candidates, and already-claimed proposals never select an arbitrary row, and
+timestamps are not causal evidence.
+
+The same immediate transaction inserts the operation and resource claim,
+claims the selected proposal with an `IS NULL` compare-and-swap, and appends
+`operation_proposed` followed by a resolved or unresolved `causal_link` event
+and both replay frames. A resolved operation stores the model-call id and the
+proposal's optional upstream tool-call id; the internal proposal id remains in
+the proposal row, causal event, and typed result. An unresolved operation
+stores neither causal id and records one of `missing_upstream_id`,
+`no_matching_proposal`, `ambiguous_commitment`, or
+`proposal_already_claimed`, together with the candidate count. Any row, CAS,
+event, or frame failure rolls back the entire operation.
+
+| Unresolved code | Exact meaning |
+| --- | --- |
+| `missing_upstream_id` | No upstream id was supplied and no exact commitment candidate exists. |
+| `no_matching_proposal` | An upstream id was supplied but no exact id-and-commitment candidate exists. |
+| `ambiguous_commitment` | The selected matching mode produced more than one eligible candidate. |
+| `proposal_already_claimed` | Matching proposal rows exist but no uniquely claimable row remains. |
+
+Invocation retries read the already sealed causal event and reciprocal
+proposal link instead of resolving current candidates again. Typed operation
+and story reads verify that a resolved event, proposal row, operation fields,
+story/session, provider/action, argument hash, and linked operation id still
+agree. Legacy operations without a causal-link event remain readable, but
+their optional display ids alone are not proof of model causality.
 
 At runtime startup, active instance, verified story, and live session are
 loaded from one deferred SQLite snapshot using only the SHA-256 hash of the
