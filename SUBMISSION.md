@@ -73,7 +73,7 @@ bash scripts/contest_bundle.sh
 2. Tool hijack 触发 email `requires_review` 和 API `denied`。
 3. Path escape 触发 `root_escape` denied。
 4. Local metadata SSRF 触发 `egress_denied`。
-5. WebUI 查看 `provider_call` timeline / review queue / `obs_ref` / `side_effect_executed`; live 模式额外展示 `model_call`。
+5. WebUI 查看 `provider_call` timeline / review queue / `obs_ref` / `side_effect_executed`；live 模式展示原生 provider/approval story 与可恢复 SSE。LLM proxy 的 sealed `model_call` trace 当前单独验证，尚未伪装成 live story event。
 
 ## 6. 安全设计
 
@@ -81,7 +81,7 @@ bash scripts/contest_bundle.sh
 - 上下文隔离: MCP 边界收敛。
 - 工具边界收敛: raw tools disabled。
 - Rust policy gate: `KernelEnforcer`。
-- 审批机制: `RequiresReview` + browser approval file + MCP retry consumption。
+- 审批机制: `RequiresReview` + loopback reviewer API + SQLite 双版本 CAS；等待中的原始 MCP 调用在同一 operation 上继续并一次性消费 approval。
 - 行为异常评分: `runwarden-anomaly`。
 - Hash-chain trace: sealed `TraceEvent`。
 - Report citation lint: `report_lint` 测试覆盖。

@@ -1,9 +1,12 @@
 use std::{
     env, fs,
+    net::TcpListener,
     path::{Path, PathBuf},
     process::ExitCode,
 };
 
+use anyhow::Context as _;
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use clap::{Parser, Subcommand};
 use runwarden_assurance::eval::{EvalThresholds, evaluate_report_assurance};
 use runwarden_assurance::report::{
@@ -15,15 +18,23 @@ use runwarden_kernel::contracts::{PolicyDecision, ProviderCall, ProviderClass, P
 use runwarden_kernel::evidence::{InMemoryTraceStore, TraceEvent, TraceQuery};
 use runwarden_kernel::kernel::KernelEnforcer;
 use runwarden_kernel::manifest::{AssessmentManifest, AuthzManifestState, SessionManifest};
-use runwarden_kernel::session::{AuthoritySnapshot, BudgetSnapshot, EvidenceAuthority};
-use runwarden_kernel::story::SessionId;
+use runwarden_kernel::resource::DataClass;
+use runwarden_kernel::session::{
+    AuthoritySnapshot, BudgetSnapshot, EmailAuthority, EvidenceAuthority, InputAuthority,
+};
+use runwarden_kernel::story::{
+    EnforcementMode, EvidenceStatus, RunMode, SchemaVersion, SecurityStory, SessionId, StoryId,
+    StoryIdentity, StoryProvenance, StoryStatus,
+};
 use runwarden_kernel::trace::Sha256Digest;
 use runwarden_providers::catalog::full_provider_registry;
 use runwarden_providers::input::{InputInspectPolicy, InputSource, inspect_input};
 use runwarden_providers::tools;
+use runwarden_state::{DemoActivation, JournalError, SessionRecord, StateStore};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use time::OffsetDateTime;
+use time::{Duration, OffsetDateTime};
+use zeroize::Zeroizing;
 
 mod server;
 
@@ -419,51 +430,259 @@ fn run_demo_interactive(
     json_output: bool,
 ) -> anyhow::Result<()> {
     let root = find_workspace_root(env::current_dir()?)?;
-    let state_dir = root.join(".runwarden");
-    fs::create_dir_all(&state_dir)?;
-    let trace_path = root.join("artifacts/llm-proxy/trace.jsonl");
-    if let Some(parent) = trace_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::remove_file(&trace_path).ok();
-    fs::remove_file(state_dir.join("events.jsonl")).ok();
+    let requested_state_dir = env::var_os("RUNWARDEN_STATE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| root.join(".runwarden"));
+    let state_dir = preflight_interactive_state_dir(&requested_state_dir)?;
+    let prepared_console = server::prepare_console_server("127.0.0.1", port, &state_dir)?;
+    let trace_path = state_dir.join("llm-proxy-trace.jsonl");
+    let prepared_proxy = prepare_llm_proxy(upstream, trace_path.clone())?;
+    require_fresh_llm_trace_path(&trace_path)?;
+    let launch = prepare_interactive_demo(&state_dir)?;
 
-    // Set RUNWARDEN_STATE_DIR so the MCP subprocess (spawned by opencode)
-    // writes events.jsonl and approvals to the same directory this server
-    // watches. Without this, MCP defaults to ./.runwarden relative to
-    // opencode's CWD, which is a different directory.
-    // SAFETY: single-threaded setup before spawning proxy thread and server.
-    unsafe {
-        std::env::set_var("RUNWARDEN_STATE_DIR", &state_dir);
-    }
-
-    spawn_llm_proxy_thread(upstream, trace_path.clone());
-
-    let (tx, _rx) = tokio::sync::broadcast::channel::<server::DemoEvent>(256);
-    server::watch_jsonl_events(trace_path.clone(), "model_call", tx.clone());
-    server::watch_jsonl_events(state_dir.join("events.jsonl"), "provider_call", tx.clone());
-
-    let state = server::AppState {
-        event_tx: tx,
-        state_dir,
-        trace_path,
-    };
-    server::run_console_server("127.0.0.1", port, state, json_output)
+    spawn_llm_proxy_thread(prepared_proxy);
+    server::run_console_server(prepared_console, launch, json_output)
 }
 
-fn spawn_llm_proxy_thread(upstream: Option<String>, trace_path: PathBuf) {
-    // Note: proxy port 8787 is fixed to match opencode.runwarden-only.json
-    // baseURL. If port 8787 is in use, add a --proxy-port flag.
+fn preflight_interactive_state_dir(state_dir: &Path) -> anyhow::Result<PathBuf> {
+    validate_launcher_path(state_dir, "interactive demo state directory")?;
+    let store = StateStore::open(state_dir).context("open interactive demo state")?;
+    let state_dir = state_dir
+        .canonicalize()
+        .context("canonicalize interactive demo state directory")?;
+    validate_launcher_path(&state_dir, "canonical interactive demo state directory")?;
+    if store.active_demo()?.is_some() {
+        anyhow::bail!("state directory already has an active interactive demo");
+    }
+    Ok(state_dir)
+}
+
+fn validate_launcher_path(path: &Path, label: &str) -> anyhow::Result<()> {
+    let value = path
+        .to_str()
+        .with_context(|| format!("{label} is not UTF-8"))?;
+    anyhow::ensure!(
+        !value.chars().any(char::is_control),
+        "{label} contains control characters"
+    );
+    Ok(())
+}
+
+fn require_fresh_llm_trace_path(trace_path: &Path) -> anyhow::Result<()> {
+    match fs::symlink_metadata(trace_path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).context("inspect interactive LLM proxy trace path"),
+        Ok(_) => anyhow::bail!(
+            "interactive LLM proxy trace path already exists; use a fresh state directory"
+        ),
+    }
+}
+
+fn prepare_trusted_demo_root(state_dir: &Path, leaf: &str, label: &str) -> anyhow::Result<PathBuf> {
+    let path = state_dir.join(leaf);
+    match fs::create_dir(&path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error).with_context(|| format!("create {label}")),
+    }
+    let metadata = fs::symlink_metadata(&path).with_context(|| format!("inspect {label}"))?;
+    anyhow::ensure!(
+        metadata.is_dir() && !metadata.file_type().is_symlink(),
+        "{label} must be a real directory"
+    );
+    let canonical = path
+        .canonicalize()
+        .with_context(|| format!("canonicalize {label}"))?;
+    anyhow::ensure!(
+        canonical.parent() == Some(state_dir),
+        "{label} escapes the interactive state directory"
+    );
+    validate_launcher_path(&canonical, label)?;
+    Ok(canonical)
+}
+
+fn prepare_interactive_demo(state_dir: &Path) -> anyhow::Result<server::DemoLaunchInfo> {
+    let store = StateStore::open(state_dir).context("open interactive demo state")?;
+    let state_dir = state_dir
+        .canonicalize()
+        .context("canonicalize interactive demo state directory")?;
+    validate_launcher_path(&state_dir, "canonical interactive demo state directory")?;
+    if store.active_demo()?.is_some() {
+        anyhow::bail!("state directory already has an active interactive demo");
+    }
+
+    let sandbox_root =
+        prepare_trusted_demo_root(&state_dir, "sandbox", "interactive sandbox root")?;
+    let trusted_runtime_root =
+        prepare_trusted_demo_root(&state_dir, "runtime", "trusted runtime root")?;
+
+    let mut token_bytes = Zeroizing::new([0_u8; 32]);
+    getrandom::fill(&mut *token_bytes).context("generate interactive demo instance token")?;
+    let token_slice: &[u8] = &token_bytes[..];
+    let instance_token = Zeroizing::new(URL_SAFE_NO_PAD.encode(token_slice));
+    drop(token_bytes);
+    let instance_token_hash = Sha256Digest::from_bytes(instance_token.as_bytes());
+
+    let now = OffsetDateTime::now_utc();
+    let expires_at = now
+        .checked_add(Duration::hours(1))
+        .ok_or_else(|| anyhow::anyhow!("interactive demo expiry overflowed"))?;
+    let story_id = StoryId::new();
+    let session_id = SessionId::new();
+    let policy_snapshot_hash = Sha256Digest::from_bytes(
+        format!("runwarden-live-demo-policy-v1:{story_id}:{session_id}").as_bytes(),
+    )
+    .as_str()
+    .to_owned();
+    let story = SecurityStory {
+        schema_version: SchemaVersion::current(),
+        story_id,
+        title: "Runwarden live reviewer session".to_owned(),
+        scenario_id: "interactive-live-review".to_owned(),
+        attack_category: "live_agent_provider_request".to_owned(),
+        run_mode: RunMode::Live,
+        enforcement_mode: EnforcementMode::Enforced,
+        provenance: StoryProvenance::Native,
+        status: StoryStatus::Running,
+        evidence_status: EvidenceStatus::Pending,
+        identity: StoryIdentity {
+            agent_id: "opencode-live-agent".to_owned(),
+            model_id: "live-model-unavailable".to_owned(),
+            actor_id: "local-demo-actor".to_owned(),
+            reviewer_id: Some("local-reviewer".to_owned()),
+        },
+        authority: AuthoritySnapshot {
+            session_id,
+            actor_id: "local-demo-actor".to_owned(),
+            authz_id: format!("live-demo-authz-{story_id}"),
+            authz_state: "active".to_owned(),
+            expires_at,
+            allowed_providers: vec![
+                "runwarden.input.inspect".to_owned(),
+                "external.email.send".to_owned(),
+            ],
+            files: Vec::new(),
+            networks: Vec::new(),
+            email: Some(EmailAuthority {
+                allowed_recipients: vec![
+                    "judge@example.test".to_owned(),
+                    "ops@example.com".to_owned(),
+                    "test@example.com".to_owned(),
+                ],
+                maximum_classification: DataClass::Internal,
+            }),
+            stores: Vec::new(),
+            code: None,
+            inputs: vec![InputAuthority {
+                allowed_sources: vec!["tool_input".to_owned()],
+                maximum_classification: DataClass::Internal,
+            }],
+            evidence: EvidenceAuthority {
+                current_story_only: true,
+                allowed_operations: Vec::new(),
+            },
+            artifacts: Vec::new(),
+            budgets: BudgetSnapshot {
+                max_argument_bytes: 256 * 1_024,
+                max_file_bytes: 256 * 1_024,
+                max_network_bytes: 256 * 1_024,
+                max_calls: 32,
+                max_wall_time_ms: 10_000,
+                max_model_calls: 16,
+                max_model_input_bytes: 256 * 1_024,
+                max_model_output_bytes: 64 * 1_024,
+            },
+            policy_snapshot_hash,
+        },
+        safe_attack_preview: "A live agent requested a reviewer-controlled provider action"
+            .to_owned(),
+        attack_content_hash: Sha256Digest::from_bytes(b"runwarden-live-demo-request")
+            .as_str()
+            .to_owned(),
+        stage_statuses: Vec::new(),
+        operations: Vec::new(),
+        event_count: 0,
+        report_claims: Vec::new(),
+        final_outcome_summary: "Live reviewer session is active".to_owned(),
+        final_event_hash: None,
+    };
+    store.create_story(&story)?;
+    store.create_session(&SessionRecord {
+        session_id,
+        story_id,
+        authority: story.authority.clone(),
+        policy_snapshot_hash: story.authority.policy_snapshot_hash.clone(),
+        expires_at,
+    })?;
+    let instance_id = format!("interactive-demo-{story_id}");
+    let activation = DemoActivation {
+        instance_id: instance_id.clone(),
+        story_id,
+        session_id,
+        process_id: std::process::id().max(1),
+        host_id: "local-reviewer-host".to_owned(),
+        instance_token_hash: instance_token_hash.as_str().to_owned(),
+        now: OffsetDateTime::now_utc(),
+    };
+    if let Err(error) = store.activate_demo(&activation) {
+        if matches!(
+            error,
+            JournalError::Conflict {
+                entity: "active_instance",
+                ..
+            }
+        ) {
+            anyhow::bail!("state directory already has an active interactive demo");
+        }
+        return Err(error.into());
+    }
+    let active =
+        store.active_context_snapshot(instance_token_hash.as_str(), OffsetDateTime::now_utc())?;
+    anyhow::ensure!(
+        active.active.instance_id == instance_id
+            && active.story.story_id == story_id
+            && active.session.session_id == session_id,
+        "interactive demo activation did not round-trip one runtime context"
+    );
+
+    Ok(server::DemoLaunchInfo {
+        story_id,
+        state_dir,
+        instance_token,
+        sandbox_root,
+        trusted_runtime_root,
+    })
+}
+
+struct PreparedLlmProxy {
+    cli: runwarden_llm_proxy::Cli,
+    listener: TcpListener,
+}
+
+fn prepare_llm_proxy(
+    upstream: Option<String>,
+    trace_path: PathBuf,
+) -> anyhow::Result<PreparedLlmProxy> {
+    let trace = trace_path
+        .to_str()
+        .context("interactive LLM proxy trace path is not UTF-8")?
+        .to_owned();
     let cli = runwarden_llm_proxy::Cli {
         bind: "127.0.0.1".to_string(),
         port: 8787,
         upstream: upstream.unwrap_or_else(|| "https://api.opencode.ai/v1".to_string()),
         api_key_env: "RUNWARDEN_LLM_API_KEY".to_string(),
-        trace: trace_path.to_string_lossy().to_string(),
+        trace,
         max_body_bytes: 8 * 1024 * 1024,
     };
+    let listener =
+        runwarden_llm_proxy::bind_listener(&cli).context("preflight interactive demo LLM proxy")?;
+    Ok(PreparedLlmProxy { cli, listener })
+}
+
+fn spawn_llm_proxy_thread(prepared: PreparedLlmProxy) {
     std::thread::spawn(move || {
-        if let Err(err) = runwarden_llm_proxy::serve(cli) {
+        if let Err(err) = runwarden_llm_proxy::serve_on_listener(prepared.cli, prepared.listener) {
             eprintln!("llm proxy error: {err}");
         }
     });

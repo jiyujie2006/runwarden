@@ -18,6 +18,7 @@ This index is the canonical map for the contest edition.
 - [Contest Review Outputs](reference/contest-review-outputs.md): generated evidence artifacts.
 - [MCP Reference](reference/mcp.md): exact agent-facing MCP tools and provider-call replay evidence.
 - [Reviewer Console](reference/webui-review-console.md): Rust-served interactive and static console contract.
+- [Reviewer HTTP and SSE API](reference/reviewer-http-sse-api.md): exact loopback routes, decision CAS, and resumable event stream.
 - [Reviewer Console Guide](guides/reviewer-console.md): operator walkthrough.
 - [Agent Integration](reference/agent-integration.md): Runwarden-only MCP config shape and OpenCode fixture.
 - [First Scenario](reference/first-scenario.md): scenario folder contract.

@@ -96,6 +96,19 @@
     button[data-action="approve"] { border-color: var(--green); }
     button[data-action="deny"] { border-color: var(--red); }
     button:disabled { opacity: 0.55; cursor: default; }
+    .review-fields { display: grid; gap: 8px; margin-top: 10px; }
+    .review-fields label { color: var(--muted); font-size: 0.78rem; }
+    .review-fields input {
+      width: 100%;
+      min-height: 32px;
+      margin-top: 3px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 5px 8px;
+      background: var(--panel-2);
+      color: var(--text);
+    }
+    .decision-status { margin: 8px 0 0; color: var(--muted); font-size: 0.82rem; }
     #trace-verification { color: var(--muted); font-size: 0.9rem; }
     .ok { color: var(--green); }
     .bad { color: var(--red); }
@@ -135,10 +148,9 @@
       var eventCount = 0;
       var deniedCount = 0;
       var reviewCount = 0;
-      var pendingSeen = Object.create(null);
-      var interactive = !Array.isArray(window.STATIC_EVENTS);
       var eventsEl = document.getElementById('events');
       var queueEl = document.getElementById('review-queue');
+      var native = null;
 
       function setEmpty(el, text) {
         if (el.children.length) return;
@@ -206,89 +218,332 @@
         eventsEl.prepend(eventArticle(kind, data));
         updateSummary();
       }
-      function appendPending(data) {
-        var key = data.approval_id || data.obs_ref;
-        if (!key || pendingSeen[key]) return;
-        pendingSeen[key] = true;
+      function appendStaticPending(data) {
         clearEmpty(queueEl);
         var article = eventArticle('provider_call', data);
-        if (interactive && data.approval_id) {
-          var actions = document.createElement('div');
-          actions.className = 'actions';
-          var approve = document.createElement('button');
-          approve.type = 'button';
-          approve.dataset.action = 'approve';
-          approve.textContent = 'Approve';
-          approve.onclick = function () { decide(data.approval_id, true, approve, deny); };
-          var deny = document.createElement('button');
-          deny.type = 'button';
-          deny.dataset.action = 'deny';
-          deny.textContent = 'Deny';
-          deny.onclick = function () { decide(data.approval_id, false, approve, deny); };
-          actions.appendChild(approve);
-          actions.appendChild(deny);
-          article.appendChild(actions);
-        }
         queueEl.appendChild(article);
       }
-      function removePending(data) {
-        var selector = data.approval_id ? '[data-approval-id="' + data.approval_id + '"]' : '[data-obs-ref="' + data.obs_ref + '"]';
-        var el = queueEl.querySelector(selector);
-        if (el) el.remove();
+
+      function requireOk(response) {
+        return response.json().then(function (body) {
+          if (!response.ok) {
+            var error = new Error('reviewer request failed with HTTP ' + response.status);
+            error.status = response.status;
+            error.body = body;
+            throw error;
+          }
+          return body;
+        });
+      }
+      function safeVersion(value) {
+        return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+      }
+      function exactJson(value) {
+        if (value === undefined || value === null) return '';
+        try { return JSON.stringify(value); } catch (_) { return '[unavailable]'; }
+      }
+      function storyEventArticle(storyEvent) {
+        var payload = storyEvent.payload || {};
+        var article = document.createElement('article');
+        article.className = 'event event-' + String(payload.decision || payload.state || storyEvent.event_type);
+        var header = document.createElement('header');
+        var title = document.createElement('div');
+        title.className = 'event-title';
+        title.textContent = storyEvent.event_type;
+        var badge = document.createElement('span');
+        badge.className = 'badge';
+        badge.textContent = payload.kind || storyEvent.event_type;
+        header.appendChild(title);
+        header.appendChild(badge);
+        article.appendChild(header);
+        var dl = document.createElement('dl');
+        fact(dl, 'Sequence', storyEvent.sequence);
+        fact(dl, 'Obs', storyEvent.obs_id);
+        fact(dl, 'Operation', storyEvent.operation_id);
+        fact(dl, 'Provider', storyEvent.provider || payload.provider);
+        fact(dl, 'Action', payload.action);
+        fact(dl, 'Decision', payload.decision);
+        fact(dl, 'Reason code', payload.reason_code);
+        fact(dl, 'Approval', payload.approval_id);
+        fact(dl, 'Approval state', payload.state);
+        fact(dl, 'Execution', payload.execution_status);
+        fact(dl, 'Side-effect state', payload.side_effect_state);
+        fact(dl, 'Previous hash', storyEvent.previous_hash);
+        fact(dl, 'Event hash', storyEvent.event_hash);
+        fact(dl, 'Recorded', storyEvent.recorded_at);
+        article.appendChild(dl);
+        return article;
+      }
+      function appendStoryEvent(storyEvent, sequenceText) {
+        if (!native || native.degraded) return;
+        if (storyEvent.story_id !== native.storyId) return degradeStream('foreign story event');
+        if (!/^(0|[1-9][0-9]*)$/.test(sequenceText)) return degradeStream('invalid SSE event id');
+        var sequence = Number(sequenceText);
+        if (!Number.isSafeInteger(sequence) || storyEvent.sequence !== sequence) {
+          return degradeStream('unsafe or inconsistent SSE sequence');
+        }
+        if (native.seenSequences[sequenceText]) return;
+        var previous = Number(native.lastSequence);
+        if (!Number.isSafeInteger(previous) || sequence !== previous + 1) {
+          return degradeStream('non-contiguous SSE sequence');
+        }
+        native.seenSequences[sequenceText] = true;
+        native.lastSequence = sequenceText;
+        clearEmpty(eventsEl);
+        eventCount++;
+        var payload = storyEvent.payload || {};
+        if (payload.decision === 'denied') deniedCount++;
+        if (payload.decision === 'requires_review') reviewCount++;
+        eventsEl.prepend(storyEventArticle(storyEvent));
+        updateSummary();
+        if (!native.bootstrapping) {
+          if (storyEvent.operation_id) refreshOperation(storyEvent.operation_id);
+          scheduleNativeEvidenceVerification();
+        }
+      }
+      function removeOperationCard(operationId) {
+        if (!native || !native.queueCards[operationId]) return;
+        native.queueCards[operationId].remove();
+        delete native.queueCards[operationId];
         setEmpty(queueEl, 'No pending reviews.');
       }
-      function decide(approvalId, approve, yes, no) {
-        yes.disabled = true;
-        no.disabled = true;
-        fetch(approve ? '/api/approve' : '/api/deny', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ approval_id: approvalId })
-        }).then(function (r) { return r.json(); }).then(function () {
-          yes.textContent = approve ? 'Approved' : yes.textContent;
-          no.textContent = approve ? no.textContent : 'Denied';
-        }).catch(function () {
-          yes.disabled = false;
-          no.disabled = false;
-        });
-      }
-      function loadPending() {
-        if (!interactive) return;
-        fetch('/api/pending').then(function (r) { return r.json(); }).then(function (body) {
-          (body.pending || []).forEach(function (approval) {
-            appendPending({
-              kind: 'provider_call',
-              provider: approval.binding && approval.binding.provider,
-              action: approval.binding && approval.binding.action,
-              decision: 'requires_review',
-              approval_id: approval.approval_id,
-              obs_ref: String(approval.approval_id || '').replace(/^webui-/, ''),
-              side_effect_executed: false,
-              reason: 'high-risk provider requires reviewer approval'
-            });
-          });
-        });
-      }
-      function verifyTrace() {
-        if (!interactive) {
-          document.getElementById('trace-verification').textContent = 'Static console';
+      function renderPendingOperation(detail) {
+        var operation = detail.operation || {};
+        var approval = operation.approval || {};
+        var operationId = operation.operation_id;
+        if (!operationId) return;
+        if (operation.state !== 'awaiting_approval' || approval.state !== 'pending') {
+          removeOperationCard(operationId);
           return;
         }
-        fetch('/api/trace/verify').then(function (r) { return r.json(); }).then(function (v) {
-          var el = document.getElementById('trace-verification');
-          el.textContent = '';
-          var mt = v.model_trace || {};
-          var pt = v.provider_trace || {};
-          var line1 = document.createElement('div');
-          line1.textContent = 'Model trace: ' + (mt.verified ? 'verified (' + (mt.event_count || 0) + ' events)' : (mt.error || 'not verified'));
-          line1.className = mt.verified ? 'ok' : 'bad';
-          var line2 = document.createElement('div');
-          line2.textContent = 'Provider trace: ' + (pt.verified ? 'verified (' + (pt.event_count || 0) + ' events)' : (pt.error || 'not verified'));
-          line2.className = pt.verified ? 'ok' : 'bad';
-          el.appendChild(line1);
-          el.appendChild(line2);
+        if (!safeVersion(operation.version) || !safeVersion(detail.approval_version)) {
+          removeOperationCard(operationId);
+          return;
+        }
+        removeOperationCard(operationId);
+        clearEmpty(queueEl);
+        var article = document.createElement('article');
+        article.className = 'event event-requires_review';
+        var header = document.createElement('header');
+        var title = document.createElement('div');
+        title.className = 'event-title';
+        title.textContent = operation.provider + ' / ' + operation.action;
+        var badge = document.createElement('span');
+        badge.className = 'badge';
+        badge.textContent = operation.state;
+        header.appendChild(title);
+        header.appendChild(badge);
+        article.appendChild(header);
+        var dl = document.createElement('dl');
+        fact(dl, 'Operation', operationId);
+        fact(dl, 'Approval', approval.approval_id);
+        fact(dl, 'Resource', exactJson(operation.resource_claim));
+        fact(dl, 'Safe arguments', exactJson(operation.arguments));
+        fact(dl, 'Argument hash', operation.argument_hash);
+        fact(dl, 'Policy hash', operation.policy_snapshot_hash);
+        fact(dl, 'Binding hash', approval.binding_digest);
+        fact(dl, 'Expires', approval.expires_at);
+        fact(dl, 'Operation version', operation.version);
+        fact(dl, 'Approval version', detail.approval_version);
+        fact(dl, 'Policy checks', exactJson(operation.policy_checks));
+        article.appendChild(dl);
+        var oneShot = document.createElement('p');
+        oneShot.className = 'reason';
+        oneShot.textContent = 'One decision applies only to this immutable operation and is consumed at execution start.';
+        article.appendChild(oneShot);
+
+        var fields = document.createElement('div');
+        fields.className = 'review-fields';
+        var reviewerLabel = document.createElement('label');
+        reviewerLabel.textContent = 'Reviewer';
+        var reviewer = document.createElement('input');
+        reviewer.type = 'text';
+        reviewer.maxLength = 256;
+        reviewer.value = 'local-reviewer';
+        reviewerLabel.appendChild(reviewer);
+        var reasonLabel = document.createElement('label');
+        reasonLabel.textContent = 'Reason';
+        var reason = document.createElement('input');
+        reason.type = 'text';
+        reason.maxLength = 4096;
+        reason.value = 'Reviewed the exact frozen Runwarden operation';
+        reasonLabel.appendChild(reason);
+        fields.appendChild(reviewerLabel);
+        fields.appendChild(reasonLabel);
+        article.appendChild(fields);
+
+        var actions = document.createElement('div');
+        actions.className = 'actions';
+        var approve = document.createElement('button');
+        approve.type = 'button';
+        approve.dataset.action = 'approve';
+        approve.textContent = 'Approve';
+        var deny = document.createElement('button');
+        deny.type = 'button';
+        deny.dataset.action = 'deny';
+        deny.textContent = 'Deny';
+        var status = document.createElement('p');
+        status.className = 'decision-status';
+        if (!native.writesEnabled) {
+          approve.disabled = true;
+          deny.disabled = true;
+          status.textContent = 'Decisions are disabled because this page origin does not match ' + native.acceptedOrigin + '.';
+        }
+        approve.onclick = function () {
+          decideNative(detail, 'approve', reviewer.value, reason.value, approve, deny, status);
+        };
+        deny.onclick = function () {
+          decideNative(detail, 'deny', reviewer.value, reason.value, approve, deny, status);
+        };
+        actions.appendChild(approve);
+        actions.appendChild(deny);
+        article.appendChild(actions);
+        article.appendChild(status);
+        queueEl.appendChild(article);
+        native.queueCards[operationId] = article;
+      }
+      function refreshOperation(operationId) {
+        if (!native) return Promise.resolve();
+        return fetch('/api/stories/' + encodeURIComponent(native.storyId) + '/operations/' + encodeURIComponent(operationId))
+          .then(requireOk)
+          .then(function (detail) {
+            var operation = detail.operation || {};
+            var previous = native.operationVersions[operationId];
+            if (!safeVersion(operation.version) || (safeVersion(previous) && operation.version < previous)) return;
+            native.operationVersions[operationId] = operation.version;
+            renderPendingOperation(detail);
+          })
+          .catch(function (error) {
+            if (error.status === 404) removeOperationCard(operationId);
+          });
+      }
+      function decideNative(detail, decision, reviewer, reason, yes, no, status) {
+        if (!native || !native.writesEnabled) return;
+        reviewer = reviewer.trim();
+        reason = reason.trim();
+        if (!reviewer || !reason) {
+          status.textContent = 'Reviewer and reason are required.';
+          return;
+        }
+        yes.disabled = true;
+        no.disabled = true;
+        status.textContent = 'Submitting one version-bound decision…';
+        var operation = detail.operation;
+        var approvalId = operation.approval.approval_id;
+        fetch('/api/approvals/' + encodeURIComponent(approvalId) + '/decision', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Runwarden-Reviewer-Nonce': native.nonce
+          },
+          body: JSON.stringify({
+            decision: decision,
+            reviewer: reviewer,
+            reason: reason,
+            expected_approval_version: detail.approval_version,
+            expected_operation_version: operation.version
+          })
+        }).then(requireOk).then(function () {
+          status.textContent = 'Decision committed; waiting for the durable operation state.';
+          return refreshOperation(operation.operation_id);
+        }).catch(function (error) {
+          status.textContent = error.status === 409
+            ? 'State changed; refresh completed and a new click is required.'
+            : 'Decision outcome is not assumed; current state is being refreshed.';
+          refreshOperation(operation.operation_id);
+        });
+      }
+      function verifyNativeEvidence() {
+        if (!native || native.degraded) return;
+        fetch('/api/stories/' + encodeURIComponent(native.storyId) + '/evidence/verify')
+          .then(requireOk)
+          .then(function (verification) {
+            if (!native || native.degraded) return;
+            var el = document.getElementById('trace-verification');
+            el.textContent = verification.verification_scope + ': ' +
+              (verification.structural_valid ? 'valid' : 'invalid') +
+              ' / evidence ' + verification.evidence_status;
+            el.className = verification.structural_valid ? 'ok' : 'bad';
+          }).catch(function () {
+            if (!native || native.degraded) return;
+            var el = document.getElementById('trace-verification');
+            el.textContent = 'Structural evidence verification unavailable';
+            el.className = 'bad';
+          });
+      }
+      function scheduleNativeEvidenceVerification() {
+        if (!native || native.verifyScheduled) return;
+        native.verifyScheduled = true;
+        setTimeout(function () {
+          if (!native) return;
+          native.verifyScheduled = false;
+          if (native.degraded) return;
+          verifyNativeEvidence();
+        }, 100);
+      }
+      function degradeStream(reason) {
+        if (!native) return;
+        native.degraded = true;
+        if (native.eventSource) native.eventSource.close();
+        var el = document.getElementById('trace-verification');
+        el.textContent = 'Live stream stopped: ' + reason + '. Use the paginated story-event API for investigation.';
+        el.className = 'bad';
+      }
+      function openNativeStream() {
+        var url = '/events?story_id=' + encodeURIComponent(native.storyId) +
+          '&after_seq=' + encodeURIComponent(native.lastSequence);
+        var source = new EventSource(url);
+        native.eventSource = source;
+        source.addEventListener('story_event', function (message) {
+          native.streamErrors = 0;
+          var storyEvent;
+          try { storyEvent = JSON.parse(message.data); } catch (_) {
+            return degradeStream('invalid story-event JSON');
+          }
+          appendStoryEvent(storyEvent, message.lastEventId);
+        });
+        source.onerror = function () {
+          if (source.readyState === EventSource.CLOSED) {
+            return degradeStream('stream closed and will not reconnect');
+          }
+          native.streamErrors++;
+          if (native.streamErrors >= 3) degradeStream('repeated reconnects without progress');
+        };
+      }
+      function startNativeConsole() {
+        fetch('/api/bootstrap').then(requireOk).then(function (bootstrap) {
+          var evidence = bootstrap.evidence || {};
+          var story = evidence.story || {};
+          native = {
+            storyId: bootstrap.active_story_id,
+            nonce: bootstrap.reviewer_nonce,
+            acceptedOrigin: bootstrap.accepted_origin,
+            writesEnabled: window.location.origin === bootstrap.accepted_origin,
+            lastSequence: '0',
+            seenSequences: Object.create(null),
+            operationVersions: Object.create(null),
+            queueCards: Object.create(null),
+            eventSource: null,
+            streamErrors: 0,
+            bootstrapping: true,
+            verifyScheduled: false,
+            degraded: false
+          };
+          (evidence.events || []).forEach(function (storyEvent) {
+            appendStoryEvent(storyEvent, String(storyEvent.sequence));
+          });
+          native.bootstrapping = false;
+          (story.operations || []).forEach(function (operation) {
+            if (operation.operation_id) refreshOperation(operation.operation_id);
+          });
+          if (!native.degraded) {
+            openNativeStream();
+            scheduleNativeEvidenceVerification();
+          }
         }).catch(function () {
-          document.getElementById('trace-verification').textContent = 'trace file not found';
+          var el = document.getElementById('trace-verification');
+          el.textContent = 'Native reviewer bootstrap unavailable';
+          el.className = 'bad';
         });
       }
       setEmpty(queueEl, 'No pending reviews.');
@@ -297,23 +552,12 @@
       if (Array.isArray(window.STATIC_EVENTS)) {
         window.STATIC_EVENTS.forEach(function (event) {
           appendEvent(event.kind || 'provider_call', event);
-          if (event.decision === 'requires_review') appendPending(event);
+          if (event.decision === 'requires_review') appendStaticPending(event);
         });
+        document.getElementById('trace-verification').textContent = 'Static console';
       } else {
-        var es = new EventSource('/events');
-        ['provider_call', 'model_call', 'approval_granted', 'approval_denied'].forEach(function (kind) {
-          es.addEventListener(kind, function (e) {
-            var data = JSON.parse(e.data);
-            appendEvent(kind, data);
-            if (data.decision === 'requires_review') appendPending(data);
-            if (kind === 'approval_granted' || kind === 'approval_denied') removePending(data);
-          });
-        });
-        loadPending();
-        setInterval(loadPending, 1500);
-        setInterval(verifyTrace, 1500);
+        startNativeConsole();
       }
-      verifyTrace();
     })();
   </script>
 </body>

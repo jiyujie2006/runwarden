@@ -22,7 +22,8 @@ OpenCode(agent) ─► runwarden-llm-proxy ─► 云 LLM API
                    (输入/输出过滤 inspect_input + 模型调用 trace)
 OpenCode(agent) ─► runwarden-mcp ─► KernelEnforcer ─► 本地沙箱 provider / 邮箱记录
                                      └► 异常检测模型（序列/egress/参数）
-监督端 ◄─ 实时事件总线（工具决策 + 模型过滤告警）
+监督端 ◄─ 原生 SQLite story SSE（工具决策 + 审批状态）
+模型过滤告警 ─► 独立 sealed JSONL trace（本 checkpoint 尚未桥接到 live story）
 ```
 
 - **模型调用面**：LLM 代理拦截 prompt + completion，跑 `inspect_input`（基座过滤原型），高危输入阻断（HTTP 403），写 sealed JSONL 模型调用 trace。
@@ -99,7 +100,7 @@ OpenCode(agent) ─► runwarden-mcp ─► KernelEnforcer ─► 本地沙箱 p
 | proxy-probe（deterministic 模型输入过滤 corpus） | 恶意输入阻断，良性控制转发，非 proxy-probe 期望标记为 SKIP；结果见 `proxy-probe-summary.json` |
 | output-probe（deterministic 流式输出过滤 corpus） | SSE 解析提取 completion + inspect_input，高危 403 `output_blocked`，良性 passthrough；结果见 `output-probe-summary.json` |
 | 五场景 deterministic replay | 工具/provider 决策覆盖 `denied`、`requires_review`、`allowed`、`root_escape`、`egress_denied`，结果见 `artifacts/demo/*/webui.json` |
-| 实时看板 SSE | `runwarden demo` 同时流 provider_call + model_call，浏览器实时渲染 |
+| 实时看板 SSE | `runwarden demo` 从原生 SQLite story 恢复 provider/approval 事件；独立 model_call trace 不冒充 live story event |
 | agent-drive（可选） | OpenCode 实机驱动，结果仅在生成 `agent-drive-summary.json` 时引用 |
 | 异常检测模型 | 5 单测：benign 不报 / 异常序列 / 新颖 egress / 异常参数 / 首调用跳序列 |
 | 预览预算绕过修复 | `collect_risks` 改扫全量 normalized，长提示注入不再漏检（回归测试覆盖） |
@@ -109,7 +110,7 @@ OpenCode(agent) ─► runwarden-mcp ─► KernelEnforcer ─► 本地沙箱 p
 
 - **基座过滤已增强**：L1 规则短语扩充（覆盖 ignore/disregard/forget/DAN/debug-mode/roleplay、approval bypass、schema/manifest poisoning、report fabrication 等改写）+ L2 few-shot 词形相似（token Jaccard）+ percent/base64 token 解码。真 embedding 语义（同义改写泛化）为可扩展方向, 但会引入模型依赖。
 - **流式输出过滤已实现**：代理解析 SSE（`response.output_text.delta`/`response.completed` + chat-completion `choices[].delta.content`）提取 completion + `inspect_input`，高危 403 `output_blocked`，良性 passthrough。
-- **实时看板 SSE 已实现**：`runwarden demo` 同时流工具决策（provider_call）+ 模型告警（model_call），浏览器 EventSource 实时渲染。
+- **实时看板 SSE 已实现**：`runwarden demo` 通过带 story/cursor 的 EventSource 恢复原生工具决策与审批事件。LLM proxy 的 sealed `model_call` JSONL 在本 checkpoint 单独验证，尚未桥接为 native live story event。
 - **agent-drive 模型非确定性**：免费模型不一定调工具；可重试或用更强模型。核心证据以 deterministic probes 和 scenario replay 为准。
 - **真实云 LLM**：默认复现可用 mock 上游和 deterministic probes；真实云只需 `RUNWARDEN_LLM_API_KEY` + `--upstream <云 base>`（见 §6 runbook）。
 
@@ -137,9 +138,9 @@ python3 redteam/run.py agent-drive \
 # 单元 / 集成测试
 cargo test --workspace
 
-# 实时看板（工具决策 + 模型告警，浏览器实时）
+# 实时看板（原生工具决策 + 审批事件，浏览器可恢复）
 ./target/debug/runwarden demo
-# 浏览器开 http://127.0.0.1:8088/ ；/events 为 SSE 流
+# 浏览器开 http://127.0.0.1:8088/；SSE 使用 /events?story_id=<id>&after_seq=<cursor>
 ```
 
 ### 真实云 LLM runbook

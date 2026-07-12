@@ -108,9 +108,11 @@ MCP no longer reads or writes `.runwarden/approvals`, does not create the fixed
 `mcp-inline` session, and does not append legacy provider-call authority events.
 Legacy approval JSON cannot authorize a native lease or provider execution.
 The loopback nonce/origin/version-protected reviewer API can decide the native
-approval through the journal's active-story CAS. The dependency-free legacy
-console is not yet wired to that API, and its file-backed buttons remain
-non-authoritative compatibility behavior.
+approval through the journal's active-story CAS. The dependency-free live
+console now bootstraps that API, follows committed story events through
+resumable SSE, and submits the two entity versions. The original waiting
+`runwarden.provider.call` then continues the same operation; it is not resent.
+See [Reviewer HTTP and SSE API](reviewer-http-sse-api.md).
 
 ## Trace And Report Compatibility Tools
 

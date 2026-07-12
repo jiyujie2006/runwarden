@@ -240,8 +240,11 @@ file-backed approvals, create a fixed compatibility session, or call the old
 generic business-tool dispatcher. A provider is invoked only after the native
 journal commits its exact lease and execution-start intent.
 
-The legacy interactive WebUI is not yet connected to native approval rows, and
-the CLI's retained legacy demo/scenario paths must not be described as having
-passed this executor boundary. File-backed approval JSON and legacy provider
-events are never proof of a native MCP execution. The reviewer HTTP API and
-closed-loop demo migration are later Plan 4 checkpoints.
+The live interactive WebUI is connected to native approval rows through the
+reviewer HTTP API and resumable story-event SSE. Its decision does not call this
+executor: the original waiting MCP runtime must still acquire the exact lease,
+commit execution-start, consume approval once, issue the permit, and cross this
+executor boundary. File-backed approval JSON and legacy provider events remain
+non-authoritative, and the retained static scenario projection must not be
+described as native execution. See
+[Reviewer HTTP and SSE API](reviewer-http-sse-api.md).

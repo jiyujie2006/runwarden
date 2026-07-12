@@ -28,6 +28,7 @@ subtle.workspace = true
 time.workspace = true
 tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
+zeroize.workspace = true
 
 [dev-dependencies]
 runwarden-mcp = { path = "../runwarden-mcp" }

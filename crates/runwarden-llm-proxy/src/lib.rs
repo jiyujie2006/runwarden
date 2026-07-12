@@ -61,7 +61,28 @@ struct HttpResponse {
 }
 
 pub fn serve(cli: Cli) -> Result<()> {
-    let listener = TcpListener::bind((cli.bind.as_str(), cli.port))?;
+    let listener = bind_listener(&cli)?;
+    serve_on_listener(cli, listener)
+}
+
+/// Bind the configured listener without starting the accept loop.
+///
+/// Embedders use this to fail startup before publishing any trusted launch
+/// information or durable runtime activation.
+pub fn bind_listener(cli: &Cli) -> Result<TcpListener> {
+    validate_cli_text(cli)?;
+    TcpListener::bind((cli.bind.as_str(), cli.port)).with_context(|| {
+        format!(
+            "bind LLM proxy listener at {}:{}",
+            cli.bind.as_str(),
+            cli.port
+        )
+    })
+}
+
+/// Serve on a listener that was successfully bound during startup preflight.
+pub fn serve_on_listener(cli: Cli, listener: TcpListener) -> Result<()> {
+    validate_cli_text(&cli)?;
     if let Some(parent) = Path::new(&cli.trace).parent() {
         std::fs::create_dir_all(parent).ok();
     }
@@ -82,6 +103,25 @@ pub fn serve(cli: Cli) -> Result<()> {
         if let Err(error) = handle_connection(stream, &cli) {
             eprintln!("connection error: {error}");
         }
+    }
+    Ok(())
+}
+
+fn validate_cli_text(cli: &Cli) -> Result<()> {
+    for (label, value) in [
+        ("LLM proxy bind", cli.bind.as_str()),
+        ("LLM proxy upstream", cli.upstream.as_str()),
+        (
+            "LLM proxy API key environment name",
+            cli.api_key_env.as_str(),
+        ),
+        ("LLM proxy trace path", cli.trace.as_str()),
+    ] {
+        anyhow::ensure!(!value.is_empty(), "{label} is empty");
+        anyhow::ensure!(
+            !value.chars().any(char::is_control),
+            "{label} contains control characters"
+        );
     }
     Ok(())
 }
@@ -657,6 +697,22 @@ fn status_text(status: u16) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn listener_preflight_rejects_control_character_output_injection() {
+        let cli = Cli {
+            bind: "127.0.0.1".to_owned(),
+            port: 0,
+            upstream: "https://example.test/v1\nforged-log-line".to_owned(),
+            api_key_env: "RUNWARDEN_LLM_API_KEY".to_owned(),
+            trace: "trace.jsonl".to_owned(),
+            max_body_bytes: 1024,
+        };
+
+        let error = bind_listener(&cli).unwrap_err().to_string();
+        assert_eq!(error, "LLM proxy upstream contains control characters");
+        assert!(!error.contains("forged-log-line"));
+    }
 
     #[test]
     fn extract_prompt_text_concatenates_messages() {

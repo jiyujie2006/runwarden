@@ -133,9 +133,10 @@ still fails a later-page read. Frame snapshots never embed historical event
 arrays or private operation arguments.
 
 These native journal events are the durable `runwarden-mcp` operation evidence.
-They remain distinct from the legacy interactive demo's `events.jsonl` and
-file-backed approval flow; documentation and contest evidence must identify
-which source produced an observation rather than treating the two stores as
+They remain distinct from the retained legacy provider `events.jsonl` and
+file-backed approval compatibility data. The live reviewer console uses only
+the native journal; documentation and contest evidence must identify which
+source produced an observation rather than treating the stores as
 interchangeable.
 `StateStore::export_legacy_jsonl` returns a deterministic newline-terminated
 native `StoryEvent` stream only after verifying the complete story, event, and

@@ -207,9 +207,11 @@ an approval belonging to another story is hidden as not found. The API returns
 the updated display-safe approval and operation from that transaction;
 approval still does not lease, consume, or execute the operation.
 
-The dependency-free legacy interactive console continues to use file-backed
-reviewer records until its later live-console migration. Those records cannot
-approve or consume a native MCP operation, and the legacy in-memory authority
-path rejects `ApprovalState::Leased` rather than treating it as an ordinary
-approval. The complete storage, recovery, and compatibility boundaries are
-specified in [Native Operation Journal](operation-journal.md).
+The dependency-free live console now reads native operation snapshots and
+submits nonce-, origin-, and version-protected decisions to that boundary. The
+original waiting MCP call observes the durable decision and resumes the same
+operation. File-backed compatibility records cannot approve or consume a
+native operation, and the legacy in-memory authority path rejects
+`ApprovalState::Leased` rather than treating it as an ordinary approval. See
+[Reviewer HTTP and SSE API](reviewer-http-sse-api.md) and
+[Native Operation Journal](operation-journal.md).

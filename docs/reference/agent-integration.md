@@ -16,7 +16,10 @@ to `false`. A partial map such as only `{"bash": false}` is rejected; upgrading
 the pinned OpenCode version requires reviewing this deny set.
 The checked config also defines `runwarden-proxy/big-pickle` as the
 OpenAI-compatible model entry that routes model calls through the local LLM
-proxy at `http://127.0.0.1:8787/v1`.
+proxy at `http://127.0.0.1:8787/v1`. Interactive startup pre-binds that fixed
+loopback port before it activates a durable demo or prints trusted launcher
+values. If another process owns the port, startup fails closed instead of
+directing model traffic to that process.
 
 OpenCode also reads user-level configuration. For a strict Runwarden-only demo,
 run OpenCode with clean `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`,

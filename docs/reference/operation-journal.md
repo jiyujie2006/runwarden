@@ -209,9 +209,10 @@ consistent transaction it loads and verifies the entire native
 UTF-8 JSON object followed by `\n`. An empty event chain produces empty bytes.
 The API returns `Vec<u8>` and deliberately accepts no output path.
 
-This stream is not the current MCP `.runwarden/events.jsonl` format. The latter
-contains legacy provider envelopes and `TraceEvent` values and remains the
-legacy report-lint authority until the runtime/MCP migration is completed.
-Likewise, `.runwarden/approvals` remains the legacy interactive approval store;
-neither filesystem surface acquires native journal authority merely because a
-native compatibility export exists.
+This stream is not the retained MCP `.runwarden/events.jsonl` compatibility
+format. The latter contains legacy provider envelopes and `TraceEvent` values
+and remains a read-only report-lint evidence source. `.runwarden/approvals` is
+also compatibility data and is no longer used by the live reviewer console or
+production MCP. Neither filesystem surface acquires native journal authority
+merely because a native compatibility export exists. The live boundary is
+specified in [Reviewer HTTP and SSE API](reviewer-http-sse-api.md).

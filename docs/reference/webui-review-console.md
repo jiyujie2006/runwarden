@@ -11,19 +11,27 @@ delivery only; policy decisions stay in Rust kernel/MCP/provider code.
 - `GET /` console HTML
 - `GET /events?story_id={id}&after_seq={sequence}` resumable Server-Sent Events
   for committed native story events
-- `GET /api/pending` pending approval records from `.runwarden/approvals`
-- `POST /api/approve` and `POST /api/deny` state changes for existing approval records
-- `GET /api/trace/verify` hash-chain verification for the LLM proxy trace and
-  MCP provider-call trace from `.runwarden/events.jsonl`
+- the story-native reviewer JSON routes described below
 - `GET /healthz`
 
-MCP writes pending approval records and provider-call events under
-`RUNWARDEN_STATE_DIR` when set, otherwise `.runwarden` under its current
-directory. For the two-terminal demo, export `RUNWARDEN_STATE_DIR` to the repo
-state directory before launching the agent.
+Before durable activation, interactive mode pre-binds the reviewer and fixed
+LLM-proxy loopback listeners and constructs reviewer state. It then creates one
+Native, Live, Enforced story, session, and singleton active instance in
+`RUNWARDEN_STATE_DIR` (default `.runwarden`) and prints the exact trusted MCP
+environment for the second terminal. A preflight failure leaves no active
+instance and prints no launcher secret. The instance token in successful
+instructions is sensitive launcher material; SQLite stores only its hash, and
+the browser never receives it. A second demo using the same state directory
+fails with an active-instance conflict. This checkpoint has no safe
+active-instance takeover, so use a fresh state directory for a later live
+launch.
 
-The console polls pending approvals and trace verification while interactive,
-so Evidence Chain updates after model or provider events are written.
+The console bootstraps the active story, renders committed events, opens SSE
+strictly after its last sequence, and refreshes affected native operations.
+Pending cards come from Rust-produced `AwaitingApproval` operations and their
+native `Pending` approval view. The browser does not read or write
+`.runwarden/approvals` and does not require a second provider call after a
+decision.
 
 ### Native Reviewer JSON API
 
@@ -87,13 +95,18 @@ the same immediate SQLite transaction before it records an approve or deny
 event. Approval does not execute or consume the operation; execution-start is
 still the one-shot authorization boundary.
 
-The dependency-free `console.html` continues to use the legacy approval and
-trace polling routes until the later live-console migration. Its old
-unparameterized `EventSource('/events')` is rejected by the native endpoint in
-this intermediate phase, so live story-event rendering begins only after that
-migration teaches the browser to bootstrap the active story id and consume
-`story_event` frames. File-backed approval records remain compatibility display
-state and cannot authorize a native operation.
+`console.html` keeps the reviewer nonce only in its closure memory. It enables
+write buttons only when `window.location.origin` exactly matches the
+server-owned accepted origin, sends both approval and operation versions, and
+never automatically retries a failed or lost decision POST. A conflict causes
+a state refresh and requires a new click. The original MCP request polls the
+same SQLite operation for up to 120 seconds by default, then leases, consumes,
+and executes only after the separate Rust execution-start boundary commits.
+The HTML response is non-cacheable and cannot be framed: Rust supplies both a
+`frame-ancestors 'none'` content security policy and `X-Frame-Options: DENY`.
+
+The canonical route, request, error, cursor, and timing contract is
+[Reviewer HTTP and SSE API](reviewer-http-sse-api.md).
 
 ## Static Mode
 
@@ -121,3 +134,6 @@ Defense-layer labels are produced by Rust event JSON (`defense_layer`) and the
 browser displays them without reclassifying provider ids.
 The browser does not convert legacy traces into native story events or mint
 `obs_*` references; the Rust adapter owns the `story.json` projection.
+Static event JSON is escaped for an inline script context, including `<`, `>`,
+`&`, and JavaScript line separators. Static mode performs no HTTP or SSE work
+and exposes no decision controls.

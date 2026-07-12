@@ -47,5 +47,7 @@ directories; it neither follows child symlink directories nor removes other
 files or directories. `runwarden report render --scenario-suite` writes the
 contest report when `--output` is supplied.
 
-`runwarden demo` serves the interactive console from Rust and writes reviewer
-approval state under `.runwarden/approvals`.
+`runwarden demo` serves the interactive console from Rust. Interactive reviewer
+decisions and operation state live in the native SQLite journal under the
+trusted state directory; the browser does not create artifact or approval
+files, and approval does not require a second provider call.
