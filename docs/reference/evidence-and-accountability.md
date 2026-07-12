@@ -132,10 +132,11 @@ page, so corruption in an earlier event, frame, snapshot, or story-version link
 still fails a later-page read. Frame snapshots never embed historical event
 arrays or private operation arguments.
 
-These native journal events are distinct from the current legacy MCP
-`events.jsonl` and file-backed approval flow. Until runtime/MCP integration is
-complete, documentation and contest evidence must identify which source
-produced an observation rather than treating the two stores as interchangeable.
+These native journal events are the durable `runwarden-mcp` operation evidence.
+They remain distinct from the legacy interactive demo's `events.jsonl` and
+file-backed approval flow; documentation and contest evidence must identify
+which source produced an observation rather than treating the two stores as
+interchangeable.
 `StateStore::export_legacy_jsonl` returns a deterministic newline-terminated
 native `StoryEvent` stream only after verifying the complete story, event, and
 frame chains in one transaction. It accepts no path and never reads private
@@ -150,7 +151,10 @@ LLM proxy model-call traces are written as sealed JSONL `TraceEvent` records.
 Each line includes `previous_hash` and `event_hash`; CLI trace verification
 accepts this JSONL form and rejects malformed or unsigned legacy lines.
 
-MCP report lint uses the server-owned provider-call trace store, not inline
-trace events supplied by an agent. Provider-call events are read from
+MCP report lint temporarily uses the legacy provider-call trace store as a
+read-only compatibility evidence source, not inline trace events supplied by
+an agent. Provider-call events are read from
 `RUNWARDEN_STATE_DIR/events.jsonl` when configured, otherwise from
-`.runwarden/events.jsonl` relative to the MCP process.
+`.runwarden/events.jsonl` relative to the MCP process. This file cannot approve,
+lease, resume, or execute a native operation; Plan 6 moves report support to
+verified native story evidence.

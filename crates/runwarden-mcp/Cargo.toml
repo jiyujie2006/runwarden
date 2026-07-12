@@ -13,10 +13,18 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
+hmac.workspace = true
 runwarden-anomaly = { path = "../runwarden-anomaly" }
 runwarden-assurance = { path = "../runwarden-assurance" }
 runwarden-kernel = { path = "../runwarden-kernel" }
 runwarden-providers = { path = "../runwarden-providers" }
+runwarden-runtime = { path = "../runwarden-runtime" }
+runwarden-state = { path = "../runwarden-state" }
+serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+tempfile = "3.23"
+thiserror.workspace = true
 time.workspace = true
 url.workspace = true
+zeroize.workspace = true

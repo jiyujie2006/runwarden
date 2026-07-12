@@ -25,8 +25,10 @@ runwarden check --strict --json
 `runwarden demo` starts the Rust console at `http://127.0.0.1:8088` and the
 LLM proxy at `http://127.0.0.1:8787/v1`. The browser console streams sealed
 model-call JSONL and MCP provider-call events. Approval buttons update
-`.runwarden/approvals/*.json`; MCP retries load matching approved records and
-consume them once.
+`.runwarden/approvals/*.json` for the retained legacy demo only. Production
+`runwarden-mcp` no longer reads those files; its approval authority is the
+native SQLite operation journal. Until the later Plan 4 reviewer API and demo
+startup migration, this legacy console cannot approve a native MCP operation.
 
 When running an agent from a different working directory, set:
 
@@ -48,10 +50,11 @@ provider calls through the legacy Rust kernel projection, then writes
 `trace.json`, `provider-calls.json`, `denials.json`, `report.json`,
 `metrics.json`, `webui.json`, and the redacted, explicitly incomplete
 `story.json` legacy projection. First-party inspection still runs in process.
-External calls fail closed as `native_executor_required` until the durable
-Plan 4 runtime connects policy, approval, execution lease, permit, native
-executor, and result journal; the CLI never falls back to the removed public
-business-tool dispatcher.
+External calls in this retained CLI scenario projection fail closed as
+`native_executor_required`; the CLI never falls back to the removed public
+business-tool dispatcher. The production MCP path already uses the durable
+policy, approval, execution-lease, permit, executor, and result-journal chain,
+but the CLI demo/scenario migration is a later Plan 4 checkpoint.
 
 `runwarden demo --all --output artifacts/demo --json` runs all five scenarios
 and writes exactly one `story.json` per official scenario plus

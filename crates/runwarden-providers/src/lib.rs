@@ -1199,6 +1199,21 @@ pub mod catalog {
         "external.knowledge.write",
     ];
 
+    /// Canonical action for providers admitted to the durable generic runtime
+    /// call surface. Keeping this in the provider catalog prevents MCP or UI
+    /// presentation code from inventing an executable action.
+    pub fn canonical_runtime_provider_action(provider_id: &str) -> Option<&'static str> {
+        match provider_id {
+            "runwarden.input.inspect" => Some("inspect"),
+            "external.mcp.filesystem.read_file" => Some("read_file"),
+            "external.mcp.filesystem.write_file" => Some("write_file"),
+            "external.email.send" => Some("send"),
+            "external.memory.read" | "external.knowledge.read" => Some("read"),
+            "external.memory.write" | "external.knowledge.write" => Some("write"),
+            _ => None,
+        }
+    }
+
     pub fn default_first_party_providers() -> Vec<KernelProvider> {
         vec![
             provider(

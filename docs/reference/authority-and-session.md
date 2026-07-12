@@ -193,13 +193,15 @@ state, binding digest, reviewer metadata, and expiry, but it is not itself an
 authorization input. Provider execution continues to consume the Rust-owned
 approval record and lease contract.
 
-The native SQLite contracts above are consumed by `runwarden-runtime`; they do
-not yet replace the contest edition's legacy MCP and interactive WebUI wiring.
-`runwarden demo` and `runwarden-mcp` still exchange file-backed reviewer
-records under `.runwarden/approvals` (or `RUNWARDEN_STATE_DIR`). That legacy
-path binds session/provider/action/argument/authz/actor fields and must not be
-described as having acquired a native SQLite execution lease until the runtime,
-MCP, and WebUI migration is complete. The legacy in-memory authority path
-rejects `ApprovalState::Leased` rather than treating it as an ordinary approval.
-The complete storage, recovery, and compatibility boundaries are specified in
+The native SQLite contracts above are now consumed by production
+`runwarden-mcp` through `runwarden-runtime`. MCP creates, waits for, reads, and
+resumes the same operation; it never imports a file-backed approval as native
+authority. Status and resume accept only the operation id, and the runtime
+loads the frozen private request before any lease or execution transition.
+
+The legacy interactive WebUI still uses file-backed reviewer records until its
+later Plan 4 API migration. Those records cannot approve or consume a native
+MCP operation, and the legacy in-memory authority path rejects
+`ApprovalState::Leased` rather than treating it as an ordinary approval. The
+complete storage, recovery, and compatibility boundaries are specified in
 [Native Operation Journal](operation-journal.md).

@@ -11,7 +11,9 @@ The Rust MCP crate validates the checked-in safe and unsafe examples: empty
 
 For OpenCode, the checked config must use `type: "local"`, `command:
 ["runwarden-mcp"]`, must not set `enabled: false`, and must include a top-level
-`tools` object whose built-in tools are all set to `false`.
+`tools` object that explicitly sets every pinned OpenCode 1.17.13 built-in tool
+to `false`. A partial map such as only `{"bash": false}` is rejected; upgrading
+the pinned OpenCode version requires reviewing this deny set.
 The checked config also defines `runwarden-proxy/big-pickle` as the
 OpenAI-compatible model entry that routes model calls through the local LLM
 proxy at `http://127.0.0.1:8787/v1`.
@@ -43,9 +45,10 @@ downstream MCP tools.
 
 The denied provider-call transcript records OpenCode asking
 `runwarden.provider.call` to invoke `external.mcp.filesystem.read_file` on a
-path traversal target. The expected Runwarden result is `denied` with
-`error_kind=root_escape`, `execution_status=not_executed`, and
-`side_effect_executed=false`.
+path traversal target. MCP obtains the action from the Rust catalog rather than
+accepting it from the agent. The typed resource extractor rejects the path
+before creating an operation, returning `error_kind=resource_invalid` and
+`side_effect_executed=false` without echoing the private path.
 
 Validation coverage:
 

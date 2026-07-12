@@ -4,32 +4,20 @@ const MAX_STDIO_FRAME_BYTES: usize = 1_048_576;
 const MAX_STDIO_HEADER_BYTES: usize = 16 * 1024;
 
 fn main() -> anyhow::Result<()> {
-    let debug_path = std::env::var("RUNWARDEN_MCP_DEBUG_FILE").ok();
-    let debug = |msg: &str| {
-        if let Some(path) = &debug_path
-            && let Ok(mut file) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)
-        {
-            let _ = writeln!(file, "{msg}");
-        }
-    };
+    let server = runwarden_mcp::production_server_from_env()?;
     let stdin = std::io::stdin();
     let mut reader = BufReader::new(stdin.lock());
     let stdout = std::io::stdout();
     let mut stdout = stdout.lock();
 
     while let Some((body, framed)) = read_next_body(&mut reader)? {
-        debug(&format!("<< [framed={framed}] {body}"));
         if body.trim().is_empty() {
             continue;
         }
-        let Some(response) = runwarden_mcp::handle_jsonrpc_message(&body)? else {
+        let Some(response) = server.handle_jsonrpc(&body)? else {
             continue;
         };
         let response_body = serde_json::to_string(&response)?;
-        debug(&format!(">> [framed={framed}] {response_body}"));
         if framed {
             write!(
                 stdout,
@@ -45,7 +33,6 @@ fn main() -> anyhow::Result<()> {
         }
         stdout.flush()?;
     }
-    debug("<< EOF");
     Ok(())
 }
 
@@ -60,11 +47,7 @@ fn read_next_body<R: BufRead>(reader: &mut R) -> anyhow::Result<Option<(String, 
     };
 
     if !line.starts_with("Content-Length:") {
-        if serde_json::from_str::<serde_json::Value>(&line).is_ok() {
-            return Ok(Some((line, false)));
-        }
-        let body = read_remaining_raw_body(reader, line)?;
-        return Ok(Some((body, false)));
+        return Ok(Some((line, false)));
     }
 
     let mut header_bytes = line.len();
@@ -107,26 +90,6 @@ fn read_next_body<R: BufRead>(reader: &mut R) -> anyhow::Result<Option<(String, 
     let body = String::from_utf8(body)
         .map_err(|err| anyhow::anyhow!("MCP frame body is not UTF-8: {err}"))?;
     Ok(Some((body, true)))
-}
-
-fn read_remaining_raw_body<R: BufRead>(
-    reader: &mut R,
-    first_line: String,
-) -> anyhow::Result<String> {
-    let mut body = first_line.into_bytes();
-    loop {
-        let available = reader.fill_buf()?;
-        if available.is_empty() {
-            break;
-        }
-        if body.len().saturating_add(available.len()) > MAX_STDIO_FRAME_BYTES {
-            anyhow::bail!("MCP raw payload exceeds maximum size");
-        }
-        let consumed = available.len();
-        body.extend_from_slice(available);
-        reader.consume(consumed);
-    }
-    String::from_utf8(body).map_err(|err| anyhow::anyhow!("MCP raw payload is not UTF-8: {err}"))
 }
 
 fn read_limited_line<R: BufRead>(

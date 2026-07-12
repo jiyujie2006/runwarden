@@ -20,8 +20,9 @@ use crate::adapters::{
 use crate::catalog::full_provider_registry;
 use crate::demo_tools::{
     EmailOperationBinding, EmailReconciliation, StoreClass, ToolError, ToolExecution,
-    ToolExecutionState, ToolFailureStage, finalize_email_cleanup, read_file, read_store,
-    send_email, simulate_api_request, simulate_browser_open, verify_email, write_file, write_store,
+    ToolExecutionState, ToolFailureStage, finalize_email_cleanup, inspect_bounded_input, read_file,
+    read_store, send_email, simulate_api_request, simulate_browser_open, verify_email, write_file,
+    write_store,
 };
 use crate::resource_claims::{ResourceExtractionContext, ResourceExtractorRegistry};
 
@@ -394,10 +395,6 @@ impl ProviderExecutor for DefaultProviderExecutor {
         if !claim_matches_arguments(&self.config, canonical_provider, request) {
             return blocked("resource_claim_invalid", "claim_argument_mismatch");
         }
-        if request.provider == "runwarden.input.inspect" {
-            return blocked("provider_unavailable", "provider_not_migrated");
-        }
-
         let key = OperationKey {
             operation_id: request.operation_id,
         };
@@ -757,6 +754,9 @@ fn dispatch_tool(
     let max_output =
         u64::try_from(config.max_output_bytes).map_err(|_| ToolError::LimitExceeded)?;
     match request.provider.as_str() {
+        "runwarden.input.inspect" => {
+            inspect_bounded_input(&request.arguments, &request.resource_claim)
+        }
         "external.mcp.filesystem.read_file" => read_file(
             &config.sandbox_root,
             &request.arguments,

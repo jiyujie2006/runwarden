@@ -17,6 +17,8 @@
         { "name": "runwarden.provider.call" },
         { "name": "runwarden.provider.list" },
         { "name": "runwarden.provider.status" },
+        { "name": "runwarden.operation.status" },
+        { "name": "runwarden.operation.resume" },
         { "name": "runwarden.trace.verify" },
         { "name": "runwarden.trace.export" },
         { "name": "runwarden.report.lint" },

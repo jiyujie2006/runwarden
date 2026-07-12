@@ -995,13 +995,21 @@ name = "runwarden-mcp"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "hmac",
  "runwarden-anomaly",
  "runwarden-assurance",
  "runwarden-kernel",
  "runwarden-providers",
+ "runwarden-runtime",
+ "runwarden-state",
+ "serde",
  "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
  "time",
  "url",
+ "zeroize",
 ]
 
 [[package]]

@@ -62,13 +62,15 @@ outside the root are denied before any side effect is reported.
 
 The native executor does not invoke trusted downstream network adapters for
 the contest API and browser providers; those ids return typed simulated
-outcomes. The catalog's network-capable stdio browser manifest is explicitly
-rejected at registration. Native local filesystem, email, memory, and
-knowledge providers use the same Rust-owned catalog and typed-claim contract,
-then perform only bounded local sandbox effects after the permit gate. The
-external registration API cannot replace those implementations until its
-mandatory isolation is installed. The compatibility demo/MCP paths remain
-disconnected from that executor and fail closed until Plan 4.
+outcomes only to non-executing scenario surfaces. Because enforced
+`OperationRuntime` does not accept `Simulated`, MCP keeps API and browser ids
+catalogued for metadata but excludes them from the durable generic call
+surface. The catalog's network-capable stdio browser manifest is explicitly
+rejected at registration. Native local filesystem, email, memory, knowledge,
+and input-inspection providers use the same Rust-owned catalog and typed-claim
+contract, then perform only bounded local sandbox work after the permit gate.
+The external registration API cannot replace those implementations until its
+mandatory isolation is installed.
 
 ## Native SQLite Execution Gate
 
@@ -209,8 +211,8 @@ instances and roots, binds the complete request plus pinned executor roots,
 and retains completed/uncertain tombstones even after permit expiry. A renewed
 permit therefore cannot repeat a file or store write, and routing one operation
 to a different root is an integrity conflict. The registry has a fixed contest
-capacity and fails closed when full; Plan 4 adds the durable journal as the
-cross-process source of operation ownership and recovery.
+capacity and fails closed when full. `runwarden-runtime` now uses the SQLite
+journal as the cross-process source of operation ownership and recovery.
 
 Monitor-only assurance is deliberately outside this executor. It has no
 delegate and never touches a configured root. A domain-separated proposal
@@ -230,13 +232,16 @@ Post-start session deactivation cannot suppress a
 truthful result write; uncertain post-effect recovery remains a separate
 conservative recovery path.
 
-This native gate is not yet wired into the current contest MCP/WebUI request
-path. `runwarden-mcp` still uses the documented file-backed approval and trace
-surfaces for compatibility, but it now fails closed for external provider
-execution with `native_executor_required`; the CLI legacy scenario dispatcher
-does the same. Neither path calls a local tool, claims a side effect, nor
-persists approval consumption while the durable runtime is disconnected. The
-old public generic business-tool dispatcher has been removed. Until the Plan 4
-runtime migration lands, the presence of a SQLite approval, a file-backed
-approval, or a policy `Allowed` decision must not be presented as proof that
-the current MCP/CLI process invoked a provider through the native executor.
+The native gate is now the production `runwarden-mcp` provider-call path.
+Trusted startup loads one active SQLite story/session, constructs one
+`OperationRuntime`, pairs its permit issuer with `DefaultProviderExecutor`, and
+derives invocation identity from the active instance token. MCP does not read
+file-backed approvals, create a fixed compatibility session, or call the old
+generic business-tool dispatcher. A provider is invoked only after the native
+journal commits its exact lease and execution-start intent.
+
+The legacy interactive WebUI is not yet connected to native approval rows, and
+the CLI's retained legacy demo/scenario paths must not be described as having
+passed this executor boundary. File-backed approval JSON and legacy provider
+events are never proof of a native MCP execution. The reviewer HTTP API and
+closed-loop demo migration are later Plan 4 checkpoints.

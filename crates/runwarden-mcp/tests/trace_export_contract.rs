@@ -55,10 +55,12 @@ fn trace_export_tool_pages_filtered_verified_events() {
     );
     let payload = tool_payload(&response);
 
-    assert_eq!(response["result"]["isError"], true);
-    assert_eq!(payload["decision"], "requires_review");
-    assert_eq!(payload["provider"], "runwarden.trace.export");
-    assert_eq!(payload["error_kind"], "approval_invalid");
+    assert_eq!(response["result"]["isError"], false);
+    assert_eq!(payload["exported"], true);
+    assert_eq!(payload["verified"], true);
+    assert_eq!(payload["page"]["events"].as_array().unwrap().len(), 1);
+    assert_eq!(payload["page"]["events"][0]["obs_id"], "obs_3");
+    assert_eq!(payload["compact_refs"], json!(["obs_3"]));
     assert_eq!(payload["side_effect_executed"], false);
 }
 

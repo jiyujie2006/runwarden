@@ -221,7 +221,15 @@ fn direct_policy_allow_crosses_the_durable_start_gate_once() {
 
     let response = RuntimeApi::invoke(&runtime, input_request(124)).unwrap();
     assert_eq!(response.policy_decision, Some(PolicyDecision::Allowed));
-    assert_eq!(response.operation_state, OperationState::Failed);
+    assert_eq!(response.operation_state, OperationState::Completed);
+    assert_eq!(
+        response
+            .provider_result
+            .as_ref()
+            .expect("input result")
+            .execution_status,
+        runwarden_kernel::operation::ProviderExecutionStatus::Completed
+    );
     assert_eq!(executor_probe.call_count(), 1);
     assert!(
         fixture

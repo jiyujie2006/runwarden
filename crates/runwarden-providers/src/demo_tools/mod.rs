@@ -2,6 +2,7 @@
 
 mod email;
 mod file;
+mod inspection;
 mod simulated_network;
 mod store;
 
@@ -21,6 +22,7 @@ pub(crate) use email::{
     EmailOperationBinding, EmailReconciliation, finalize_email_cleanup, send_email, verify_email,
 };
 pub(crate) use file::{read_file, write_file};
+pub(crate) use inspection::inspect_bounded_input;
 pub(crate) use simulated_network::{simulate_api_request, simulate_browser_open};
 pub(crate) use store::{StoreClass, read_store, write_store};
 

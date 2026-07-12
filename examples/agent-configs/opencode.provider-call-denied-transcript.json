@@ -1,7 +1,7 @@
 {
   "client": "opencode",
   "config": "examples/agent-configs/opencode.runwarden-only.json",
-  "claim": "OpenCode can only call Runwarden MCP tools, and a path traversal provider call is denied by Runwarden before side effects.",
+  "claim": "OpenCode can only call Runwarden MCP tools, and a path traversal provider call is rejected by Rust typed-resource validation before an operation or side effect.",
   "request": {
     "jsonrpc": "2.0",
     "id": 2,
@@ -10,7 +10,6 @@
       "name": "runwarden.provider.call",
       "arguments": {
         "provider": "external.mcp.filesystem.read_file",
-        "action": "read_file",
         "path": "../../../../etc/passwd"
       }
     }
@@ -22,7 +21,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\"decision\":\"denied\",\"error_kind\":\"root_escape\",\"execution_status\":\"not_executed\",\"side_effect_executed\":false,\"obs_ref\":\"obs_path_escape_denied\"}"
+          "text": "{\"error_kind\":\"resource_invalid\",\"operation_id\":null,\"reason_code\":\"resource_invalid\",\"side_effect_executed\":false}"
         }
       ],
       "isError": true

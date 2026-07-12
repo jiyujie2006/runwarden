@@ -34,8 +34,11 @@ Native provider execution occurs only after the Rust policy, durable lease,
 execution-start, and authenticated permit gates allow it. API and browser
 providers remain simulated at that boundary; `execution_status=simulated` and
 `side_effect_executed=false` mean no trusted external effect was performed.
-The legacy scenario and MCP adapters do not currently reach this boundary and
-therefore block external execution as described below.
+Production MCP reaches this boundary only for providers with a non-simulated
+native implementation. API and browser remain catalogued but are unavailable
+on the enforced durable generic call surface. The legacy CLI scenario adapter
+does not currently reach this boundary and blocks external execution as
+described below.
 
 The native executor implements bounded local filesystem, email, memory, and
 knowledge effects after an authenticated execution permit. Filesystem output
@@ -67,12 +70,13 @@ not enabled. This preserves the single executor boundary without granting a
 compromised downstream process ambient Runwarden privileges. API and browser
 calls remain non-networking simulations.
 
-The compatibility MCP and CLI paths do not yet mint native permits. They now
-return `native_executor_required`, `execution_status=not_executed`, and
-`side_effect_executed=false` for external providers instead of calling a
-legacy local dispatcher. Plan 4 connects durable policy, approval, lease,
-execution-start, permit issuance, executor dispatch, and result persistence as
-one operation.
+Production `runwarden-mcp` now mints an authenticated permit only after the
+native operation journal commits policy, approval where required, a one-shot
+lease, and execution-start. Its durable call surface admits input inspection
+and bounded local filesystem, email, memory, and knowledge providers. The
+legacy CLI scenario path still returns `native_executor_required`,
+`execution_status=not_executed`, and `side_effect_executed=false` for external
+providers instead of calling a legacy local dispatcher.
 
 Reviewable local-business evidence is kept in the scenario fixtures:
 `tool-hijack-email-api` shows email review and API denial,
