@@ -1,7 +1,9 @@
 mod common;
 
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use common::{INSTANCE_TOKEN, McpFixture};
 
@@ -112,9 +114,47 @@ fn stdio_server_rejects_oversized_headers_before_body_allocation() {
 
     stdin.write_all(frame.as_bytes()).expect("write frame");
     drop(stdin);
-    let status = child.wait().expect("wait");
+    let status = wait_with_timeout(&mut child);
 
     assert!(!status.success());
+}
+
+#[test]
+fn stdio_server_rejects_oversized_content_length_before_body_allocation() {
+    let fixture = McpFixture::new();
+    let mut child = production_command(&fixture)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()
+        .expect("spawn runwarden-mcp");
+    let mut stdin = child.stdin.take().expect("stdin");
+    stdin
+        .write_all(b"Content-Length: 1048577\r\n\r\n")
+        .expect("write oversized frame");
+    drop(stdin);
+
+    let status = wait_with_timeout(&mut child);
+
+    assert!(!status.success());
+}
+
+#[test]
+fn stdio_server_exits_cleanly_after_eof() {
+    let fixture = McpFixture::new();
+    let mut child = production_command(&fixture)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()
+        .expect("spawn runwarden-mcp");
+    let mut stdin = child.stdin.take().expect("stdin");
+    stdin
+        .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"initialize\",\"params\":{}}\n")
+        .expect("write request");
+    drop(stdin);
+
+    let status = wait_with_timeout(&mut child);
+
+    assert!(status.success());
 }
 
 fn read_frame<R: BufRead>(reader: &mut R) -> String {
@@ -152,4 +192,19 @@ fn production_command(fixture: &McpFixture) -> Command {
         )
         .env("RUNWARDEN_MCP_APPROVAL_WAIT_MS", "0");
     command
+}
+
+fn wait_with_timeout(child: &mut Child) -> ExitStatus {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(status) = child.try_wait().expect("poll MCP process") {
+            return status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("MCP process did not exit after stdin EOF");
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
 }

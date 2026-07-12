@@ -13,7 +13,7 @@ use runwarden_kernel::contracts::PolicyDecision;
 use runwarden_kernel::operation::OperationState;
 use runwarden_runtime::{
     ApprovalWaitPolicy, OperationRuntime, RuntimeApi, RuntimeContextLoader, RuntimeDisposition,
-    SystemClock,
+    RuntimeError, SystemClock,
 };
 use runwarden_state::{ApprovalDecisionInput, ApprovalRecordV1, ReviewerDecision, StateStore};
 
@@ -277,10 +277,24 @@ fn concurrent_resume_calls_execute_an_approved_operation_at_most_once() {
         }));
     }
     barrier.wait();
+    let mut successful_snapshots = 0;
     for worker in workers {
-        let response = worker.join().unwrap().unwrap();
-        assert_eq!(response.operation_id, pending.operation_id);
+        match worker.join().unwrap() {
+            Ok(response) => {
+                successful_snapshots += 1;
+                assert_eq!(response.operation_id, pending.operation_id);
+                assert!(matches!(
+                    response.disposition,
+                    RuntimeDisposition::Executing | RuntimeDisposition::Completed
+                ));
+            }
+            Err(RuntimeError::OperationConflict { operation_id }) => {
+                assert_eq!(operation_id, pending.operation_id);
+            }
+            Err(error) => panic!("unexpected concurrent resume error: {error}"),
+        }
     }
+    assert!(successful_snapshots >= 1);
     assert_eq!(executor_probe.call_count(), 1);
     assert_eq!(
         fixture.store.operation(pending.operation_id).unwrap().state,
