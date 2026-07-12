@@ -1,5 +1,6 @@
 mod api;
 mod reviewer_nonce;
+mod sse;
 
 use std::net::SocketAddr;
 
@@ -62,6 +63,7 @@ fn loopback_origin(listen_addr: SocketAddr) -> String {
 
 pub fn reviewer_router(state: ReviewerApiState) -> Router {
     api::routes()
+        .merge(sse::routes())
         .with_state(state)
         .layer(axum::extract::DefaultBodyLimit::max(16 * 1_024))
 }

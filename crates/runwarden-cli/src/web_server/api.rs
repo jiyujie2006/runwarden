@@ -283,7 +283,7 @@ impl FromRequestParts<ReviewerApiState> for ReviewerWriteGuard {
     }
 }
 
-fn exactly_one_header(headers: &HeaderMap, name: HeaderName) -> Option<&str> {
+pub(super) fn exactly_one_header(headers: &HeaderMap, name: HeaderName) -> Option<&str> {
     let mut values = headers.get_all(name).iter();
     let first = values.next()?.to_str().ok()?;
     if values.next().is_some() {
@@ -292,7 +292,7 @@ fn exactly_one_header(headers: &HeaderMap, name: HeaderName) -> Option<&str> {
     Some(first)
 }
 
-fn active_story_snapshot(
+pub(super) fn active_story_snapshot(
     store: &StateStore,
     requested_story_id: StoryId,
 ) -> Result<SecurityStory, ApiError> {
@@ -340,7 +340,10 @@ fn is_live_story(story: &SecurityStory) -> bool {
         && OffsetDateTime::now_utc() < story.authority.expires_at
 }
 
-fn parse_path_id<T: DeserializeOwned>(raw: &str, entity: &'static str) -> Result<T, ApiError> {
+pub(super) fn parse_path_id<T: DeserializeOwned>(
+    raw: &str,
+    entity: &'static str,
+) -> Result<T, ApiError> {
     serde_json::from_value(Value::String(raw.to_owned())).map_err(|_| {
         ApiError::not_found(match entity {
             "story" => "story_not_found",
@@ -393,7 +396,7 @@ impl ApiError {
         )
     }
 
-    fn unprocessable(code: &'static str) -> Self {
+    pub(super) fn unprocessable(code: &'static str) -> Self {
         Self::new(
             StatusCode::UNPROCESSABLE_ENTITY,
             code,
@@ -425,7 +428,7 @@ impl ApiError {
         }
     }
 
-    fn read_journal(error: JournalError) -> Self {
+    pub(super) fn read_journal(error: JournalError) -> Self {
         match error {
             JournalError::NotFound { .. } => Self::not_found("reviewer_entity_not_found"),
             JournalError::Conflict { .. }

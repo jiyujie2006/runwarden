@@ -1,5 +1,4 @@
 use std::{
-    convert::Infallible,
     fs,
     io::Write,
     net::IpAddr,
@@ -10,10 +9,7 @@ use anyhow::Context;
 use axum::{
     Json, Router,
     extract::State,
-    response::{
-        Html, Sse,
-        sse::{Event, KeepAlive},
-    },
+    response::Html,
     routing::{get, post},
 };
 use runwarden_cli::web_server::{reviewer_router, reviewer_state_for_listener};
@@ -24,7 +20,6 @@ use runwarden_kernel::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
-use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 
 const CONSOLE_HTML: &str = include_str!("console.html");
 
@@ -143,7 +138,6 @@ pub fn run_console_server(
         let reviewer_routes = reviewer_router(reviewer_state);
         let legacy_routes = Router::new()
             .route("/", get(|| async { Html(CONSOLE_HTML) }))
-            .route("/events", get(sse_handler))
             .route("/api/approve", post(approve_handler))
             .route("/api/deny", post(deny_handler))
             .route("/api/pending", get(pending_handler))
@@ -155,21 +149,6 @@ pub fn run_console_server(
         Ok::<(), anyhow::Error>(())
     })?;
     Ok(())
-}
-
-async fn sse_handler(
-    State(state): State<AppState>,
-) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
-    let stream = BroadcastStream::new(state.event_tx.subscribe()).filter_map(|result| {
-        result.ok().and_then(|event| {
-            Event::default()
-                .event(event.kind.clone())
-                .json_data(event)
-                .ok()
-                .map(Ok)
-        })
-    });
-    Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
 #[derive(Debug, Deserialize)]

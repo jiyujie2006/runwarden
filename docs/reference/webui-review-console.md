@@ -9,7 +9,8 @@ delivery only; policy decisions stay in Rust kernel/MCP/provider code.
 `runwarden demo` serves:
 
 - `GET /` console HTML
-- `GET /events` Server-Sent Events for `model_call`, `provider_call`, and approval updates
+- `GET /events?story_id={id}&after_seq={sequence}` resumable Server-Sent Events
+  for committed native story events
 - `GET /api/pending` pending approval records from `.runwarden/approvals`
 - `POST /api/approve` and `POST /api/deny` state changes for existing approval records
 - `GET /api/trace/verify` hash-chain verification for the LLM proxy trace and
@@ -38,6 +39,28 @@ read surface:
 - `GET /api/stories/{story_id}/evidence/verify`
 - `POST /api/approvals/{approval_id}/decision`
 
+The native SSE endpoint requires `story_id`; `after_seq` defaults to zero. A
+single valid decimal `Last-Event-ID` header takes precedence over `after_seq`,
+while malformed or duplicate cursor headers and malformed queries return a
+JSON `422` error before streaming starts. Like the JSON API, the stream hides
+unknown and same-database nonactive stories and accepts only the singleton
+active story while it remains native and its authority remains live.
+
+SSE data comes from verified `StateStore::events_after` reads rather than a
+broadcast channel. The server reads committed events strictly after the cursor
+in pages of at most 256, waits 100 ms before polling again when caught up, and
+sends a keepalive comment every 15 seconds. Each emitted frame has the
+committed story sequence as `id`, `story_event` as `event`, and the complete
+display-safe `StoryEvent` JSON as `data`. Reconnecting therefore recovers
+events committed while the client was absent without relying on process-local
+delivery.
+
+One serialized SSE event is limited to 256 KiB and the producer uses bounded
+backpressure. If a verified event exceeds that transport bound, the server
+logs only safe identifiers and sizes and closes the stream without truncating
+or advancing its cursor. The event remains available from the paginated
+`GET /api/stories/{story_id}/events` JSON endpoint for investigation.
+
 Only the singleton active native story is readable. All responses are built
 from `StateStore` display-safe snapshots; operation responses add the durable
 approval version from the same verified read transaction for compare-and-swap,
@@ -64,9 +87,13 @@ the same immediate SQLite transaction before it records an approve or deny
 event. Approval does not execute or consume the operation; execution-start is
 still the one-shot authorization boundary.
 
-The dependency-free `console.html` continues to use the legacy polling routes
-until the later live-console migration. Its file-backed approval records are
-compatibility display state and cannot authorize a native operation.
+The dependency-free `console.html` continues to use the legacy approval and
+trace polling routes until the later live-console migration. Its old
+unparameterized `EventSource('/events')` is rejected by the native endpoint in
+this intermediate phase, so live story-event rendering begins only after that
+migration teaches the browser to bootstrap the active story id and consume
+`story_event` frames. File-backed approval records remain compatibility display
+state and cannot authorize a native operation.
 
 ## Static Mode
 

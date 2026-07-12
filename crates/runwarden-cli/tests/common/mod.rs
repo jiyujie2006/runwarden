@@ -15,15 +15,16 @@ use runwarden_kernel::{
     resource_binding::resource_proposal_commitment_from_hashes,
     session::{AuthoritySnapshot, BudgetCharge, BudgetSnapshot, EvidenceAuthority},
     story::{
-        ApprovalId, EnforcementMode, EvidenceStatus, InvocationKey, OperationId, RunMode,
-        SchemaVersion, SecurityStory, SessionId, StoryId, StoryIdentity, StoryProvenance,
-        StoryStatus,
+        ApprovalId, EnforcementMode, EventId, EvidenceStatus, InvocationKey, ObservationId,
+        OperationId, RunMode, SchemaVersion, SecurityStory, SessionId, StoryId, StoryIdentity,
+        StoryProvenance, StoryStatus,
     },
-    trace::{Sha256Digest, canonical_json_v1},
+    trace::{EventCode, Sha256Digest, StoryEvent, StoryEventPayload, canonical_json_v1},
 };
 use runwarden_state::{
     ApprovalRecordV1, DemoActivation, DurableApprovalBinding, FrozenProposalBinding, NewApproval,
-    NewOperation, PrivateOperationMaterial, RecordPolicyInput, SessionRecord, StateStore,
+    NewOperation, NewStoryEvent, PrivateOperationMaterial, RecordPolicyInput, SessionRecord,
+    StateStore,
 };
 use serde_json::{Value, json};
 use time::{Duration, OffsetDateTime};
@@ -60,6 +61,14 @@ pub struct ExpiredReaderFixture {
     pub _temp: tempfile::TempDir,
     pub story_id: StoryId,
     pub app: Router,
+}
+
+pub struct SseFixture {
+    pub _temp: tempfile::TempDir,
+    pub store: StateStore,
+    pub story: SecurityStory,
+    pub app: Router,
+    event_epoch: OffsetDateTime,
 }
 
 impl ApiFixture {
@@ -201,6 +210,66 @@ impl ExpiredReaderFixture {
             story_id: story.story_id,
             app,
         }
+    }
+}
+
+impl SseFixture {
+    pub fn new() -> Self {
+        let temp = tempfile::tempdir().unwrap();
+        let store = StateStore::open(temp.path().join("state")).unwrap();
+        let story = story_fixture("1.0.0", "reviewer-sse");
+        persist_story_and_session(&store, &story);
+        store
+            .activate_demo(&DemoActivation {
+                instance_id: "reviewer-sse-instance".to_owned(),
+                story_id: story.story_id,
+                session_id: story.authority.session_id,
+                process_id: std::process::id().max(1),
+                host_id: "reviewer-sse-test-host".to_owned(),
+                instance_token_hash: Sha256Digest::from_bytes(b"reviewer-sse-instance-token")
+                    .as_str()
+                    .to_owned(),
+                now: OffsetDateTime::now_utc(),
+            })
+            .unwrap();
+
+        let event_epoch = OffsetDateTime::now_utc();
+        let fixture = Self {
+            app: reviewer_router(ReviewerApiState::new(store.clone(), REVIEWER_ADDR).unwrap()),
+            _temp: temp,
+            store,
+            story,
+            event_epoch,
+        };
+        fixture.append_numbered_event(1);
+        fixture.append_numbered_event(2);
+        fixture
+    }
+
+    pub fn append_numbered_event(&self, number: u64) -> StoryEvent {
+        self.append_payload(
+            number,
+            StoryEventPayload::InputConsumed {
+                asset_id: EventCode::try_from(format!("sse-event-{number}")).unwrap(),
+                content_hash: Sha256Digest::from_bytes(format!("sse-event-{number}").as_bytes()),
+            },
+        )
+    }
+
+    pub fn append_payload(&self, number: u64, payload: StoryEventPayload) -> StoryEvent {
+        self.store
+            .append_event(NewStoryEvent {
+                obs_id: ObservationId::new(),
+                event_id: EventId::new(),
+                story_id: self.story.story_id,
+                session_id: self.story.authority.session_id,
+                operation_id: None,
+                provider: None,
+                payload,
+                recorded_at: self.event_epoch + Duration::seconds(number as i64),
+            })
+            .unwrap()
+            .event
     }
 }
 
