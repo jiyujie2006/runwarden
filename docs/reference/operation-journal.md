@@ -22,8 +22,16 @@ The Rust crate owns every v1 table:
 Every `StateStore` connection enforces WAL mode, `synchronous=FULL`, foreign
 keys, a bounded 5,000 ms busy timeout, and the strict v1 schema. The state
 directory, database, WAL, and shared-memory sidecars must remain owner-only;
-symlinks and unsupported permission models fail closed. SQLite integers that
-represent Rust `u64` values use checked conversions.
+symlinks and unsupported permission models fail closed. File hardening opens
+the verified parent directory and uses a directory-relative no-follow chmod,
+then verifies that the file retained its device/inode identity. It never opens
+the SQLite shared-memory sidecar, whose process-scoped locks must remain owned
+exclusively by SQLite.
+WAL and shared-memory sidecars may disappear when the last concurrent SQLite
+connection closes; a verified sidecar disappearing during hardening is treated
+as its normal lifecycle, while the main database or a replaced path still
+fails closed. SQLite integers that represent Rust `u64` values use checked
+conversions.
 
 The contract-freeze build deliberately does not guess proposal bindings for an
 older development database that lacks these fields: such a shape fails strict
@@ -76,7 +84,10 @@ Before any reservation is created, released, or committed, the journal
 recomputes Reserved and Committed totals from every canonical reservation row
 and requires them to equal the CAS-protected aggregate counters. Reservation
 timestamps are monotonic and included in settlement/release CAS predicates, so
-counter-only or clock-forward tampering fails before partial mutation.
+counter-only or clock-forward tampering fails before partial mutation. Read-only
+budget snapshots load the session, reservation aggregate, and aggregate counter
+row in one deferred SQLite transaction, so a concurrent reservation commit
+cannot be mistaken for journal corruption.
 
 `ExecutionLeased` is not provider authorization. Immediately before a side
 effect, `mark_execution_started` revalidates the active instance and lease,
@@ -96,6 +107,12 @@ execution-start event. `ExecutionLeased` must have no start event and
 `Executing` must have exactly one; any other state or torn relationship fails
 closed. The older `execution_lease` query deliberately keeps its pre-start-only
 semantics and still returns a lease only for `ExecutionLeased`.
+
+Two concurrent resumes may observe `Executing` immediately before the winner
+commits its terminal result. If that transition invalidates the exact execution
+snapshot, the loser re-reads through the runtime's bounded state-machine loop
+and returns the committed terminal view. Persistent snapshot or evidence
+failure still exhausts the bounded loop without a provider dispatch.
 
 The active-instance check protects lease acquisition and start. Once start is
 durable, session or process loss must not prevent truthful result persistence

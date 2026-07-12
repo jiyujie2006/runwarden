@@ -746,7 +746,26 @@ where
                     validate_request_matches_lease(&request, &execution.lease)?;
                     return self.execute_leased(execution.lease, request);
                 }
-                OperationState::Executing => return self.reconcile_or_status(operation_id),
+                OperationState::Executing => {
+                    match self.reconcile_or_status(operation_id) {
+                        Ok(response) => return Ok(response),
+                        Err(RuntimeError::JournalBeforeExecution(point))
+                            if point == "execution_snapshot" =>
+                        {
+                            // A concurrent executor can commit the terminal
+                            // result between the broad operation snapshot and
+                            // the exact executing snapshot. Re-read through
+                            // the bounded state-machine loop before treating
+                            // that expected transition as journal damage.
+                            let current = self.owned_operation_snapshot(operation_id)?;
+                            if current.operation.state == OperationState::Executing {
+                                std::thread::yield_now();
+                            }
+                            continue;
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
                 state if state.is_terminal() => {
                     return Ok(response_from_operation(
                         snapshot.operation,

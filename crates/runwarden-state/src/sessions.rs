@@ -115,10 +115,11 @@ impl StateStore {
         &self,
         session_id: SessionId,
     ) -> Result<BudgetUsageSnapshot, JournalError> {
-        let connection = self.connection()?;
-        let session = load_session_record(&connection, session_id)?;
-        verify_budget_reservation_aggregate_tx(&connection, session_id)?;
-        let raw: Option<RawBudgetRow> = connection
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
+        let session = load_session_record(&transaction, session_id)?;
+        verify_budget_reservation_aggregate_tx(&transaction, session_id)?;
+        let raw: Option<RawBudgetRow> = transaction
             .query_row(
                 r#"SELECT story_id, version, calls_reserved, calls_committed,
                           file_bytes_reserved, file_bytes_committed,
@@ -150,7 +151,7 @@ impl StateStore {
                 "budget usage story does not match session story".to_owned(),
             ));
         }
-        Ok(BudgetUsageSnapshot {
+        let snapshot = BudgetUsageSnapshot {
             version: rust_u64(raw.version, "budget version")?,
             calls_reserved: rust_u64(raw.calls_reserved, "reserved calls")?,
             calls_committed: rust_u64(raw.calls_committed, "committed calls")?,
@@ -161,7 +162,9 @@ impl StateStore {
                 raw.network_bytes_committed,
                 "committed network bytes",
             )?,
-        })
+        };
+        transaction.commit()?;
+        Ok(snapshot)
     }
 }
 

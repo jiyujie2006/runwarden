@@ -420,46 +420,150 @@ fn validate_directory_metadata(path: &Path, metadata: &fs::Metadata) -> Result<(
 }
 
 fn prepare_database_files(state_dir: &Path) -> Result<(), JournalError> {
-    for path in database_paths(state_dir) {
-        validate_and_harden_existing_file(&path)?;
-    }
-
     let database_path = state_dir.join(DATABASE_NAME);
-    if !database_path.exists() {
-        create_database_file(&database_path)?;
-    }
-    validate_and_harden_existing_file(&database_path)
-}
-
-fn harden_database_files(state_dir: &Path) -> Result<(), JournalError> {
-    for path in database_paths(state_dir) {
-        validate_and_harden_existing_file(&path)?;
+    create_database_file(&database_path)?;
+    for (path, role) in database_paths(state_dir) {
+        validate_and_harden_existing_file(&path, role)?;
     }
     Ok(())
 }
 
-fn database_paths(state_dir: &Path) -> [PathBuf; 3] {
+fn harden_database_files(state_dir: &Path) -> Result<(), JournalError> {
+    for (path, role) in database_paths(state_dir) {
+        validate_and_harden_existing_file(&path, role)?;
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DatabaseFileRole {
+    Main,
+    EphemeralSidecar,
+}
+
+impl DatabaseFileRole {
+    fn may_disappear(self) -> bool {
+        self == Self::EphemeralSidecar
+    }
+}
+
+fn database_paths(state_dir: &Path) -> [(PathBuf, DatabaseFileRole); 3] {
     [
-        state_dir.join(DATABASE_NAME),
-        state_dir.join(format!("{DATABASE_NAME}-wal")),
-        state_dir.join(format!("{DATABASE_NAME}-shm")),
+        (state_dir.join(DATABASE_NAME), DatabaseFileRole::Main),
+        (
+            state_dir.join(format!("{DATABASE_NAME}-wal")),
+            DatabaseFileRole::EphemeralSidecar,
+        ),
+        (
+            state_dir.join(format!("{DATABASE_NAME}-shm")),
+            DatabaseFileRole::EphemeralSidecar,
+        ),
     ]
 }
 
-fn validate_and_harden_existing_file(path: &Path) -> Result<(), JournalError> {
+fn validate_and_harden_existing_file(
+    path: &Path,
+    role: DatabaseFileRole,
+) -> Result<(), JournalError> {
+    let observed = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == ErrorKind::NotFound && role.may_disappear() => return Ok(()),
+        Err(error) => return Err(permission_error(path, error)),
+    };
+    validate_database_file_metadata(path, &observed)?;
+    harden_observed_database_file(path, role, &observed)
+}
+
+fn validate_database_file_metadata(
+    path: &Path,
+    metadata: &fs::Metadata,
+) -> Result<(), JournalError> {
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        Err(JournalError::Permission(format!(
+            "database path {} is a symlink or is not a regular file",
+            path.display()
+        )))
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn harden_observed_database_file(
+    path: &Path,
+    role: DatabaseFileRole,
+    observed: &fs::Metadata,
+) -> Result<(), JournalError> {
+    use std::ffi::CString;
+    use std::os::fd::AsRawFd;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+
+    let parent = path.parent().ok_or_else(|| {
+        JournalError::Permission(format!("database path {} has no parent", path.display()))
+    })?;
+    let file_name = path.file_name().ok_or_else(|| {
+        JournalError::Permission(format!("database path {} has no file name", path.display()))
+    })?;
+    let file_name = CString::new(file_name.as_bytes()).map_err(|_| {
+        JournalError::Permission(format!(
+            "database path {} contains an interior NUL",
+            path.display()
+        ))
+    })?;
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW);
+    let directory = options
+        .open(parent)
+        .map_err(|error| permission_error(parent, error))?;
+
+    // SAFETY: `directory` is a live directory descriptor, `file_name` is a
+    // NUL-terminated single path component, and the no-follow flag prevents a
+    // concurrent replacement with a symlink from changing an outside file.
+    let result = unsafe {
+        libc::fchmodat(
+            directory.as_raw_fd(),
+            file_name.as_ptr(),
+            0o600,
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if result != 0 {
+        let error = std::io::Error::last_os_error();
+        if error.kind() == ErrorKind::NotFound && role.may_disappear() {
+            return Ok(());
+        }
+        return Err(permission_error(path, error));
+    }
+
     match fs::symlink_metadata(path) {
-        Ok(metadata) => {
-            if metadata.file_type().is_symlink() || !metadata.is_file() {
+        Ok(current) => {
+            validate_database_file_metadata(path, &current)?;
+            if observed.dev() != current.dev() || observed.ino() != current.ino() {
                 return Err(JournalError::Permission(format!(
-                    "database path {} is a symlink or is not a regular file",
+                    "database path {} changed identity after being hardened",
                     path.display()
                 )));
             }
-            set_owner_only_file(path)
+            Ok(())
         }
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) if error.kind() == ErrorKind::NotFound && role.may_disappear() => Ok(()),
         Err(error) => Err(permission_error(path, error)),
     }
+}
+
+#[cfg(not(unix))]
+fn harden_observed_database_file(
+    path: &Path,
+    _role: DatabaseFileRole,
+    _observed: &fs::Metadata,
+) -> Result<(), JournalError> {
+    Err(JournalError::Permission(format!(
+        "database path {} requires Unix owner-only permissions",
+        path.display()
+    )))
 }
 
 fn create_database_file(path: &Path) -> Result<(), JournalError> {
@@ -472,9 +576,7 @@ fn create_database_file(path: &Path) -> Result<(), JournalError> {
     }
     match options.open(path) {
         Ok(_) => Ok(()),
-        Err(error) if error.kind() == ErrorKind::AlreadyExists => {
-            validate_and_harden_existing_file(path)
-        }
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => Ok(()),
         Err(error) => Err(permission_error(path, error)),
     }
 }
@@ -495,21 +597,6 @@ fn set_owner_only_directory(path: &Path) -> Result<(), JournalError> {
 }
 
 #[cfg(unix)]
-fn set_owner_only_file(path: &Path) -> Result<(), JournalError> {
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-        .map_err(|error| permission_error(path, error))
-}
-
-#[cfg(not(unix))]
-fn set_owner_only_file(path: &Path) -> Result<(), JournalError> {
-    Err(JournalError::Permission(format!(
-        "database path {} requires Unix owner-only permissions",
-        path.display()
-    )))
-}
-
-#[cfg(unix)]
 fn ensure_supported_platform() -> Result<(), JournalError> {
     Ok(())
 }
@@ -523,4 +610,70 @@ fn ensure_supported_platform() -> Result<(), JournalError> {
 
 fn permission_error(path: &Path, error: std::io::Error) -> JournalError {
     JournalError::Permission(format!("{}: {error}", path.display()))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disappearing_sidecar_after_metadata_check_is_normal_lifecycle() {
+        let temp = tempfile::tempdir().unwrap();
+        let sidecar = temp.path().join("runwarden.db-wal");
+        fs::write(&sidecar, []).unwrap();
+        let observed = fs::symlink_metadata(&sidecar).unwrap();
+        fs::remove_file(&sidecar).unwrap();
+
+        harden_observed_database_file(&sidecar, DatabaseFileRole::EphemeralSidecar, &observed)
+            .unwrap();
+    }
+
+    #[test]
+    fn disappearing_main_database_after_metadata_check_fails_closed() {
+        let temp = tempfile::tempdir().unwrap();
+        let database = temp.path().join(DATABASE_NAME);
+        fs::write(&database, []).unwrap();
+        let observed = fs::symlink_metadata(&database).unwrap();
+        fs::remove_file(&database).unwrap();
+
+        assert!(matches!(
+            harden_observed_database_file(&database, DatabaseFileRole::Main, &observed),
+            Err(JournalError::Permission(_))
+        ));
+    }
+
+    #[test]
+    fn missing_main_database_fails_file_hardening() {
+        let temp = tempfile::tempdir().unwrap();
+
+        assert!(matches!(
+            harden_database_files(temp.path()),
+            Err(JournalError::Permission(_))
+        ));
+    }
+
+    #[test]
+    fn symlink_replacement_after_metadata_check_is_not_followed() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let temp = tempfile::tempdir().unwrap();
+        let database = temp.path().join(DATABASE_NAME);
+        let outside = temp.path().join("outside");
+        fs::write(&database, []).unwrap();
+        fs::write(&outside, b"unchanged").unwrap();
+        fs::set_permissions(&outside, fs::Permissions::from_mode(0o666)).unwrap();
+        let observed = fs::symlink_metadata(&database).unwrap();
+        fs::remove_file(&database).unwrap();
+        symlink(&outside, &database).unwrap();
+
+        assert!(matches!(
+            harden_observed_database_file(&database, DatabaseFileRole::Main, &observed),
+            Err(JournalError::Permission(_))
+        ));
+        assert_eq!(fs::read(&outside).unwrap(), b"unchanged");
+        assert_eq!(
+            fs::metadata(&outside).unwrap().permissions().mode() & 0o777,
+            0o666
+        );
+    }
 }

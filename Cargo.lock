@@ -1051,6 +1051,7 @@ dependencies = [
 name = "runwarden-state"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "runwarden-kernel",
  "rusqlite",
  "serde",
