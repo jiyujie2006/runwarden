@@ -14,17 +14,23 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 axum = "0.8"
+base64.workspace = true
 clap.workspace = true
+getrandom.workspace = true
 runwarden-assurance = { path = "../runwarden-assurance" }
 runwarden-kernel = { path = "../runwarden-kernel" }
 runwarden-llm-proxy = { path = "../runwarden-llm-proxy" }
 runwarden-providers = { path = "../runwarden-providers" }
+runwarden-state = { path = "../runwarden-state" }
 serde.workspace = true
 serde_json.workspace = true
+subtle.workspace = true
 time.workspace = true
 tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 
 [dev-dependencies]
 runwarden-mcp = { path = "../runwarden-mcp" }
+rusqlite.workspace = true
 tempfile = "3.23"
+tower = { version = "0.5", features = ["util"] }

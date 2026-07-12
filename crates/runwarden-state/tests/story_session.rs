@@ -2,11 +2,13 @@ use std::sync::{Arc, Barrier};
 
 use runwarden_kernel::session::{AuthoritySnapshot, BudgetSnapshot, EvidenceAuthority};
 use runwarden_kernel::story::{
-    EnforcementMode, EvidenceStatus, RunMode, SchemaVersion, SecurityStory, SessionId,
-    StoryIdentity, StoryProvenance, StoryStatus,
+    EnforcementMode, EventId, EvidenceStatus, ObservationId, RunMode, SchemaVersion, SecurityStory,
+    SessionId, StoryIdentity, StoryProvenance, StoryStatus,
 };
-use runwarden_kernel::trace::Sha256Digest;
-use runwarden_state::{DemoActivation, JournalError, SessionRecord, StateStore, StoryStatusUpdate};
+use runwarden_kernel::trace::{EventCode, Sha256Digest, StoryEventPayload, canonical_json_v1};
+use runwarden_state::{
+    DemoActivation, JournalError, NewStoryEvent, SessionRecord, StateStore, StoryStatusUpdate,
+};
 use rusqlite::{Connection, params};
 use time::{Duration, OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
 
@@ -134,6 +136,104 @@ fn story_session_and_singleton_activation_round_trip() {
             entity: "active_instance",
             ..
         }
+    ));
+}
+
+#[test]
+fn future_minor_story_schema_is_readable_but_current_writers_reject_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let state_dir = temp.path().join("state");
+    let store = StateStore::open(&state_dir).unwrap();
+    let story = story_fixture();
+    let session = session_fixture(&story);
+
+    store.create_story(&story).unwrap();
+    store.create_session(&session).unwrap();
+    store
+        .activate_demo(&activation_fixture(&story, "future-schema"))
+        .unwrap();
+
+    let mut future_story = story.clone();
+    future_story.schema_version = SchemaVersion::try_from("1.7.9".to_owned()).unwrap();
+    let safe_story_json = String::from_utf8(canonical_json_v1(
+        &serde_json::to_value(&future_story).unwrap(),
+    ))
+    .unwrap();
+    Connection::open(state_dir.join("runwarden.db"))
+        .unwrap()
+        .execute(
+            r#"UPDATE stories
+               SET schema_version = '1.7.9', safe_story_json = ?1
+               WHERE story_id = ?2"#,
+            params![safe_story_json, story.story_id.to_string()],
+        )
+        .unwrap();
+
+    assert_eq!(
+        store.story(story.story_id).unwrap().schema_version.as_str(),
+        "1.7.9"
+    );
+    assert_eq!(
+        store.active_demo().unwrap().unwrap().story_id,
+        story.story_id
+    );
+
+    let append_error = match store.append_event(NewStoryEvent {
+        obs_id: ObservationId::new(),
+        event_id: EventId::new(),
+        story_id: story.story_id,
+        session_id: story.authority.session_id,
+        operation_id: None,
+        provider: None,
+        payload: StoryEventPayload::InputConsumed {
+            asset_id: EventCode::try_from("schema_fixture".to_owned()).unwrap(),
+            content_hash: Sha256Digest::from_bytes(b"schema fixture"),
+        },
+        recorded_at: mutation_time(&story, 1),
+    }) {
+        Ok(_) => panic!("the current writer accepted a future schema"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        append_error,
+        JournalError::InvalidTransition {
+            entity: "story_schema_version",
+            ..
+        }
+    ));
+
+    let update_error = store
+        .update_story_status(StoryStatusUpdate {
+            story_id: story.story_id,
+            expected_version: 0,
+            status: StoryStatus::AwaitingApproval,
+            evidence_status: EvidenceStatus::Pending,
+            final_outcome_summary: "future writer must own this mutation".to_owned(),
+            now: mutation_time(&story, 1),
+        })
+        .unwrap_err();
+    assert!(matches!(
+        update_error,
+        JournalError::InvalidTransition {
+            entity: "story_schema_version",
+            ..
+        }
+    ));
+
+    let evidence = store.story_evidence(story.story_id).unwrap();
+    evidence.verify_structure().unwrap();
+    assert_eq!(evidence.story.schema_version.as_str(), "1.7.9");
+    assert!(evidence.events.is_empty());
+    assert!(evidence.replay_frames.is_empty());
+
+    let mut direct_future_create = story_fixture();
+    direct_future_create.schema_version = SchemaVersion::try_from("1.7.9".to_owned()).unwrap();
+    assert!(matches!(
+        store.create_story(&direct_future_create),
+        Err(JournalError::InvalidTransition {
+            entity: "story_schema_version",
+            ..
+        })
     ));
 }
 

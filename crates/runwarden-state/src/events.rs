@@ -11,7 +11,7 @@ use time::{OffsetDateTime, UtcOffset};
 use crate::snapshots::{
     load_story_evidence_tx, load_story_snapshot_tx, verify_event_frame_chains_tx,
 };
-use crate::stories::load_story_record;
+use crate::stories::{load_story_record, require_current_story_schema};
 use crate::{
     JournalError, StateStore, canonical_json, enum_text, format_time, persisted_string, rust_u64,
     sqlite_u64,
@@ -128,6 +128,7 @@ fn append_verified_event_and_frame_tx(
     input: NewStoryEvent,
 ) -> Result<CommittedStoryEvent, JournalError> {
     let stored = load_story_record(transaction, input.story_id)?;
+    require_current_story_schema(&stored.story)?;
     if stored.story.authority.session_id != input.session_id {
         return Err(JournalError::Integrity(
             "event session does not match story authority".to_owned(),

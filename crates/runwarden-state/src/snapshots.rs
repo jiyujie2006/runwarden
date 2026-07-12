@@ -115,6 +115,12 @@ struct RawFrame {
     recorded_at: String,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReviewerOperationSnapshot {
+    pub operation: SecurityOperation,
+    pub approval_version: Option<u64>,
+}
+
 impl StateStore {
     pub fn operation(&self, operation_id: OperationId) -> Result<SecurityOperation, JournalError> {
         let mut connection = self.connection()?;
@@ -123,6 +129,52 @@ impl StateStore {
         verify_story_evidence_tx(&transaction, operation.story_id)?;
         transaction.commit()?;
         Ok(operation)
+    }
+
+    /// Load one display-safe operation and its approval CAS version from the
+    /// same verified story snapshot.
+    pub fn reviewer_operation_snapshot(
+        &self,
+        story_id: StoryId,
+        operation_id: OperationId,
+    ) -> Result<ReviewerOperationSnapshot, JournalError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
+        let snapshot = load_story_snapshot_tx(&transaction, story_id)?;
+        verify_snapshot_anchor_tx(&transaction, &snapshot)?;
+        let operation = snapshot
+            .operations
+            .into_iter()
+            .find(|operation| operation.operation_id == operation_id)
+            .ok_or_else(|| JournalError::NotFound {
+                entity: "operation",
+                id: operation_id.to_string(),
+            })?;
+        let approval_version: Option<i64> = transaction
+            .query_row(
+                r#"SELECT version FROM approvals
+                   WHERE story_id = ?1 AND session_id = ?2 AND operation_id = ?3"#,
+                params![
+                    story_id.to_string(),
+                    operation.session_id.to_string(),
+                    operation_id.to_string()
+                ],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if operation.approval.is_some() != approval_version.is_some() {
+            return Err(JournalError::Integrity(
+                "operation approval view and approval version disagree".to_owned(),
+            ));
+        }
+        let approval_version = approval_version
+            .map(|version| rust_u64(version, "approval version"))
+            .transpose()?;
+        transaction.commit()?;
+        Ok(ReviewerOperationSnapshot {
+            operation,
+            approval_version,
+        })
     }
 
     pub fn story_snapshot(&self, story_id: StoryId) -> Result<SecurityStory, JournalError> {

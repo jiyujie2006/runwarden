@@ -199,9 +199,17 @@ resumes the same operation; it never imports a file-backed approval as native
 authority. Status and resume accept only the operation id, and the runtime
 loads the frozen private request before any lease or execution transition.
 
-The legacy interactive WebUI still uses file-backed reviewer records until its
-later Plan 4 API migration. Those records cannot approve or consume a native
-MCP operation, and the legacy in-memory authority path rejects
-`ApprovalState::Leased` rather than treating it as an ordinary approval. The
-complete storage, recovery, and compatibility boundaries are specified in
-[Native Operation Journal](operation-journal.md).
+The loopback reviewer API writes native decisions only through
+`StateStore::decide_active_approval`. Its active-story lookup, immutable
+binding validation, expiry check, and approval/operation version CAS occur in
+one immediate transaction. A missing active context is a state conflict and
+an approval belonging to another story is hidden as not found. The API returns
+the updated display-safe approval and operation from that transaction;
+approval still does not lease, consume, or execute the operation.
+
+The dependency-free legacy interactive console continues to use file-backed
+reviewer records until its later live-console migration. Those records cannot
+approve or consume a native MCP operation, and the legacy in-memory authority
+path rejects `ApprovalState::Leased` rather than treating it as an ordinary
+approval. The complete storage, recovery, and compatibility boundaries are
+specified in [Native Operation Journal](operation-journal.md).

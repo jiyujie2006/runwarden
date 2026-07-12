@@ -107,8 +107,10 @@ Executing, terminal, and uncertain operations are never retried.
 MCP no longer reads or writes `.runwarden/approvals`, does not create the fixed
 `mcp-inline` session, and does not append legacy provider-call authority events.
 Legacy approval JSON cannot authorize a native lease or provider execution.
-The legacy interactive reviewer console is not yet a writer for these native
-approvals; the nonce/version-protected reviewer API is added later in Plan 4.
+The loopback nonce/origin/version-protected reviewer API can decide the native
+approval through the journal's active-story CAS. The dependency-free legacy
+console is not yet wired to that API, and its file-backed buttons remain
+non-authoritative compatibility behavior.
 
 ## Trace And Report Compatibility Tools
 

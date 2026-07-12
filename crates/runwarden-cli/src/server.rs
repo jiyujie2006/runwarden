@@ -2,6 +2,7 @@ use std::{
     convert::Infallible,
     fs,
     io::Write,
+    net::IpAddr,
     path::{Path, PathBuf},
 };
 
@@ -15,6 +16,7 @@ use axum::{
     },
     routing::{get, post},
 };
+use runwarden_cli::web_server::{reviewer_router, reviewer_state_for_listener};
 use runwarden_kernel::{
     authority::{ApprovalRecord, ApprovalState},
     evidence::{InMemoryTraceStore, TraceEvent},
@@ -94,7 +96,12 @@ pub fn run_console_server(
         .enable_all()
         .build()?;
     runtime.block_on(async move {
-        let listener = tokio::net::TcpListener::bind(format!("{bind}:{port}")).await?;
+        let bind_ip: IpAddr = bind.parse().context("reviewer bind must be an IP address")?;
+        anyhow::ensure!(
+            bind_ip.is_loopback(),
+            "reviewer server must bind a loopback address"
+        );
+        let listener = tokio::net::TcpListener::bind((bind_ip, port)).await?;
         let addr = listener.local_addr()?;
         if json_output {
             println!(
@@ -132,7 +139,9 @@ pub fn run_console_server(
         }
         std::io::stdout().flush().ok();
 
-        let app = Router::new()
+        let reviewer_state = reviewer_state_for_listener(&state.state_dir, addr)?;
+        let reviewer_routes = reviewer_router(reviewer_state);
+        let legacy_routes = Router::new()
             .route("/", get(|| async { Html(CONSOLE_HTML) }))
             .route("/events", get(sse_handler))
             .route("/api/approve", post(approve_handler))
@@ -141,6 +150,7 @@ pub fn run_console_server(
             .route("/api/trace/verify", get(trace_verify_handler))
             .route("/healthz", get(|| async { Json(json!({"ok": true})) }))
             .with_state(state);
+        let app = legacy_routes.merge(reviewer_routes);
         axum::serve(listener, app).await?;
         Ok::<(), anyhow::Error>(())
     })?;

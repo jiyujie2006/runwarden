@@ -127,6 +127,20 @@ rows are polled without creating another operation; at the exact expiry the
 runtime performs the approval/operation versioned expiry CAS. Reviewer denial,
 expiry, and timeout all return the same operation id without an executor call.
 
+The reviewer HTTP boundary calls `StateStore::decide_active_approval`, not the
+runtime invoke path. That entry point checks the singleton active story/session
+inside the same immediate transaction as binding, expiry, and both entity
+versions. No active context conflicts, and a valid approval id from another
+story is returned as not found. A successful decision returns the updated
+approval and operation from that transaction; it does not acquire a lease or
+cross the execution-start boundary.
+
+Reviewer operation reads load the display-safe operation and approval CAS
+version from one deferred, evidence-verified snapshot. Supported canonical
+major-1 story versions remain readable, while every current story mutation and
+event/replay-frame append requires `SchemaVersion::current()`; this binary does
+not mint evidence under a future minor version.
+
 Before leasing or resuming, the runtime reloads private arguments and
 authoritatively re-extracts the typed claim, safe projection, canonical
 argument hash, provider contract hash, policy snapshot, and conservative

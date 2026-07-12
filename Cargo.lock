@@ -944,18 +944,24 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "base64",
  "clap",
+ "getrandom",
  "runwarden-assurance",
  "runwarden-kernel",
  "runwarden-llm-proxy",
  "runwarden-mcp",
  "runwarden-providers",
+ "runwarden-state",
+ "rusqlite",
  "serde",
  "serde_json",
+ "subtle",
  "tempfile",
  "time",
  "tokio",
  "tokio-stream",
+ "tower",
 ]
 
 [[package]]

@@ -21,7 +21,7 @@ use crate::events::{NewStoryEvent, append_event_and_frame_tx};
 use crate::operations::{FrozenProposalBinding, load_frozen_proposal_tx};
 use crate::sessions::load_session_record;
 use crate::snapshots::{load_operation_tx, load_story_evidence_tx, verify_story_evidence_tx};
-use crate::stories::{load_story_record, validate_digest, validate_nonempty};
+use crate::stories::{load_active_demo, load_story_record, validate_digest, validate_nonempty};
 use crate::{
     JournalError, StateStore, canonical_json, enum_text, format_time, persisted_enum,
     persisted_json, persisted_string, persisted_time, rust_u64, sqlite_u64,
@@ -168,6 +168,18 @@ pub struct ApprovalDecisionInput {
     pub reason: String,
     pub decision: ReviewerDecision,
     pub now: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ApprovalDecisionOutcome {
+    pub approval: ApprovalRecordV1,
+    pub operation: SecurityOperation,
+}
+
+#[derive(Clone, Copy)]
+enum ApprovalDecisionScope {
+    AnyStory,
+    ActiveStory,
 }
 
 pub struct ExpireApprovalInput {
@@ -623,10 +635,40 @@ impl StateStore {
         &self,
         input: ApprovalDecisionInput,
     ) -> Result<ApprovalRecordV1, JournalError> {
+        self.decide_approval_with_scope(input, ApprovalDecisionScope::AnyStory)
+            .map(|outcome| outcome.approval)
+    }
+
+    /// Decide an approval only when its story and session are the current
+    /// active reviewer context.
+    ///
+    /// The active-context check and both entity CAS updates share one
+    /// immediate transaction. An approval from another active story is hidden
+    /// as not found so reviewer callers cannot use this method to enumerate
+    /// cross-story approval identifiers.
+    pub fn decide_active_approval(
+        &self,
+        input: ApprovalDecisionInput,
+    ) -> Result<ApprovalDecisionOutcome, JournalError> {
+        self.decide_approval_with_scope(input, ApprovalDecisionScope::ActiveStory)
+    }
+
+    fn decide_approval_with_scope(
+        &self,
+        input: ApprovalDecisionInput,
+        scope: ApprovalDecisionScope,
+    ) -> Result<ApprovalDecisionOutcome, JournalError> {
         validate_reviewer_input(&input.reviewer, &input.reason)?;
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let stored = load_approval_by_id_tx(&transaction, input.approval_id)?;
+        let stored = match scope {
+            ApprovalDecisionScope::AnyStory => {
+                load_approval_by_id_tx(&transaction, input.approval_id)?
+            }
+            ApprovalDecisionScope::ActiveStory => {
+                load_active_approval_by_id_tx(&transaction, input.approval_id)?
+            }
+        };
         verify_story_evidence_tx(&transaction, stored.story_id)?;
         require_approval_version(&stored.record, input.expected_version)?;
         require_pending_approval(&stored.record)?;
@@ -738,7 +780,10 @@ impl StateStore {
         validate_approval_operation_state(&updated.record, &updated_operation)?;
         transaction.commit()?;
         self.harden_files()?;
-        Ok(updated.record)
+        Ok(ApprovalDecisionOutcome {
+            approval: updated.record,
+            operation: updated_operation,
+        })
     }
 
     pub fn expire_approval(
@@ -2859,6 +2904,40 @@ fn load_approval_by_id_tx(
     decode_approval(raw)
 }
 
+fn load_active_approval_by_id_tx(
+    connection: &Connection,
+    approval_id: ApprovalId,
+) -> Result<StoredApproval, JournalError> {
+    let Some(active) = load_active_demo(connection)? else {
+        return Err(JournalError::InvalidTransition {
+            entity: "active_story",
+            from: "inactive".to_owned(),
+            to: "approval_decision".to_owned(),
+        });
+    };
+    let raw = connection
+        .query_row(
+            r#"SELECT approval_id, story_id, session_id, operation_id,
+                      binding_json, binding_hash, state, reviewer, reason,
+                      expires_at, lease_id, lease_owner, lease_expires_at,
+                      version, created_at, updated_at
+               FROM approvals
+               WHERE approval_id = ?1 AND story_id = ?2 AND session_id = ?3"#,
+            params![
+                approval_id.to_string(),
+                active.story_id.to_string(),
+                active.session_id.to_string(),
+            ],
+            raw_approval_from_row,
+        )
+        .optional()?
+        .ok_or_else(|| JournalError::NotFound {
+            entity: "approval",
+            id: approval_id.to_string(),
+        })?;
+    decode_approval(raw)
+}
+
 fn load_approval_for_operation_tx(
     connection: &Connection,
     operation_id: OperationId,
@@ -2885,28 +2964,30 @@ fn query_approval(
            FROM approvals {predicate}"#
     );
     connection
-        .query_row(&sql, params![id], |row| {
-            Ok(RawApproval {
-                approval_id: row.get(0)?,
-                story_id: row.get(1)?,
-                session_id: row.get(2)?,
-                operation_id: row.get(3)?,
-                binding_json: row.get(4)?,
-                binding_hash: row.get(5)?,
-                state: row.get(6)?,
-                reviewer: row.get(7)?,
-                reason: row.get(8)?,
-                expires_at: row.get(9)?,
-                lease_id: row.get(10)?,
-                lease_owner: row.get(11)?,
-                lease_expires_at: row.get(12)?,
-                version: row.get(13)?,
-                created_at: row.get(14)?,
-                updated_at: row.get(15)?,
-            })
-        })
+        .query_row(&sql, params![id], raw_approval_from_row)
         .optional()
         .map_err(Into::into)
+}
+
+fn raw_approval_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawApproval> {
+    Ok(RawApproval {
+        approval_id: row.get(0)?,
+        story_id: row.get(1)?,
+        session_id: row.get(2)?,
+        operation_id: row.get(3)?,
+        binding_json: row.get(4)?,
+        binding_hash: row.get(5)?,
+        state: row.get(6)?,
+        reviewer: row.get(7)?,
+        reason: row.get(8)?,
+        expires_at: row.get(9)?,
+        lease_id: row.get(10)?,
+        lease_owner: row.get(11)?,
+        lease_expires_at: row.get(12)?,
+        version: row.get(13)?,
+        created_at: row.get(14)?,
+        updated_at: row.get(15)?,
+    })
 }
 
 fn decode_approval(raw: RawApproval) -> Result<StoredApproval, JournalError> {

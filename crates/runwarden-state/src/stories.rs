@@ -90,6 +90,7 @@ struct RawActiveDemo {
 impl StateStore {
     pub fn create_story(&self, story: &SecurityStory) -> Result<(), JournalError> {
         validate_story_contract(story)?;
+        require_current_story_schema(story)?;
         validate_initial_story(story)?;
 
         let safe_story_json = canonical_json(story)?;
@@ -160,6 +161,7 @@ impl StateStore {
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let stored = load_story_record(&transaction, input.story_id)?;
+        require_current_story_schema(&stored.story)?;
         let event_rows: i64 = transaction.query_row(
             "SELECT count(*) FROM events WHERE story_id = ?1",
             params![input.story_id.to_string()],
@@ -327,84 +329,7 @@ impl StateStore {
 
     pub fn active_demo(&self) -> Result<Option<ActiveDemo>, JournalError> {
         let connection = self.connection()?;
-        let raw: Option<RawActiveDemo> = connection
-            .query_row(
-                r#"SELECT singleton, instance_id, story_id, session_id,
-                          process_id, host_id, instance_token_hash, heartbeat_at
-                   FROM active_instances"#,
-                [],
-                |row| {
-                    Ok(RawActiveDemo {
-                        singleton: row.get(0)?,
-                        instance_id: row.get(1)?,
-                        story_id: row.get(2)?,
-                        session_id: row.get(3)?,
-                        process_id: row.get(4)?,
-                        host_id: row.get(5)?,
-                        instance_token_hash: row.get(6)?,
-                        heartbeat_at: row.get(7)?,
-                    })
-                },
-            )
-            .optional()?;
-        let Some(raw) = raw else {
-            return Ok(None);
-        };
-        if raw.singleton != 1 {
-            return Err(JournalError::Integrity(
-                "active instance singleton key is not 1".to_owned(),
-            ));
-        }
-        let story_id: StoryId = persisted_string(raw.story_id, "active instance story id")?;
-        let session_id = persisted_string(raw.session_id, "active instance session id")?;
-        let process_id = u32::try_from(raw.process_id).map_err(|_| {
-            JournalError::Integrity("stored active instance process id is invalid".to_owned())
-        })?;
-        if process_id == 0 {
-            return Err(JournalError::Integrity(
-                "stored active instance process id is zero".to_owned(),
-            ));
-        }
-        validate_nonempty("instance id", &raw.instance_id)?;
-        validate_nonempty("host id", &raw.host_id)?;
-        validate_digest("instance token hash", &raw.instance_token_hash)?;
-
-        let story = load_story_record(&connection, story_id)?;
-        let session = load_session_record(&connection, session_id)?;
-        if session.record.story_id != story_id
-            || story.story.authority.session_id != session_id
-            || session.record.authority != story.story.authority
-        {
-            return Err(JournalError::Integrity(
-                "stored active instance context is internally inconsistent".to_owned(),
-            ));
-        }
-        if !session.active || session.record.authority.authz_state != "active" {
-            return Err(JournalError::Integrity(
-                "stored active instance references an inactive authority".to_owned(),
-            ));
-        }
-        let heartbeat_at = persisted_time(&raw.heartbeat_at, "active instance heartbeat")?;
-        if format_time(heartbeat_at)? != raw.heartbeat_at {
-            return Err(JournalError::Integrity(
-                "stored active instance heartbeat is not normalized UTC RFC3339".to_owned(),
-            ));
-        }
-        if heartbeat_at >= session.record.expires_at {
-            return Err(JournalError::Integrity(
-                "stored active instance heartbeat is outside the session lifetime".to_owned(),
-            ));
-        }
-
-        Ok(Some(ActiveDemo {
-            instance_id: raw.instance_id,
-            story_id,
-            session_id,
-            process_id,
-            host_id: raw.host_id,
-            instance_token_hash: raw.instance_token_hash,
-            heartbeat_at,
-        }))
+        load_active_demo(&connection)
     }
 
     /// Load and validate the active instance, verified story, and live session
@@ -506,6 +431,89 @@ impl StateStore {
     }
 }
 
+pub(crate) fn load_active_demo(
+    connection: &Connection,
+) -> Result<Option<ActiveDemo>, JournalError> {
+    let raw: Option<RawActiveDemo> = connection
+        .query_row(
+            r#"SELECT singleton, instance_id, story_id, session_id,
+                      process_id, host_id, instance_token_hash, heartbeat_at
+               FROM active_instances"#,
+            [],
+            |row| {
+                Ok(RawActiveDemo {
+                    singleton: row.get(0)?,
+                    instance_id: row.get(1)?,
+                    story_id: row.get(2)?,
+                    session_id: row.get(3)?,
+                    process_id: row.get(4)?,
+                    host_id: row.get(5)?,
+                    instance_token_hash: row.get(6)?,
+                    heartbeat_at: row.get(7)?,
+                })
+            },
+        )
+        .optional()?;
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    if raw.singleton != 1 {
+        return Err(JournalError::Integrity(
+            "active instance singleton key is not 1".to_owned(),
+        ));
+    }
+    let story_id: StoryId = persisted_string(raw.story_id, "active instance story id")?;
+    let session_id = persisted_string(raw.session_id, "active instance session id")?;
+    let process_id = u32::try_from(raw.process_id).map_err(|_| {
+        JournalError::Integrity("stored active instance process id is invalid".to_owned())
+    })?;
+    if process_id == 0 {
+        return Err(JournalError::Integrity(
+            "stored active instance process id is zero".to_owned(),
+        ));
+    }
+    validate_nonempty("instance id", &raw.instance_id)?;
+    validate_nonempty("host id", &raw.host_id)?;
+    validate_digest("instance token hash", &raw.instance_token_hash)?;
+
+    let story = load_story_record(connection, story_id)?;
+    let session = load_session_record(connection, session_id)?;
+    if session.record.story_id != story_id
+        || story.story.authority.session_id != session_id
+        || session.record.authority != story.story.authority
+    {
+        return Err(JournalError::Integrity(
+            "stored active instance context is internally inconsistent".to_owned(),
+        ));
+    }
+    if !session.active || session.record.authority.authz_state != "active" {
+        return Err(JournalError::Integrity(
+            "stored active instance references an inactive authority".to_owned(),
+        ));
+    }
+    let heartbeat_at = persisted_time(&raw.heartbeat_at, "active instance heartbeat")?;
+    if format_time(heartbeat_at)? != raw.heartbeat_at {
+        return Err(JournalError::Integrity(
+            "stored active instance heartbeat is not normalized UTC RFC3339".to_owned(),
+        ));
+    }
+    if heartbeat_at >= session.record.expires_at {
+        return Err(JournalError::Integrity(
+            "stored active instance heartbeat is outside the session lifetime".to_owned(),
+        ));
+    }
+
+    Ok(Some(ActiveDemo {
+        instance_id: raw.instance_id,
+        story_id,
+        session_id,
+        process_id,
+        host_id: raw.host_id,
+        instance_token_hash: raw.instance_token_hash,
+        heartbeat_at,
+    }))
+}
+
 pub(crate) fn load_story_record(
     connection: &Connection,
     story_id: StoryId,
@@ -604,11 +612,6 @@ fn story_exists(connection: &Connection, story_id: StoryId) -> Result<bool, Jour
 }
 
 pub(crate) fn validate_story_contract(story: &SecurityStory) -> Result<(), JournalError> {
-    if story.schema_version != runwarden_kernel::story::SchemaVersion::current() {
-        return Err(JournalError::Integrity(
-            "story schema version is not the current frozen version".to_owned(),
-        ));
-    }
     validate_nonempty("story title", &story.title)?;
     validate_nonempty("story scenario id", &story.scenario_id)?;
     validate_nonempty("story attack category", &story.attack_category)?;
@@ -634,6 +637,19 @@ pub(crate) fn validate_story_contract(story: &SecurityStory) -> Result<(), Journ
         ));
     }
     validate_status_evidence_pair(story.status, story.evidence_status)
+}
+
+pub(crate) fn require_current_story_schema(story: &SecurityStory) -> Result<(), JournalError> {
+    let current = SchemaVersion::current();
+    if story.schema_version == current {
+        Ok(())
+    } else {
+        Err(JournalError::InvalidTransition {
+            entity: "story_schema_version",
+            from: story.schema_version.as_str().to_owned(),
+            to: current.as_str().to_owned(),
+        })
+    }
 }
 
 fn validate_initial_story(story: &SecurityStory) -> Result<(), JournalError> {
