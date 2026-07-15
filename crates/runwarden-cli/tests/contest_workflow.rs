@@ -91,6 +91,51 @@ fn demo_scenario_writes_real_trace_report_and_webui_json() {
     assert_eq!(webui["provider_calls"][1]["decision"], "requires_review");
     assert_eq!(webui["provider_calls"][2]["decision"], "denied");
     assert_eq!(webui["provider_calls"][2]["side_effect_executed"], false);
+    assert_eq!(webui["story"]["input_path"], "attacks/prompt-injection.md");
+    assert!(
+        webui["story"]["attack_prompt"]
+            .as_str()
+            .is_some_and(|prompt| prompt.contains("Ignore policy"))
+    );
+    assert_eq!(webui["security_metrics"]["attack_success_rate"], 0.0);
+    assert_eq!(webui["security_metrics"]["containment_rate"], 1.0);
+    assert_eq!(webui["security_metrics"]["passed"], true);
+    assert_eq!(webui["security_metrics"]["total"], 2);
+    assert_eq!(webui["security_metrics"]["malicious"], 1);
+    assert_eq!(webui["security_metrics"]["benign"], 1);
+    assert_eq!(
+        webui["security_evaluation"]["method"],
+        "one_attack_story_plus_independent_benign_control"
+    );
+    assert_eq!(
+        webui["security_evaluation"]["benign_control"]["fixture"],
+        "benign/request.md"
+    );
+    assert_eq!(
+        webui["security_evaluation"]["benign_control"]["actual_decision"],
+        "allowed"
+    );
+    assert_eq!(
+        webui["security_evaluation"]["benign_control"]["inspection_risk_count"],
+        0
+    );
+    assert_eq!(
+        webui["security_evaluation"]["cases"][0]["id"],
+        "prompt-injection-file-exfil-attack-story"
+    );
+    assert_eq!(
+        webui["security_evaluation"]["cases"][1]["id"],
+        "prompt-injection-file-exfil-benign-control"
+    );
+    assert_eq!(webui["provider_calls"][2]["anomaly"]["score"], 0);
+    assert!(
+        webui["provider_calls"][2]["anomaly"]["history"]
+            .as_array()
+            .is_some_and(|history| history.iter().all(|observation| {
+                observation["provider"] != "external.mcp.filesystem.read_file"
+            })),
+        "a review-blocked read must not poison the committed behavior history"
+    );
 }
 
 #[test]
@@ -128,6 +173,22 @@ fn demo_all_writes_static_reviewer_console() {
     assert!(!html.contains("anomalous-provider-sequence"));
     assert!(!html.contains("insertAdjacentHTML"));
     assert!(!html.contains("innerHTML"));
+
+    let environment: Value = serde_json::from_str(
+        &fs::read_to_string(
+            absolute_output
+                .join("environment-local-web-risk")
+                .join("webui.json"),
+        )
+        .expect("environment webui"),
+    )
+    .expect("environment webui json");
+    assert!(
+        environment["provider_calls"][1]["anomaly"]["score"]
+            .as_u64()
+            .is_some_and(|score| score >= 25),
+        "the novel localhost egress attempt should remain explainably anomalous"
+    );
 }
 
 #[cfg(unix)]
@@ -256,7 +317,18 @@ fn demo_interactive_serves_console_and_healthz() {
         .as_str()
         .expect("listen_addr")
         .to_string();
+    let state_dir = PathBuf::from(startup["state_dir"].as_str().expect("run-scoped state_dir"));
     assert_eq!(startup["mode"], "interactive_demo");
+
+    let snapshot = http_json(&listen_addr, "GET", "/api/console/snapshot", None);
+    assert_eq!(snapshot["schema_version"], "runwarden.console.v2");
+    assert_eq!(snapshot["mode"], "live");
+    assert!(snapshot["events"].is_array());
+    assert!(
+        snapshot["scenarios"]
+            .as_array()
+            .is_some_and(|items| items.len() == 5)
+    );
 
     let mut stream = TcpStream::connect(&listen_addr).expect("connect demo server");
     stream
@@ -267,6 +339,7 @@ fn demo_interactive_serves_console_and_healthz() {
 
     child.kill().expect("kill demo server");
     child.wait().expect("wait demo server");
+    let _ = fs::remove_dir_all(state_dir);
 
     assert!(response.contains("HTTP/1.1 200 OK"));
     assert!(response.contains(r#"{"ok":true}"#));
@@ -276,9 +349,7 @@ fn demo_interactive_serves_console_and_healthz() {
 fn demo_interactive_approval_http_to_mcp_retry_closed_loop() {
     let _guard = demo_lock().lock().expect("demo lock");
     let workspace = workspace_root();
-    let state_dir = workspace.join(".runwarden");
     let sandbox_root = workspace.join("target/runwarden-contest-test/live-console-sandbox");
-    let _ = fs::remove_dir_all(&state_dir);
     let _ = fs::remove_dir_all(&sandbox_root);
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_runwarden"))
@@ -294,12 +365,22 @@ fn demo_interactive_approval_http_to_mcp_retry_closed_loop() {
         .as_str()
         .expect("listen_addr")
         .to_string();
+    let state_dir = PathBuf::from(startup["state_dir"].as_str().expect("run-scoped state_dir"));
+    let reviewer_token = startup["reviewer_url"]
+        .as_str()
+        .and_then(|url| url.rsplit_once("review_token=").map(|(_, token)| token))
+        .expect("reviewer token")
+        .to_string();
 
     let old_state = std::env::var_os("RUNWARDEN_STATE_DIR");
     let old_sandbox = std::env::var_os("RUNWARDEN_SANDBOX_ROOT");
+    let old_session = std::env::var_os("RUNWARDEN_SESSION_ID");
+    let old_actor = std::env::var_os("RUNWARDEN_ACTOR_ID");
     unsafe {
         std::env::set_var("RUNWARDEN_STATE_DIR", &state_dir);
         std::env::set_var("RUNWARDEN_SANDBOX_ROOT", &sandbox_root);
+        std::env::set_var("RUNWARDEN_SESSION_ID", "contest-http-closed-loop");
+        std::env::set_var("RUNWARDEN_ACTOR_ID", "contest-integration-agent");
     }
 
     let arguments = json!({
@@ -326,11 +407,29 @@ fn demo_interactive_approval_http_to_mcp_retry_closed_loop() {
             .any(|approval| approval["approval_id"] == approval_id)
     );
 
-    let approved = http_json(
+    let forged_body = r#"{"decision":"approve","reason":"forged"}"#;
+    let unauthorized_request = format!(
+        "POST /api/approvals/{approval_id}/decision HTTP/1.1\r\nHost: {listen_addr}\r\nOrigin: http://{listen_addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{forged_body}",
+        forged_body.len()
+    );
+    let unauthorized = raw_http_response(&listen_addr, &unauthorized_request);
+    assert!(unauthorized.contains("HTTP/1.1 401 Unauthorized"));
+    let still_pending = fs::read_to_string(
+        state_dir
+            .join("approvals")
+            .join(format!("{approval_id}.json")),
+    )
+    .expect("pending approval after unauthorized request");
+    assert!(still_pending.contains(r#""state": "pending""#));
+
+    let approved = authenticated_http_json(
         &listen_addr,
-        "POST",
-        "/api/approve",
-        Some(json!({ "approval_id": approval_id })),
+        &format!("/api/approvals/{approval_id}/decision"),
+        &reviewer_token,
+        json!({
+            "decision": "approve",
+            "reason": "recipient and subject verified"
+        }),
     );
     assert_eq!(approved["state"], "approved");
     assert_eq!(approved["side_effect_executed"], false);
@@ -348,6 +447,7 @@ fn demo_interactive_approval_http_to_mcp_retry_closed_loop() {
     )
     .expect("saved approval");
     assert!(saved.contains(r#""state": "consumed""#));
+    assert!(saved.contains(r#""reviewer": "reviewer-session-"#));
 
     let trace = http_json(&listen_addr, "GET", "/api/trace/verify", None);
     assert_eq!(trace["provider_trace"]["verified"], true);
@@ -355,8 +455,11 @@ fn demo_interactive_approval_http_to_mcp_retry_closed_loop() {
 
     restore_env("RUNWARDEN_STATE_DIR", old_state);
     restore_env("RUNWARDEN_SANDBOX_ROOT", old_sandbox);
+    restore_env("RUNWARDEN_SESSION_ID", old_session);
+    restore_env("RUNWARDEN_ACTOR_ID", old_actor);
     child.kill().expect("kill demo server");
     child.wait().expect("wait demo server");
+    let _ = fs::remove_dir_all(state_dir);
 }
 
 #[test]
@@ -495,4 +598,31 @@ fn http_json(addr: &str, method: &str, path: &str, body: Option<Value>) -> Value
     );
     let (_, body) = response.split_once("\r\n\r\n").expect("response body");
     serde_json::from_str(body).expect("response JSON")
+}
+
+fn authenticated_http_json(addr: &str, path: &str, reviewer_token: &str, body: Value) -> Value {
+    let body = body.to_string();
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: {addr}\r\nOrigin: http://{addr}\r\nX-Runwarden-Reviewer-Token: {reviewer_token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    let mut stream = TcpStream::connect(addr).expect("connect demo server");
+    stream.write_all(request.as_bytes()).expect("write request");
+    let mut response = String::new();
+    stream.read_to_string(&mut response).expect("read response");
+    assert!(
+        response.contains("HTTP/1.1 200 OK"),
+        "unexpected authenticated response: {response}"
+    );
+    let (_, body) = response.split_once("\r\n\r\n").expect("response body");
+    serde_json::from_str(body).expect("response JSON")
+}
+
+fn raw_http_response(addr: &str, request: &str) -> String {
+    let mut stream = TcpStream::connect(addr).expect("connect demo server");
+    stream.write_all(request.as_bytes()).expect("write request");
+    let mut response = String::new();
+    stream.read_to_string(&mut response).expect("read response");
+    response
 }

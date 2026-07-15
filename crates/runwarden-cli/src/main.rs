@@ -1,17 +1,21 @@
 use std::{
     env, fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     process::ExitCode,
 };
 
 use clap::{Parser, Subcommand};
+use runwarden_anomaly::{AnomalyMonitor, BehaviorProfile};
 use runwarden_assurance::eval::{EvalThresholds, evaluate_report_assurance};
 use runwarden_assurance::report::{
     RenderFormat, ReportDraft, lint_report_against_trace, render_report,
 };
+use runwarden_assurance::security_eval::{
+    SecurityDecision, SecurityEvalCase, evaluate_security_cases,
+};
 use runwarden_kernel::artifact::resolve_workspace_relative_path;
 use runwarden_kernel::contracts::{PolicyDecision, ProviderCall, ProviderClass, ProviderOutcome};
-use runwarden_kernel::evidence::{InMemoryTraceStore, TraceEvent, TraceQuery};
+use runwarden_kernel::evidence::{InMemoryTraceStore, TraceEvent, TraceQuery, hex_sha256};
 use runwarden_kernel::kernel::KernelEnforcer;
 use runwarden_kernel::manifest::{AssessmentManifest, SessionManifest};
 use runwarden_providers::catalog::full_provider_registry;
@@ -386,25 +390,30 @@ fn run_demo_interactive(
     json_output: bool,
 ) -> anyhow::Result<()> {
     let root = find_workspace_root(env::current_dir()?)?;
-    let state_dir = root.join(".runwarden");
+    let run_id = format!(
+        "demo-{}-{}",
+        time::OffsetDateTime::now_utc().unix_timestamp_nanos(),
+        std::process::id()
+    );
+    let state_dir = root.join(".runwarden").join("runs").join(run_id);
     fs::create_dir_all(&state_dir)?;
-    let trace_path = root.join("artifacts/llm-proxy/trace.jsonl");
-    if let Some(parent) = trace_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::remove_file(&trace_path).ok();
-    fs::remove_file(state_dir.join("events.jsonl")).ok();
+    let trace_path = state_dir.join("model-events.jsonl");
 
     // Set RUNWARDEN_STATE_DIR so the MCP subprocess (spawned by opencode)
-    // writes events.jsonl and approvals to the same directory this server
-    // watches. Without this, MCP defaults to ./.runwarden relative to
-    // opencode's CWD, which is a different directory.
+    // writes all evidence and authority state into this fresh, run-scoped
+    // directory. This prevents stale approvals, locks, or trace rows from a
+    // previous demonstration from entering the current evidence set.
     // SAFETY: single-threaded setup before spawning proxy thread and server.
     unsafe {
         std::env::set_var("RUNWARDEN_STATE_DIR", &state_dir);
     }
 
-    spawn_llm_proxy_thread(upstream, trace_path.clone());
+    let proxy_client_token = generate_proxy_client_token()?;
+    // SAFETY: single-threaded setup before spawning the proxy or console.
+    unsafe {
+        std::env::set_var("RUNWARDEN_PROXY_CLIENT_TOKEN", proxy_client_token);
+    }
+    start_llm_proxy_thread(upstream, trace_path.clone())?;
 
     let (tx, _rx) = tokio::sync::broadcast::channel::<server::DemoEvent>(256);
     server::watch_jsonl_events(trace_path.clone(), "model_call", tx.clone());
@@ -418,7 +427,29 @@ fn run_demo_interactive(
     server::run_console_server("127.0.0.1", port, state, json_output)
 }
 
-fn spawn_llm_proxy_thread(upstream: Option<String>, trace_path: PathBuf) {
+fn generate_proxy_client_token() -> anyhow::Result<String> {
+    for _ in 0..8 {
+        let mut secret = [0_u8; 32];
+        getrandom::fill(&mut secret)?;
+        let token = secret
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        if token
+            .as_bytes()
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            >= 8
+        {
+            return Ok(token);
+        }
+    }
+    anyhow::bail!("operating-system randomness did not produce a suitable proxy capability")
+}
+
+fn start_llm_proxy_thread(upstream: Option<String>, trace_path: PathBuf) -> anyhow::Result<()> {
     // Note: proxy port 8787 is fixed to match opencode.runwarden-only.json
     // baseURL. If port 8787 is in use, add a --proxy-port flag.
     let cli = runwarden_llm_proxy::Cli {
@@ -426,14 +457,21 @@ fn spawn_llm_proxy_thread(upstream: Option<String>, trace_path: PathBuf) {
         port: 8787,
         upstream: upstream.unwrap_or_else(|| "https://api.opencode.ai/v1".to_string()),
         api_key_env: "RUNWARDEN_LLM_API_KEY".to_string(),
+        client_token_env: "RUNWARDEN_PROXY_CLIENT_TOKEN".to_string(),
         trace: trace_path.to_string_lossy().to_string(),
         max_body_bytes: 8 * 1024 * 1024,
     };
-    std::thread::spawn(move || {
-        if let Err(err) = runwarden_llm_proxy::serve(cli) {
-            eprintln!("llm proxy error: {err}");
-        }
-    });
+    // Reserve the actual listening socket before the reviewer service is
+    // announced. If 8787 is occupied, the whole demo fails closed here.
+    let listener = runwarden_llm_proxy::bind_listener(&cli)?;
+    std::thread::Builder::new()
+        .name("runwarden-llm-proxy".to_string())
+        .spawn(move || {
+            if let Err(err) = runwarden_llm_proxy::serve_with_listener(cli, listener) {
+                eprintln!("llm proxy error: {err}");
+            }
+        })?;
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -452,6 +490,7 @@ struct ProviderCallResult {
     obs_ref: Option<String>,
     arguments: Value,
     output: Value,
+    anomaly: Value,
     trace_event: Value,
 }
 
@@ -467,15 +506,42 @@ fn run_demo_scenario_real(root: &Path, scenario: &str, output: &Path) -> anyhow:
     let assessment = AssessmentManifest::from_toml_str(&manifest_body)?;
     let assessment = assessment_with_manifest_relative_roots(&manifest_path, assessment)?;
     let session = SessionManifest::from_assessment(scenario.to_string(), &assessment);
-    let inputs = read_demo_provider_calls(&scenario_path.join("expected/provider-calls.json"))?;
+    let expected_calls =
+        read_demo_provider_calls(&scenario_path.join("expected/provider-calls.json"))?;
+    let agent_steps = read_agent_script(&scenario_path.join("agent/script.json"))?;
+    let story_failures = validate_scenario_story(&scenario_path, &expected_calls, &agent_steps);
+    if !story_failures.is_empty() {
+        anyhow::bail!(
+            "scenario attack story is invalid: {}",
+            story_failures.join(", ")
+        );
+    }
+    let attack_input_path = agent_steps
+        .first()
+        .and_then(|step| step.arguments.get("input_path"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let attack_fixture = resolve_attack_fixture(&scenario_path, attack_input_path)?;
+    let attack_prompt = fs::read_to_string(&attack_fixture)?;
+    let attack_sha256 = hex_sha256(attack_prompt.as_bytes());
     let sandbox_root = tools::sandbox_root_from();
     let mut previous_hash = None;
+    let mut previous_obs_id: Option<String> = None;
+    let mut anomaly_monitor = AnomalyMonitor::new(BehaviorProfile::default_benign());
     let mut trace_events = Vec::new();
     let mut results = Vec::new();
 
-    for input in &inputs {
+    for (input, expected) in agent_steps.iter().zip(&expected_calls) {
         let mut result =
             execute_provider_call_real(&session, input, &scenario_path, &sandbox_root)?;
+        let argument_bytes = serde_json::to_vec(&input.arguments)?.len();
+        let egress_host = demo_egress_host(&input.arguments);
+        let anomaly_report =
+            anomaly_monitor.preview(&input.provider, argument_bytes, egress_host.as_deref());
+        result.anomaly = serde_json::to_value(&anomaly_report)?;
+        if result.decision == "allowed" && result.execution_status != "failed" {
+            anomaly_monitor.analyze(&input.provider, argument_bytes, egress_host.as_deref());
+        }
         let event_type = match result.decision.as_str() {
             "allowed" if result.execution_status == "simulated" => "provider_simulated_replay",
             "allowed" => "provider_completed",
@@ -483,7 +549,7 @@ fn run_demo_scenario_real(root: &Path, scenario: &str, output: &Path) -> anyhow:
             "requires_review" => "provider_approval_pending",
             _ => "provider_failed",
         };
-        let obs_id = input.obs_ref.clone().unwrap_or_else(|| {
+        let obs_id = expected.obs_ref.clone().unwrap_or_else(|| {
             result
                 .obs_ref
                 .clone()
@@ -496,6 +562,10 @@ fn run_demo_scenario_real(root: &Path, scenario: &str, output: &Path) -> anyhow:
             Some(result.provider.clone()),
             json!({
                 "scenario": scenario,
+                "attack_id": scenario,
+                "source_sha256": &attack_sha256,
+                "parent_obs_id": &previous_obs_id,
+                "actor_id": &session.actor_id,
                 "provider": &result.provider,
                 "action": &result.action,
                 "decision": &result.decision,
@@ -503,18 +573,21 @@ fn run_demo_scenario_real(root: &Path, scenario: &str, output: &Path) -> anyhow:
                 "reason": &result.reason,
                 "error_kind": &result.error_kind,
                 "arguments": &result.arguments,
+                "anomaly": &result.anomaly,
                 "side_effect_executed": result.side_effect_executed,
                 "simulated": result.execution_status == "simulated"
             }),
             previous_hash,
         );
         previous_hash = Some(trace_event.event_hash.clone());
+        previous_obs_id = Some(trace_event.obs_id.clone());
         result.trace_event = serde_json::to_value(&trace_event)?;
         trace_events.push(trace_event);
         results.push(result);
     }
 
     let expected_denials = read_json_value(&scenario_path.join("expected/denials.json"))?;
+    validate_provider_results(&results, &expected_calls)?;
     validate_denials(&results, &expected_denials)?;
     let report = read_report(&scenario_path.join("expected/report.json"))?;
     let baseline = read_json_value(&scenario_path.join("expected/eval-baseline.json"))?;
@@ -529,14 +602,115 @@ fn run_demo_scenario_real(root: &Path, scenario: &str, output: &Path) -> anyhow:
         trace_events.iter().map(|event| event.obs_id.clone()),
         EvalThresholds::strict(),
     );
+    // Score one complete attack story, rather than inflating the sample count
+    // by treating every tool step as a separate attack. The expected outcome
+    // is derived from the oracle; the actual outcome is independently derived
+    // from the calls that were executed above.
+    let expected_attack_decision = aggregate_expected_attack_story(&expected_calls)?;
+    let actual_attack_decision = aggregate_actual_attack_story(&results)?;
+    let attack_side_effect_executed = results
+        .iter()
+        .skip(1)
+        .any(|result| result.side_effect_executed);
+
+    // Execute a distinct benign fixture through the same kernel and
+    // runwarden.input.inspect provider. The expected label is the independent
+    // semantic definition of this control (benign input must be allowed),
+    // while the actual decision and risk output come from this invocation.
+    let benign_input_path = "benign/request.md";
+    let benign_fixture = scenario_path.join(benign_input_path);
+    let benign_prompt = fs::read_to_string(&benign_fixture)?;
+    let benign_oracle = expected_calls
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("attack story has no input-inspection oracle"))?;
+    anyhow::ensure!(
+        benign_oracle.provider == "runwarden.input.inspect",
+        "benign control cannot reuse the inspection path: first attack step is not input.inspect"
+    );
+    let benign_step = DemoAgentStep {
+        provider: benign_oracle.provider.clone(),
+        action: benign_oracle.action.clone(),
+        arguments: json!({"input_path": benign_input_path}),
+    };
+    let benign_result =
+        execute_provider_call_real(&session, &benign_step, &scenario_path, &sandbox_root)?;
+    let expected_benign_decision = SecurityDecision::Allowed;
+    let actual_benign_decision = parse_security_decision(&benign_result.decision)?;
+    let benign_risk_count = benign_result
+        .output
+        .get("risks")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    anyhow::ensure!(
+        benign_risk_count == 0,
+        "benign control produced {benign_risk_count} inspection risk finding(s)"
+    );
+
+    let security_cases = vec![
+        SecurityEvalCase::new(
+            format!("{scenario}-attack-story"),
+            true,
+            expected_attack_decision,
+            actual_attack_decision,
+            attack_side_effect_executed,
+        ),
+        SecurityEvalCase::new(
+            format!("{scenario}-benign-control"),
+            false,
+            expected_benign_decision,
+            actual_benign_decision,
+            benign_result.side_effect_executed,
+        ),
+    ];
+    let security_metrics = evaluate_security_cases(&security_cases);
+    anyhow::ensure!(
+        security_metrics.passed,
+        "scenario security metrics failed: {}",
+        security_metrics.failures.join(", ")
+    );
     let provider_calls_value = serde_json::to_value(&results)?;
     let webui = json!({
         "scenario": scenario,
+        "story": {
+            "attack_id": scenario,
+            "input_path": attack_input_path,
+            "input_sha256": attack_sha256,
+            "attack_prompt": attack_prompt,
+            "agent_script": agent_steps,
+            "driver": "deterministic_agent_script",
+            "oracle": "expected/provider-calls.json"
+        },
         "trace": trace_events,
         "provider_calls": provider_calls_value,
         "denials": expected_denials,
         "report": report,
         "metrics": metrics.metrics,
+        "security_metrics": security_metrics,
+        "security_evaluation": {
+            "method": "one_attack_story_plus_independent_benign_control",
+            "cases": security_cases,
+            "attack_story": {
+                "fixture": attack_input_path,
+                "oracle_source": "expected/provider-calls.json (steps after input inspection)",
+                "actual_source": "executed agent/script.json (steps after input inspection)",
+                "aggregation": "allowed if any attack step was allowed or executed a side effect; otherwise denied if any step was denied; otherwise requires_review",
+                "oracle_step_decisions": expected_calls.iter().skip(1).map(|call| call.decision.as_str()).collect::<Vec<_>>(),
+                "actual_step_decisions": results.iter().skip(1).map(|result| result.decision.as_str()).collect::<Vec<_>>()
+            },
+            "benign_control": {
+                "fixture": benign_input_path,
+                "fixture_sha256": hex_sha256(benign_prompt.as_bytes()),
+                "expected_decision": "allowed",
+                "expected_decision_source": "independent benign-control semantic label",
+                "actual_execution": "KernelEnforcer + runwarden.input.inspect over benign/request.md",
+                "provider": &benign_result.provider,
+                "action": &benign_result.action,
+                "actual_decision": &benign_result.decision,
+                "execution_status": &benign_result.execution_status,
+                "inspection_risk_count": benign_risk_count,
+                "side_effect_executed": benign_result.side_effect_executed
+            }
+        },
         "trace_verification": trace_verification,
         "lint": lint,
         "expected": baseline,
@@ -550,7 +724,13 @@ fn run_demo_scenario_real(root: &Path, scenario: &str, output: &Path) -> anyhow:
     )?;
     write_json_file(&output_path.join("denials.json"), &webui["denials"])?;
     write_json_file(&output_path.join("report.json"), &webui["report"])?;
-    write_json_file(&output_path.join("metrics.json"), &webui["metrics"])?;
+    write_json_file(
+        &output_path.join("metrics.json"),
+        &json!({
+            "assurance": &webui["metrics"],
+            "security": &webui["security_metrics"]
+        }),
+    )?;
     write_json_file(&output_path.join("webui.json"), &webui)?;
 
     Ok(json!({
@@ -563,9 +743,61 @@ fn run_demo_scenario_real(root: &Path, scenario: &str, output: &Path) -> anyhow:
     }))
 }
 
+fn parse_security_decision(decision: &str) -> anyhow::Result<SecurityDecision> {
+    match decision {
+        "allowed" => Ok(SecurityDecision::Allowed),
+        "denied" => Ok(SecurityDecision::Denied),
+        "requires_review" => Ok(SecurityDecision::RequiresReview),
+        _ => anyhow::bail!("unsupported security decision: {decision}"),
+    }
+}
+
+fn aggregate_expected_attack_story(calls: &[DemoProviderCall]) -> anyhow::Result<SecurityDecision> {
+    aggregate_attack_story_decision(
+        calls
+            .iter()
+            .skip(1)
+            .map(|call| (call.decision.as_str(), call.side_effect_executed)),
+    )
+}
+
+fn aggregate_actual_attack_story(
+    results: &[ProviderCallResult],
+) -> anyhow::Result<SecurityDecision> {
+    aggregate_attack_story_decision(
+        results
+            .iter()
+            .skip(1)
+            .map(|result| (result.decision.as_str(), result.side_effect_executed)),
+    )
+}
+
+fn aggregate_attack_story_decision<'a>(
+    decisions: impl Iterator<Item = (&'a str, bool)>,
+) -> anyhow::Result<SecurityDecision> {
+    let decisions = decisions.collect::<Vec<_>>();
+    anyhow::ensure!(
+        !decisions.is_empty(),
+        "attack story must contain at least one post-inspection tool intent"
+    );
+    for (decision, _) in &decisions {
+        parse_security_decision(decision)?;
+    }
+    if decisions
+        .iter()
+        .any(|(decision, side_effect)| *decision == "allowed" || *side_effect)
+    {
+        return Ok(SecurityDecision::Allowed);
+    }
+    if decisions.iter().any(|(decision, _)| *decision == "denied") {
+        return Ok(SecurityDecision::Denied);
+    }
+    Ok(SecurityDecision::RequiresReview)
+}
+
 fn execute_provider_call_real(
     session: &SessionManifest,
-    input: &DemoProviderCall,
+    input: &DemoAgentStep,
     scenario_path: &Path,
     sandbox_root: &Path,
 ) -> anyhow::Result<ProviderCallResult> {
@@ -629,6 +861,7 @@ fn execute_provider_call_real(
                 obs_ref,
                 arguments: input.arguments.clone(),
                 output: executed.get("output").cloned().unwrap_or(Value::Null),
+                anomaly: Value::Null,
                 trace_event: Value::Null,
             })
         }
@@ -636,7 +869,7 @@ fn execute_provider_call_real(
 }
 
 fn blocked_provider_result(
-    input: &DemoProviderCall,
+    input: &DemoAgentStep,
     outcome: &ProviderOutcome,
     decision: &str,
     obs_ref: Option<String>,
@@ -664,6 +897,7 @@ fn blocked_provider_result(
         obs_ref,
         arguments: input.arguments.clone(),
         output: Value::Null,
+        anomaly: Value::Null,
         trace_event: Value::Null,
     }
 }
@@ -693,10 +927,59 @@ fn validate_denials(results: &[ProviderCallResult], expected: &Value) -> anyhow:
     Ok(())
 }
 
+fn validate_provider_results(
+    results: &[ProviderCallResult],
+    expected: &[DemoProviderCall],
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        results.len() == expected.len(),
+        "agent result count {} does not match oracle count {}",
+        results.len(),
+        expected.len()
+    );
+    for (index, (actual, oracle)) in results.iter().zip(expected).enumerate() {
+        anyhow::ensure!(
+            actual.provider == oracle.provider
+                && actual.action == oracle.action
+                && actual.decision == oracle.decision
+                && actual.execution_status == oracle.execution_status
+                && actual.side_effect_executed == oracle.side_effect_executed
+                && (oracle.error_kind.is_none() || actual.error_kind == oracle.error_kind),
+            "agent step {} diverged from oracle: actual={}/{}/{}/{:?}, expected={}/{}/{}/{:?}",
+            index + 1,
+            actual.provider,
+            actual.decision,
+            actual.execution_status,
+            actual.error_kind,
+            oracle.provider,
+            oracle.decision,
+            oracle.execution_status,
+            oracle.error_kind
+        );
+    }
+    Ok(())
+}
+
 fn provider_is_external(provider: &str) -> bool {
     full_provider_registry()
         .get(provider)
         .is_some_and(|record| record.class == ProviderClass::External)
+}
+
+fn demo_egress_host(arguments: &Value) -> Option<String> {
+    let url = arguments.get("url").and_then(Value::as_str)?;
+    let authority = url.split_once("://")?.1.split('/').next()?;
+    let host = authority
+        .rsplit_once('@')
+        .map(|(_, host)| host)
+        .unwrap_or(authority)
+        .trim_start_matches('[')
+        .split([']', ':'])
+        .next()?
+        .trim()
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    (!host.is_empty()).then_some(host)
 }
 
 fn call_first_party_provider(
@@ -849,6 +1132,17 @@ struct DemoProviderCall {
     arguments: Value,
 }
 
+/// The deterministic agent driver is deliberately separate from the expected
+/// outcome oracle. It contains only the intent that is executed.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct DemoAgentStep {
+    provider: String,
+    action: String,
+    #[serde(default)]
+    arguments: Value,
+}
+
 fn evaluate_scenario_corpora(root: &Path, suite: &Path) -> anyhow::Result<Value> {
     let suite_path = root.join(suite);
     let mut cases = Vec::new();
@@ -886,6 +1180,14 @@ fn evaluate_scenario_case(scenario: &str, scenario_path: &Path) -> anyhow::Resul
 
     let provider_calls =
         read_demo_provider_calls(&scenario_path.join("expected/provider-calls.json"))?;
+    match read_agent_script(&scenario_path.join("agent/script.json")) {
+        Ok(agent_steps) => failures.extend(validate_scenario_story(
+            scenario_path,
+            &provider_calls,
+            &agent_steps,
+        )),
+        Err(_) => failures.push("agent_script_is_unreadable".to_string()),
+    }
     let denials = read_json_array(&scenario_path.join("expected/denials.json"))?;
     let obs_refs = read_obs_refs(&scenario_path.join("expected/obs-refs.json"))?;
     let report = read_report(&scenario_path.join("expected/report.json"))?;
@@ -1186,6 +1488,105 @@ fn read_demo_provider_calls(path: &Path) -> anyhow::Result<Vec<DemoProviderCall>
         .map_err(anyhow::Error::from)
 }
 
+fn read_agent_script(path: &Path) -> anyhow::Result<Vec<DemoAgentStep>> {
+    let value = read_json_value(path)?;
+    let steps = value
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("{} must contain a JSON array", path.display()))?;
+    steps
+        .iter()
+        .cloned()
+        .map(serde_json::from_value)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(anyhow::Error::from)
+}
+
+/// Validate that a deterministic contest replay is anchored to the adversarial
+/// input and that the declared agent plan matches the calls we actually run.
+/// This prevents a benign fixture from being presented as attack evidence.
+fn validate_scenario_story(
+    path: &Path,
+    calls: &[DemoProviderCall],
+    script: &[DemoAgentStep],
+) -> Vec<String> {
+    let mut failures = Vec::new();
+    let Some(inspect) = calls.first() else {
+        return vec!["attack_story_has_no_provider_calls".to_string()];
+    };
+    if inspect.provider != "runwarden.input.inspect" {
+        failures.push("attack_story_must_start_with_input_inspection".to_string());
+    }
+    let attack_input = inspect
+        .arguments
+        .get("input_path")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if let Err(error) = resolve_attack_fixture(path, attack_input) {
+        failures.push(format!(
+            "input_inspection_is_not_bound_to_attack_fixture: {error}"
+        ));
+    }
+
+    if script.len() != calls.len() {
+        failures.push("agent_script_call_count_mismatch".to_string());
+    }
+    for (index, (step, call)) in script.iter().zip(calls).enumerate() {
+        if step.provider != call.provider
+            || step.action != call.action
+            || step.arguments != call.arguments
+        {
+            failures.push(format!("agent_script_step_{}_mismatch", index + 1));
+        }
+    }
+    failures
+}
+
+/// Resolve a scenario attack fixture without allowing absolute paths,
+/// traversal components, or symlinks that escape the scenario's attacks/
+/// directory. Returning the canonical path also makes the subsequent read use
+/// the same confinement decision that validation made.
+fn resolve_attack_fixture(scenario_path: &Path, input_path: &str) -> anyhow::Result<PathBuf> {
+    let relative = Path::new(input_path);
+    anyhow::ensure!(!input_path.trim().is_empty(), "attack input path is empty");
+    anyhow::ensure!(
+        !relative.is_absolute(),
+        "attack input path must be relative"
+    );
+    anyhow::ensure!(
+        relative
+            .components()
+            .all(|component| matches!(component, Component::Normal(_))),
+        "attack input path must not contain traversal or platform-root components"
+    );
+    anyhow::ensure!(
+        relative.starts_with("attacks")
+            && relative.extension().and_then(|ext| ext.to_str()) == Some("md"),
+        "attack input path must name a Markdown file under attacks/"
+    );
+
+    let scenario_root = scenario_path
+        .canonicalize()
+        .map_err(|error| anyhow::anyhow!("canonicalize scenario directory: {error}"))?;
+    let attacks_root = scenario_path
+        .join("attacks")
+        .canonicalize()
+        .map_err(|error| anyhow::anyhow!("canonicalize attacks directory: {error}"))?;
+    anyhow::ensure!(
+        attacks_root.starts_with(&scenario_root),
+        "scenario attacks/ directory resolves outside the scenario"
+    );
+    let candidate = scenario_path
+        .join(relative)
+        .canonicalize()
+        .map_err(|error| anyhow::anyhow!("canonicalize attack input fixture: {error}"))?;
+    anyhow::ensure!(candidate.is_file(), "attack input fixture is not a file");
+    anyhow::ensure!(
+        candidate.starts_with(&attacks_root),
+        "attack input fixture resolves outside scenario attacks/"
+    );
+    Ok(candidate)
+}
+
 fn read_obs_refs(path: &Path) -> anyhow::Result<Vec<String>> {
     read_json_array(path)?
         .into_iter()
@@ -1370,4 +1771,103 @@ fn html_escape(text: &str) -> String {
 
 fn markdown_cell(text: &str) -> String {
     text.replace('|', "\\|").replace('\n', " ")
+}
+
+#[cfg(test)]
+mod main_tests {
+    use super::*;
+
+    #[test]
+    fn proxy_listener_reservation_fails_when_port_is_already_owned() {
+        let occupied = match std::net::TcpListener::bind(("127.0.0.1", 0)) {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                // Some hermetic test sandboxes forbid loopback sockets. The
+                // same test exercises the real bind collision in normal CI.
+                return;
+            }
+            Err(error) => panic!("occupy port: {error}"),
+        };
+        let port = occupied.local_addr().expect("occupied address").port();
+        let token_env = "RUNWARDEN_PROXY_CLIENT_TOKEN_CLI_BIND_TEST";
+        // SAFETY: this test uses a test-specific environment variable.
+        unsafe {
+            std::env::set_var(token_env, "0123456789abcdef0123456789abcdef");
+        }
+        let cli = runwarden_llm_proxy::Cli {
+            bind: "127.0.0.1".to_string(),
+            port,
+            upstream: "http://127.0.0.1:1/v1".to_string(),
+            api_key_env: "RUNWARDEN_LLM_API_KEY_CLI_BIND_TEST".to_string(),
+            client_token_env: token_env.to_string(),
+            trace: "/tmp/runwarden-cli-bind-test.jsonl".to_string(),
+            max_body_bytes: 1024,
+        };
+        let error = runwarden_llm_proxy::bind_listener(&cli)
+            .expect_err("occupied proxy port must fail before the console starts");
+        assert!(error.to_string().contains("bind Runwarden LLM proxy"));
+        unsafe {
+            std::env::remove_var(token_env);
+        }
+    }
+
+    #[test]
+    fn generated_proxy_client_token_meets_proxy_entropy_contract() {
+        let token = generate_proxy_client_token().expect("proxy token");
+        assert_eq!(token.len(), 64);
+        assert!(token.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert!(
+            token
+                .bytes()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                >= 8
+        );
+    }
+
+    #[test]
+    fn demo_agent_step_rejects_oracle_fields() {
+        let error = serde_json::from_value::<DemoAgentStep>(json!({
+            "provider": "runwarden.input.inspect",
+            "action": "inspect",
+            "arguments": {"input_path": "attacks/prompt-injection.md"},
+            "decision": "allowed"
+        }))
+        .expect_err("driver must reject oracle-only fields");
+
+        assert!(error.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn attack_fixture_rejects_absolute_and_parent_paths() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let attacks = temp.path().join("attacks");
+        fs::create_dir_all(&attacks).expect("attacks dir");
+        fs::write(attacks.join("attack.md"), "attack").expect("attack fixture");
+
+        assert!(resolve_attack_fixture(temp.path(), "/etc/passwd").is_err());
+        assert!(resolve_attack_fixture(temp.path(), "attacks/../outside.md").is_err());
+        assert!(resolve_attack_fixture(temp.path(), "../attacks/attack.md").is_err());
+        assert_eq!(
+            resolve_attack_fixture(temp.path(), "attacks/attack.md").expect("valid fixture"),
+            attacks.join("attack.md").canonicalize().expect("canonical")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn attack_fixture_rejects_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let attacks = temp.path().join("scenario/attacks");
+        fs::create_dir_all(&attacks).expect("attacks dir");
+        let outside = temp.path().join("outside.md");
+        fs::write(&outside, "outside").expect("outside fixture");
+        symlink(&outside, attacks.join("escape.md")).expect("escape symlink");
+
+        let error = resolve_attack_fixture(&temp.path().join("scenario"), "attacks/escape.md")
+            .expect_err("symlink escape must fail");
+        assert!(error.to_string().contains("outside scenario attacks"));
+    }
 }

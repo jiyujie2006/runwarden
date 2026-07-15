@@ -1,8 +1,10 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
   "properties": {
     "claims": {
       "items": {
+        "additionalProperties": false,
         "properties": {
           "id": {
             "type": "string"
@@ -16,17 +18,43 @@
             "type": "array"
           },
           "support": {
+            "additionalProperties": false,
             "properties": {
               "decision": {
+                "enum": [
+                  "allowed",
+                  "denied",
+                  "requires_review"
+                ],
                 "type": "string"
               },
               "event_type": {
+                "enum": [
+                  "provider_completed",
+                  "provider_policy_evaluated",
+                  "provider_denied",
+                  "provider_approval_pending",
+                  "provider_requires_review",
+                  "provider_simulated_replay",
+                  "provider_failed"
+                ],
                 "type": "string"
               },
               "execution_status": {
+                "enum": [
+                  "not_executed",
+                  "running",
+                  "completed",
+                  "failed",
+                  "incomplete",
+                  "simulated"
+                ],
                 "type": "string"
               },
               "provider": {
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
                 "type": "string"
               },
               "side_effect_executed": {
@@ -36,6 +64,13 @@
                 "type": "boolean"
               }
             },
+            "required": [
+              "provider",
+              "event_type",
+              "decision",
+              "execution_status",
+              "side_effect_executed"
+            ],
             "type": "object"
           },
           "text": {
@@ -45,10 +80,12 @@
         "required": [
           "id",
           "text",
-          "obs_refs"
+          "obs_refs",
+          "support"
         ],
         "type": "object"
       },
+      "minItems": 1,
       "type": "array"
     }
   },

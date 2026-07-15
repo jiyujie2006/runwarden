@@ -8,7 +8,7 @@
     "obs_ref": "obs_prompt_file_inspect",
     "reason": "input inspection completed",
     "arguments": {
-      "input_path": "benign/request.md"
+      "input_path": "attacks/prompt-injection.md"
     }
   },
   {
@@ -21,7 +21,7 @@
     "reason": "secret-like filesystem read requires reviewer approval",
     "arguments": {
       "root": "workspace",
-      "path": "secrets/customer.env"
+      "path": "secrets/api-token.txt"
     }
   },
   {

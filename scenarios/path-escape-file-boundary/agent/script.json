@@ -1,4 +1,12 @@
 [
-  {"provider": "runwarden.input.inspect", "action": "inspect"},
-  {"provider": "external.mcp.filesystem.read_file", "action": "read_file"}
+  {
+    "provider": "runwarden.input.inspect",
+    "action": "inspect",
+    "arguments": {"input_path": "attacks/path-escape.md"}
+  },
+  {
+    "provider": "external.mcp.filesystem.read_file",
+    "action": "read_file",
+    "arguments": {"root": "workspace", "path": "../../../../etc/passwd"}
+  }
 ]

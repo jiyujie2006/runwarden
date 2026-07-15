@@ -51,7 +51,18 @@ fn agent_only_assessment_flow_mediates_report_render_before_execution() {
     let obs_ref = inspection["obs_ref"].as_str().expect("obs_ref");
     let report = json!({
         "claims": [
-            {"id": "finding-1", "text": "Input inspection completed", "obs_refs": [obs_ref]}
+            {
+                "id": "finding-1",
+                "text": "Input inspection completed",
+                "obs_refs": [obs_ref],
+                "support": {
+                    "provider": "runwarden.input.inspect",
+                    "event_type": "provider_completed",
+                    "decision": "allowed",
+                    "execution_status": "completed",
+                    "side_effect_executed": false
+                }
+            }
         ]
     });
 
@@ -84,9 +95,8 @@ fn opencode_example_config_and_transcript_expose_only_runwarden_tools() {
     let root = workspace_root();
     let config_path = root.join("examples/agent-configs/opencode.runwarden-only.json");
     let transcript_path = root.join("examples/agent-configs/opencode.tools-list-transcript.json");
-    let config: Value =
-        serde_json::from_str(&fs::read_to_string(config_path).expect("opencode config"))
-            .expect("config JSON");
+    let config_text = fs::read_to_string(config_path).expect("opencode config");
+    let config: Value = serde_json::from_str(&config_text).expect("config JSON");
     let transcript: Value =
         serde_json::from_str(&fs::read_to_string(transcript_path).expect("transcript"))
             .expect("transcript JSON");
@@ -103,9 +113,29 @@ fn opencode_example_config_and_transcript_expose_only_runwarden_tools() {
         config["mcp"]["runwarden"]["command"],
         json!(["runwarden-mcp"])
     );
-    for value in config["tools"].as_object().expect("tools object").values() {
-        assert_eq!(value, false, "OpenCode built-in tools must be disabled");
-    }
+    assert_eq!(config["enabled_providers"], json!(["runwarden-proxy"]));
+    assert_eq!(config["model"], "runwarden-proxy/big-pickle");
+    assert_eq!(
+        config["provider"]["runwarden-proxy"]["options"]["baseURL"],
+        "http://127.0.0.1:8787/v1"
+    );
+    assert!(
+        config["provider"]["runwarden-proxy"]["models"]
+            .get("big-pickle")
+            .is_some()
+    );
+    assert_eq!(
+        config["tools"],
+        json!({"*": false, "runwarden_*": true}),
+        "OpenCode must default-deny current/future tools and allow only its Runwarden MCP prefix"
+    );
+    assert!(
+        config_text.find(r#""*""#).expect("default deny pattern")
+            < config_text
+                .find(r#""runwarden_*""#)
+                .expect("specific Runwarden allow"),
+        "OpenCode uses last-match precedence, so the specific allow must follow the default deny"
+    );
     for forbidden in ["env", "environment", "cwd", "url", "transport", "args"] {
         assert!(
             config["mcp"]["runwarden"].get(forbidden).is_none(),
@@ -176,12 +206,36 @@ fn opencode_denied_provider_call_transcript_replays_current_flat_schema() {
 }
 
 #[test]
-fn runwarden_only_agent_config_validator_accepts_claude_empty_args() {
+fn runwarden_only_agent_config_validator_rejects_claude_mcp_only_fragment() {
     let root = workspace_root();
-    let config_path = root.join("examples/agent-configs/claude.runwarden-only.json");
+    let config_path = root.join("examples/agent-configs/claude.mcp-only-fragment.json");
     let config: Value =
         serde_json::from_str(&fs::read_to_string(config_path).expect("claude config"))
             .expect("config JSON");
+
+    let validation = validate_runwarden_only_agent_config(&config);
+
+    assert!(!validation.ok);
+    assert!(
+        validation
+            .errors
+            .iter()
+            .any(|error| error.contains("cannot prove that built-in Bash/Read/Edit")),
+        "unexpected errors: {:?}",
+        validation.errors
+    );
+    assert!(!validation.side_effect_executed);
+}
+
+#[test]
+fn runwarden_only_agent_config_validator_accepts_opencode_empty_args() {
+    let root = workspace_root();
+    let mut config: Value = serde_json::from_str(
+        &fs::read_to_string(root.join("examples/agent-configs/opencode.runwarden-only.json"))
+            .expect("shipped opencode config"),
+    )
+    .expect("shipped config JSON");
+    config["mcp"]["runwarden"]["args"] = json!([]);
 
     let validation = validate_runwarden_only_agent_config(&config);
 
@@ -191,23 +245,85 @@ fn runwarden_only_agent_config_validator_accepts_claude_empty_args() {
 }
 
 #[test]
-fn runwarden_only_agent_config_validator_accepts_opencode_empty_args() {
-    let config = json!({
-        "mcp": {
-            "runwarden": {
-                "type": "local",
-                "command": ["runwarden-mcp"],
-                "args": []
-            }
-        },
-        "tools": {"bash": false}
+fn runwarden_only_agent_config_validator_rejects_empty_and_partial_opencode_deny_maps() {
+    for tools in [
+        json!({}),
+        json!({"bash": false}),
+        json!({"*": false}),
+        json!({"*": false, "runwarden_*": true, "plugin_*": true}),
+    ] {
+        let config = json!({
+            "mcp": {
+                "runwarden": {
+                    "type": "local",
+                    "command": ["runwarden-mcp"]
+                }
+            },
+            "tools": tools
+        });
+
+        let validation = validate_runwarden_only_agent_config(&config);
+
+        assert!(!validation.ok, "partial OpenCode deny map was accepted");
+        assert!(
+            validation
+                .errors
+                .iter()
+                .any(|error| error.contains("must be exactly")),
+            "unexpected errors: {:?}",
+            validation.errors
+        );
+        assert!(!validation.side_effect_executed);
+    }
+}
+
+#[test]
+fn runwarden_only_agent_config_validator_rejects_llm_proxy_bypasses() {
+    let root = workspace_root();
+    let shipped: Value = serde_json::from_str(
+        &fs::read_to_string(root.join("examples/agent-configs/opencode.runwarden-only.json"))
+            .expect("shipped opencode config"),
+    )
+    .expect("shipped config JSON");
+    let mut cases = Vec::new();
+
+    let mut missing_allowlist = shipped.clone();
+    missing_allowlist
+        .as_object_mut()
+        .expect("config object")
+        .remove("enabled_providers");
+    cases.push(missing_allowlist);
+
+    let mut extra_provider = shipped.clone();
+    extra_provider["provider"]["direct-openai"] = json!({
+        "npm": "@ai-sdk/openai-compatible",
+        "options": {"baseURL": "https://api.openai.com/v1"},
+        "models": {"direct": {"name": "bypass"}}
     });
+    cases.push(extra_provider);
 
-    let validation = validate_runwarden_only_agent_config(&config);
+    let mut remote_base_url = shipped.clone();
+    remote_base_url["provider"]["runwarden-proxy"]["options"]["baseURL"] =
+        json!("http://127.0.0.1:9999/v1");
+    cases.push(remote_base_url);
 
-    assert!(validation.ok, "{:?}", validation.errors);
-    assert!(validation.errors.is_empty());
-    assert!(!validation.side_effect_executed);
+    let mut direct_model = shipped.clone();
+    direct_model["model"] = json!("openai/gpt-bypass");
+    cases.push(direct_model);
+
+    let mut undeclared_model = shipped.clone();
+    undeclared_model["model"] = json!("runwarden-proxy/not-declared");
+    cases.push(undeclared_model);
+
+    let mut disabled_proxy = shipped.clone();
+    disabled_proxy["disabled_providers"] = json!(["runwarden-proxy"]);
+    cases.push(disabled_proxy);
+
+    for config in cases {
+        let validation = validate_runwarden_only_agent_config(&config);
+        assert!(!validation.ok, "proxy bypass was accepted: {config}");
+        assert!(!validation.side_effect_executed);
+    }
 }
 
 #[test]

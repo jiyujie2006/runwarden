@@ -2226,6 +2226,7 @@ pub mod catalog {
         "external.memory.write",
         "external.knowledge.read",
         "external.knowledge.write",
+        "external.code.execute",
     ];
 
     pub fn default_first_party_providers() -> Vec<KernelProvider> {
@@ -2397,6 +2398,17 @@ pub mod catalog {
                 declared_permissions: vec!["knowledge_write"],
                 allowed_origins: vec![],
             },
+            ExternalProviderSpec {
+                id: "external.code.execute",
+                kind: ProviderKind::Skill,
+                risk: ProviderRisk::High,
+                side_effects: vec![SideEffectKind::None],
+                transport: "in_process",
+                downstream_identity: "bounded-expression-vm",
+                tool_identity: "execute",
+                declared_permissions: vec!["code_execute"],
+                allowed_origins: vec![],
+            },
         ]
     }
 
@@ -2527,6 +2539,11 @@ pub mod tools {
 
     const MBOX_NAME: &str = "mailbox.mbox";
     const STORE_NAME: &str = "store.json";
+    const CODE_LANGUAGE: &str = "runwarden-expression-v1";
+    const MAX_CODE_BYTES: usize = 16 * 1024;
+    const MAX_CODE_NODES: usize = 256;
+    const MAX_CODE_DEPTH: usize = 32;
+    const MAX_CODE_OUTPUT_BYTES: usize = 64 * 1024;
 
     /// Resolve the sandbox root from server-owned configuration: honour the
     /// trusted `RUNWARDEN_SANDBOX_ROOT` env var, else a local
@@ -2635,6 +2652,7 @@ pub mod tools {
             }
             "external.api.request" => execute_api_request(provider, action, arguments),
             "external.mcp.browser.open_page" => execute_browser_open(provider, action, arguments),
+            "external.code.execute" => execute_bounded_code(provider, action, arguments),
             _ => simulated(
                 provider,
                 action,
@@ -2799,6 +2817,259 @@ pub mod tools {
         )
     }
 
+    fn execute_bounded_code(provider: &str, action: &str, arguments: &Value) -> Value {
+        let language = arguments.get("language").and_then(Value::as_str);
+        if language != Some(CODE_LANGUAGE) {
+            return failed_kind(
+                provider,
+                action,
+                "argument_schema_invalid",
+                "code execution requires language runwarden-expression-v1",
+            );
+        }
+        let Some(program) = arguments.get("program") else {
+            return failed_kind(
+                provider,
+                action,
+                "argument_schema_invalid",
+                "code execution requires a program AST",
+            );
+        };
+        let Ok(program_bytes) = serde_json::to_vec(program) else {
+            return failed_kind(
+                provider,
+                action,
+                "argument_schema_invalid",
+                "program AST cannot be encoded",
+            );
+        };
+        if program_bytes.len() > MAX_CODE_BYTES {
+            return failed_kind(
+                provider,
+                action,
+                "budget_exceeded",
+                "program AST exceeds the 16 KiB execution budget",
+            );
+        }
+        let mut budget = CodeBudget {
+            remaining_nodes: MAX_CODE_NODES,
+        };
+        let output = match evaluate_code_node(program, 0, &mut budget) {
+            Ok(output) => output,
+            Err(error) => {
+                return failed_kind(provider, action, error.kind, &error.reason);
+            }
+        };
+        if serde_json::to_vec(&output)
+            .map(|bytes| bytes.len() > MAX_CODE_OUTPUT_BYTES)
+            .unwrap_or(true)
+        {
+            return failed_kind(
+                provider,
+                action,
+                "budget_exceeded",
+                "code output exceeds the 64 KiB execution budget",
+            );
+        }
+        json!({
+            "provider": provider,
+            "action": action,
+            "execution_status": "completed",
+            "execution_mode": "bounded_expression_vm",
+            "language": CODE_LANGUAGE,
+            "simulated": false,
+            "code_executed": true,
+            "side_effect_executed": false,
+            "side_effect_kind": "none",
+            "resource_usage": {
+                "program_bytes": program_bytes.len(),
+                "nodes_executed": MAX_CODE_NODES - budget.remaining_nodes,
+                "max_depth": MAX_CODE_DEPTH,
+                "network": "denied_by_construction",
+                "filesystem": "denied_by_construction",
+                "process_spawn": "denied_by_construction"
+            },
+            "output": output
+        })
+    }
+
+    struct CodeBudget {
+        remaining_nodes: usize,
+    }
+
+    struct CodeError {
+        kind: &'static str,
+        reason: String,
+    }
+
+    fn evaluate_code_node(
+        node: &Value,
+        depth: usize,
+        budget: &mut CodeBudget,
+    ) -> Result<Value, CodeError> {
+        if depth > MAX_CODE_DEPTH {
+            return Err(code_error(
+                "budget_exceeded",
+                "program exceeds maximum AST depth",
+            ));
+        }
+        budget.remaining_nodes = budget
+            .remaining_nodes
+            .checked_sub(1)
+            .ok_or_else(|| code_error("budget_exceeded", "program exceeds node budget"))?;
+        let object = node.as_object().ok_or_else(|| {
+            code_error(
+                "argument_schema_invalid",
+                "every program node must be an object",
+            )
+        })?;
+        let op = object.get("op").and_then(Value::as_str).ok_or_else(|| {
+            code_error(
+                "argument_schema_invalid",
+                "every program node requires a string op",
+            )
+        })?;
+        match op {
+            "literal" => {
+                ensure_code_fields(object, &["op", "value"])?;
+                let value = object.get("value").cloned().unwrap_or(Value::Null);
+                if value.is_array() || value.is_object() {
+                    return Err(code_error(
+                        "argument_schema_invalid",
+                        "literal values must be scalar",
+                    ));
+                }
+                Ok(value)
+            }
+            "add" | "subtract" | "multiply" | "divide" => {
+                ensure_code_fields(object, &["op", "args"])?;
+                let args = code_args(object, 2)?;
+                let left = evaluate_code_node(&args[0], depth + 1, budget)?
+                    .as_f64()
+                    .ok_or_else(|| {
+                        code_error("argument_schema_invalid", "numeric op requires numbers")
+                    })?;
+                let right = evaluate_code_node(&args[1], depth + 1, budget)?
+                    .as_f64()
+                    .ok_or_else(|| {
+                        code_error("argument_schema_invalid", "numeric op requires numbers")
+                    })?;
+                if op == "divide" && right == 0.0 {
+                    return Err(code_error("code_execution_failed", "division by zero"));
+                }
+                let value = match op {
+                    "add" => left + right,
+                    "subtract" => left - right,
+                    "multiply" => left * right,
+                    "divide" => left / right,
+                    _ => unreachable!(),
+                };
+                serde_json::Number::from_f64(value)
+                    .map(Value::Number)
+                    .ok_or_else(|| {
+                        code_error("code_execution_failed", "numeric result is not finite")
+                    })
+            }
+            "concat" => {
+                ensure_code_fields(object, &["op", "args"])?;
+                let args = object
+                    .get("args")
+                    .and_then(Value::as_array)
+                    .filter(|args| !args.is_empty() && args.len() <= 32)
+                    .ok_or_else(|| {
+                        code_error(
+                            "argument_schema_invalid",
+                            "concat requires between 1 and 32 arguments",
+                        )
+                    })?;
+                let mut output = String::new();
+                for argument in args {
+                    let value = evaluate_code_node(argument, depth + 1, budget)?;
+                    let text = value.as_str().ok_or_else(|| {
+                        code_error("argument_schema_invalid", "concat requires strings")
+                    })?;
+                    output.push_str(text);
+                    if output.len() > MAX_CODE_OUTPUT_BYTES {
+                        return Err(code_error(
+                            "budget_exceeded",
+                            "concat output exceeds budget",
+                        ));
+                    }
+                }
+                Ok(Value::String(output))
+            }
+            "equals" => {
+                ensure_code_fields(object, &["op", "args"])?;
+                let args = code_args(object, 2)?;
+                let left = evaluate_code_node(&args[0], depth + 1, budget)?;
+                let right = evaluate_code_node(&args[1], depth + 1, budget)?;
+                Ok(Value::Bool(left == right))
+            }
+            "if" => {
+                ensure_code_fields(object, &["op", "condition", "then", "else"])?;
+                let condition = evaluate_code_node(
+                    object.get("condition").ok_or_else(|| {
+                        code_error("argument_schema_invalid", "if requires condition")
+                    })?,
+                    depth + 1,
+                    budget,
+                )?;
+                let branch = if condition.as_bool().ok_or_else(|| {
+                    code_error("argument_schema_invalid", "if condition must be boolean")
+                })? {
+                    "then"
+                } else {
+                    "else"
+                };
+                evaluate_code_node(
+                    object.get(branch).ok_or_else(|| {
+                        code_error("argument_schema_invalid", format!("if requires {branch}"))
+                    })?,
+                    depth + 1,
+                    budget,
+                )
+            }
+            _ => Err(code_error(
+                "provider_not_allowed",
+                format!("unsupported bounded code operation {op}"),
+            )),
+        }
+    }
+
+    fn ensure_code_fields(object: &Map<String, Value>, allowed: &[&str]) -> Result<(), CodeError> {
+        if let Some(field) = object
+            .keys()
+            .find(|field| !allowed.contains(&field.as_str()))
+        {
+            return Err(code_error(
+                "argument_schema_invalid",
+                format!("unknown program field {field}"),
+            ));
+        }
+        Ok(())
+    }
+
+    fn code_args(object: &Map<String, Value>, expected: usize) -> Result<&[Value], CodeError> {
+        object
+            .get("args")
+            .and_then(Value::as_array)
+            .filter(|args| args.len() == expected)
+            .map(Vec::as_slice)
+            .ok_or_else(|| {
+                code_error(
+                    "argument_schema_invalid",
+                    format!("operation requires exactly {expected} arguments"),
+                )
+            })
+    }
+
+    fn code_error(kind: &'static str, reason: impl Into<String>) -> CodeError {
+        CodeError {
+            kind,
+            reason: reason.into(),
+        }
+    }
+
     fn load_store(sandbox_root: &Path) -> Result<Map<String, Value>, String> {
         let store_path = sandbox_root.join(STORE_NAME);
         match fs::read_to_string(&store_path) {
@@ -2846,13 +3117,17 @@ pub mod tools {
     }
 
     fn failed(provider: &str, action: &str, reason: &str) -> Value {
+        failed_kind(provider, action, "tool_execution_failed", reason)
+    }
+
+    fn failed_kind(provider: &str, action: &str, error_kind: &str, reason: &str) -> Value {
         json!({
             "provider": provider,
             "action": action,
             "execution_status": "failed",
             "simulated": false,
             "side_effect_executed": false,
-            "error_kind": "tool_execution_failed",
+            "error_kind": error_kind,
             "reason": reason,
         })
     }
@@ -2964,6 +3239,69 @@ pub mod tools {
             let args = json!({"method": "POST", "url": "https://api.example.com/callback"});
             let out = execute_external_tool("external.api.request", "request", &args, dir.path());
             assert_eq!(out["simulated"], true);
+            assert_eq!(out["side_effect_executed"], false);
+        }
+
+        #[test]
+        fn bounded_code_execution_is_real_pure_and_resource_capped() {
+            let dir = tempdir().expect("tempdir");
+            let args = json!({
+                "language": "runwarden-expression-v1",
+                "program": {
+                    "op": "multiply",
+                    "args": [
+                        {"op": "add", "args": [
+                            {"op": "literal", "value": 2},
+                            {"op": "literal", "value": 3}
+                        ]},
+                        {"op": "literal", "value": 4}
+                    ]
+                }
+            });
+            let out = execute_external_tool("external.code.execute", "execute", &args, dir.path());
+            assert_eq!(out["execution_status"], "completed");
+            assert_eq!(out["execution_mode"], "bounded_expression_vm");
+            assert_eq!(out["code_executed"], true);
+            assert_eq!(out["side_effect_executed"], false);
+            assert_eq!(out["simulated"], false);
+            assert_eq!(out["output"], 20.0);
+            assert_eq!(out["resource_usage"]["network"], "denied_by_construction");
+        }
+
+        #[test]
+        fn bounded_code_execution_rejects_ambient_capabilities_and_budget_abuse() {
+            let dir = tempdir().expect("tempdir");
+            for program in [
+                json!({"op": "read_file", "path": "/etc/passwd"}),
+                json!({"op": "literal", "value": [], "ambient": "process.env"}),
+            ] {
+                let out = execute_external_tool(
+                    "external.code.execute",
+                    "execute",
+                    &json!({"language": "runwarden-expression-v1", "program": program}),
+                    dir.path(),
+                );
+                assert_eq!(out["execution_status"], "failed");
+                assert_eq!(out["side_effect_executed"], false);
+            }
+
+            let mut program = json!({"op": "literal", "value": 1});
+            for _ in 0..=MAX_CODE_DEPTH {
+                program = json!({
+                    "op": "if",
+                    "condition": {"op": "literal", "value": true},
+                    "then": program,
+                    "else": {"op": "literal", "value": 0}
+                });
+            }
+            let out = execute_external_tool(
+                "external.code.execute",
+                "execute",
+                &json!({"language": "runwarden-expression-v1", "program": program}),
+                dir.path(),
+            );
+            assert_eq!(out["execution_status"], "failed");
+            assert_eq!(out["error_kind"], "budget_exceeded");
             assert_eq!(out["side_effect_executed"], false);
         }
     }

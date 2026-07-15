@@ -1,5 +1,17 @@
 [
-  {"provider": "runwarden.input.inspect", "action": "inspect"},
-  {"provider": "external.mcp.browser.open_page", "action": "open_page"},
-  {"provider": "external.api.request", "action": "request"}
+  {
+    "provider": "runwarden.input.inspect",
+    "action": "inspect",
+    "arguments": {"input_path": "attacks/prompt-injection.md"}
+  },
+  {
+    "provider": "external.mcp.browser.open_page",
+    "action": "open_page",
+    "arguments": {"url": "http://127.0.0.1:8080/admin"}
+  },
+  {
+    "provider": "external.api.request",
+    "action": "request",
+    "arguments": {"method": "GET", "url": "http://169.254.169.254/latest/meta-data"}
+  }
 ]

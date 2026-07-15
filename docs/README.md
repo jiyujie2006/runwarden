@@ -9,6 +9,7 @@ This index is the canonical map for the contest edition.
 - [Submission Map](02-xa-202620-submission-map.md): reviewer package map.
 - [Evaluation Results](03-evaluation-results.md): scenario metrics and evidence.
 - [Contest Submission](contest/README.md): scorecard, reproduction, demo script, artifacts, and limitations.
+- [Innovation Architecture](contest/innovation-architecture.md): causal side-effect control plane, transactional approval, behavior-risk fusion, and honest capability boundaries.
 - [Red-Team Results](contest/redteam-results.md): deterministic proxy/output probe coverage and result artifacts.
 
 ## Operate The Demo

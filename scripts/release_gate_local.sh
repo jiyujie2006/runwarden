@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+cargo build --workspace
 scripts/dev_gate.sh
 rm -rf artifacts/demo artifacts/reports artifacts/reviewer-console.html
 rm -f artifacts/llm-proxy/trace.jsonl

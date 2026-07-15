@@ -10,19 +10,34 @@ delivery only; policy decisions stay in Rust kernel/MCP/provider code.
 
 - `GET /` console HTML
 - `GET /events` Server-Sent Events for `model_call`, `provider_call`, and approval updates
-- `GET /api/pending` pending approval records from `.runwarden/approvals`
-- `POST /api/approve` and `POST /api/deny` state changes for existing approval records
+- `GET /api/pending` pending approval records from the active run-scoped
+  `approvals/` directory
+- `POST /api/approvals/{approval_id}/decision` performs an authenticated,
+  auditable state transition for one existing pending record
 - `GET /api/trace/verify` hash-chain verification for the LLM proxy trace and
-  MCP provider-call trace from `.runwarden/events.jsonl`
+  MCP provider-call trace from the active run state directory
 - `GET /healthz`
 
-MCP writes pending approval records and provider-call events under
-`RUNWARDEN_STATE_DIR` when set, otherwise `.runwarden` under its current
-directory. For the two-terminal demo, export `RUNWARDEN_STATE_DIR` to the repo
-state directory before launching the agent.
+Every interactive demo creates a fresh `.runwarden/runs/demo-*` state
+directory. Copy the printed `RUNWARDEN_STATE_DIR`, `RUNWARDEN_SESSION_ID`, and
+actor setup into the agent terminal so retries bind to the same run and
+identity.
 
-The console polls pending approvals and trace verification while interactive,
-so Evidence Chain updates after model or provider events are written.
+The decision POST requires the 256-bit reviewer capability delivered only in
+the fragment of the printed `Reviewer:` URL, plus exact `Host` and `Origin`.
+The fragment is removed from browser history after being placed in
+`sessionStorage`; it is not embedded in the ordinary HTML response. Reviewer
+identity is fixed by the Rust server session, not accepted from JSON. The
+review transaction holds the same cross-process lock used by MCP, atomically
+persists the record, and appends a sealed `approval-events.jsonl` decision. MCP
+will not claim an approved record unless that audit event and its canonical
+record/binding digests verify.
+
+SSE payloads are update hints only: the browser never renders them as evidence.
+On an SSE notification it fetches `/api/console/snapshot` again, so trace,
+report, approval-ledger, and approval-audit status comes from server-side
+recomputation. A 30-second reconciliation and visibility-change refresh cover
+missed notifications.
 
 ## Static Mode
 

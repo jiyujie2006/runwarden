@@ -164,3 +164,30 @@ fn trace_store_verifies_hash_chain_and_rejects_tamper() {
 
     assert!(store.verify_hash_chain().is_err());
 }
+
+#[test]
+fn trace_store_rejects_empty_and_duplicate_observation_evidence() {
+    let empty = InMemoryTraceStore::default();
+    let empty_error = empty.verify_hash_chain().expect_err("empty trace rejects");
+    assert_eq!(empty_error.reason, "empty trace is not evidence");
+
+    let mut duplicate = InMemoryTraceStore::default();
+    duplicate.append_signed(
+        "obs_repeat",
+        "provider_policy_evaluated",
+        Some("runwarden.input.inspect"),
+        json!({"decision":"allowed"}),
+    );
+    duplicate.append_signed(
+        "obs_repeat",
+        "provider_completed",
+        Some("runwarden.input.inspect"),
+        json!({"execution_status":"completed"}),
+    );
+    let duplicate_error = duplicate
+        .verify_hash_chain()
+        .expect_err("duplicate observation rejects");
+    assert_eq!(duplicate_error.offset, 1);
+    assert_eq!(duplicate_error.obs_id, "obs_repeat");
+    assert_eq!(duplicate_error.reason, "duplicate observation id");
+}

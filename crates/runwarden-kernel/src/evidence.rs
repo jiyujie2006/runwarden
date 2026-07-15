@@ -2,6 +2,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TraceEvent {
@@ -155,8 +156,24 @@ impl InMemoryTraceStore {
     }
 
     pub fn verify_hash_chain(&self) -> Result<(), TraceVerificationError> {
+        if self.events.is_empty() {
+            return Err(TraceVerificationError {
+                offset: 0,
+                obs_id: String::new(),
+                reason: "empty trace is not evidence".to_string(),
+            });
+        }
+
         let mut previous_hash = None;
+        let mut seen_obs_ids = BTreeSet::new();
         for (offset, event) in self.events.iter().enumerate() {
+            if !seen_obs_ids.insert(event.obs_id.as_str()) {
+                return Err(TraceVerificationError {
+                    offset,
+                    obs_id: event.obs_id.clone(),
+                    reason: "duplicate observation id".to_string(),
+                });
+            }
             if event.previous_hash != previous_hash {
                 return Err(TraceVerificationError {
                     offset,

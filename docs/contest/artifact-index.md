@@ -20,7 +20,7 @@ Reviewer console/report <- verified obs_* evidence chain
 
 | Path | Purpose |
 | --- | --- |
-| `SUBMISSION.md` | 中文提交总入口。 |
+| `artifacts/contest-bundle/SUBMISSION.md` | 打包时生成的中文提交总入口。 |
 | `docs/contest/scorecard.md` | 赛题要求到实现证据映射。 |
 | `docs/security-risk-analysis-report.md` | 安全风险分析报告。 |
 | `redteam/corpora/*.jsonl` | 对抗样本与 benign control。 |

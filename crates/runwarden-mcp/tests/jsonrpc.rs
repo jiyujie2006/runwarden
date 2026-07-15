@@ -1,7 +1,7 @@
 use std::{
     fs,
     path::PathBuf,
-    sync::{Mutex, OnceLock},
+    sync::{Arc, Barrier, Mutex, OnceLock},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -11,7 +11,9 @@ use runwarden_kernel::{
     evidence::{TraceEvent, hex_sha256},
     kernel::{KernelEnforcer, KernelPolicy, ProviderRegistry, provider_requires_approval},
 };
-use runwarden_mcp::{handle_jsonrpc_body, handle_jsonrpc_message, handle_stdio_payload};
+use runwarden_mcp::{
+    ServerIdentity, handle_jsonrpc_body, handle_jsonrpc_message, handle_stdio_payload,
+};
 use runwarden_providers::catalog::{default_external_providers, default_first_party_providers};
 use serde_json::{Value, json};
 
@@ -31,6 +33,68 @@ fn temp_state_dir(name: &str) -> PathBuf {
 fn cwd_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn current_mcp_session_id() -> String {
+    ServerIdentity::from_process_env()
+        .expect("server identity")
+        .session_id()
+        .to_string()
+}
+
+fn canonical_json(value: &Value) -> Value {
+    match value {
+        Value::Object(object) => {
+            let mut keys = object.keys().collect::<Vec<_>>();
+            keys.sort_unstable();
+            Value::Object(
+                keys.into_iter()
+                    .map(|key| (key.clone(), canonical_json(&object[key])))
+                    .collect(),
+            )
+        }
+        Value::Array(items) => Value::Array(items.iter().map(canonical_json).collect()),
+        _ => value.clone(),
+    }
+}
+
+fn write_approval_audit(state_dir: &std::path::Path, approval: &ApprovalRecord) {
+    fs::create_dir_all(state_dir).expect("state dir");
+    let approval_value = serde_json::to_value(approval).expect("approval value");
+    let binding_value = serde_json::to_value(&approval.binding).expect("binding value");
+    let event = TraceEvent::sealed(
+        format!("obs_approval_test_{}", approval.approval_id),
+        "approval_decision".to_string(),
+        Some(approval.binding.provider.clone()),
+        json!({
+            "schema_version": "runwarden.approval-decision.v1",
+            "approval_id": approval.approval_id,
+            "state": approval.state,
+            "provider": approval.binding.provider,
+            "action": approval.binding.action,
+            "binding_sha256": hex_sha256(
+                &serde_json::to_vec(&canonical_json(&binding_value)).expect("canonical binding")
+            ),
+            "record_sha256": hex_sha256(
+                &serde_json::to_vec(&canonical_json(&approval_value)).expect("canonical approval")
+            ),
+            "decision": if approval.state == ApprovalState::Approved {
+                "approved"
+            } else {
+                "denied"
+            },
+            "side_effect_executed": false
+        }),
+        None,
+    );
+    fs::write(
+        state_dir.join("approval-events.jsonl"),
+        format!(
+            "{}\n",
+            serde_json::to_string(&event).expect("approval event JSON")
+        ),
+    )
+    .expect("write approval audit");
 }
 
 fn restore_env(key: &str, value: Option<std::ffi::OsString>) {
@@ -232,6 +296,12 @@ fn agent_bootstrap_reports_runwarden_only_boundary() {
 
     assert_eq!(payload["agent_only_sees_runwarden"], true);
     assert_eq!(payload["raw_side_effect_tools_allowed"], false);
+    assert_eq!(
+        payload["server_identity_mode"],
+        ServerIdentity::from_process_env()
+            .expect("server identity")
+            .mode()
+    );
 }
 
 #[test]
@@ -324,8 +394,43 @@ fn provider_call_rejects_unknown_provider_without_execution() {
 
     let payload = tool_payload(&response);
     assert_eq!(payload["decision"], "denied");
-    assert_eq!(payload["envelope"]["error_kind"], "provider_unknown");
+    assert_eq!(
+        payload["envelope"]["error_kind"], "provider_unknown",
+        "unexpected payload: {payload:#}"
+    );
     assert_eq!(payload["side_effect_executed"], false);
+}
+
+#[test]
+fn provider_call_rejects_write_provider_disguised_as_read_before_any_effect() {
+    let dir = temp_state_dir("write-as-read");
+    let _guard = cwd_lock().lock().expect("cwd lock");
+    let cwd = std::env::current_dir().expect("cwd");
+    std::env::set_current_dir(&dir).expect("set cwd");
+    let response = call_tool(
+        130,
+        "runwarden.provider.call",
+        json!({
+            "provider": "external.mcp.filesystem.write_file",
+            "action": "read_file",
+            "path": "owned.txt",
+            "content": "must never be written"
+        }),
+    );
+    std::env::set_current_dir(cwd).expect("restore cwd");
+
+    assert_eq!(response["error"]["code"], -32602);
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("expected write_file"))
+    );
+    assert_eq!(response["error"]["data"]["side_effect_executed"], false);
+    assert!(!dir.join("mcp-inline-sandbox/owned.txt").exists());
+    assert!(
+        !dir.join(".runwarden").exists(),
+        "mismatch must be rejected before history, approval, reservation, or trace state"
+    );
 }
 
 #[test]
@@ -356,6 +461,36 @@ fn provider_call_holds_external_provider_for_review_without_execution() {
         payload["trace_event"]["payload"]["side_effect_executed"],
         false
     );
+}
+
+#[test]
+fn repeated_pending_intent_reuses_approval_while_observations_remain_unique() {
+    let dir = temp_state_dir("pending-intent-reuse");
+    let arguments = json!({
+        "provider": "external.email.send",
+        "to": "ops@example.com",
+        "subject": "review once"
+    });
+
+    let _guard = cwd_lock().lock().expect("cwd lock");
+    let cwd = std::env::current_dir().expect("cwd");
+    std::env::set_current_dir(&dir).expect("set cwd");
+    let first = call_tool(1601, "runwarden.provider.call", arguments.clone());
+    let second = call_tool(1602, "runwarden.provider.call", arguments);
+    std::env::set_current_dir(cwd).expect("restore cwd");
+
+    let first_payload = tool_payload(&first);
+    let second_payload = tool_payload(&second);
+    assert_eq!(first_payload["decision"], "requires_review");
+    assert_eq!(second_payload["decision"], "requires_review");
+    assert_ne!(first_payload["obs_ref"], second_payload["obs_ref"]);
+    assert_eq!(first_payload["approval_id"], second_payload["approval_id"]);
+    let approvals = fs::read_dir(dir.join(".runwarden/approvals"))
+        .expect("approvals directory")
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("json"))
+        .count();
+    assert_eq!(approvals, 1, "one intent should create one review record");
 }
 
 #[test]
@@ -395,7 +530,7 @@ fn default_kernel_policy_denies_every_catalog_provider_before_side_effect() {
             "{}",
             call.provider
         );
-        assert_eq!(outcome.envelope.side_effect_executed, false);
+        assert!(!outcome.envelope.side_effect_executed);
     }
 }
 
@@ -410,9 +545,9 @@ fn provider_call_loads_disk_approval_and_consumes_it() {
     let mut approval = ApprovalRecord::new(
         "approval-email-1",
         ApprovalBinding {
-            session_id: "mcp-inline".to_string(),
+            session_id: current_mcp_session_id(),
             provider: "external.email.send".to_string(),
-            action: "call".to_string(),
+            action: "send".to_string(),
             argument_hash: hex_sha256(&serde_json::to_vec(&arguments).expect("arguments")),
             authz_id: None,
             actor_id: Some("mcp-agent".to_string()),
@@ -428,6 +563,7 @@ fn provider_call_loads_disk_approval_and_consumes_it() {
         serde_json::to_string_pretty(&approval).expect("approval json"),
     )
     .expect("write approval");
+    write_approval_audit(&dir.join(".runwarden"), &approval);
 
     let _guard = cwd_lock().lock().expect("cwd lock");
     let cwd = std::env::current_dir().expect("cwd");
@@ -444,6 +580,168 @@ fn provider_call_loads_disk_approval_and_consumes_it() {
     let saved =
         fs::read_to_string(approval_dir.join("approval-email-1.json")).expect("saved approval");
     assert!(saved.contains(r#""state": "consumed""#));
+}
+
+#[test]
+fn concurrent_calls_claim_one_approval_and_execute_exactly_once() {
+    let dir = temp_state_dir("approval-claim-race");
+    let state_dir = dir.join("state");
+    let sandbox_root = dir.join("sandbox");
+    let arguments = json!({
+        "provider": "external.email.send",
+        "to": "ops@example.com",
+        "subject": "one-time approval"
+    });
+    let approval_id = "approval-email-concurrent";
+    let mut approval = ApprovalRecord::new(
+        approval_id,
+        ApprovalBinding {
+            session_id: current_mcp_session_id(),
+            provider: "external.email.send".to_string(),
+            action: "send".to_string(),
+            argument_hash: hex_sha256(&serde_json::to_vec(&arguments).expect("arguments")),
+            authz_id: None,
+            actor_id: Some("mcp-agent".to_string()),
+        },
+    );
+    approval
+        .approve("reviewer-alice", "execute once")
+        .expect("approve");
+    let approvals_dir = state_dir.join("approvals");
+    fs::create_dir_all(&approvals_dir).expect("approvals dir");
+    fs::write(
+        approvals_dir.join(format!("{approval_id}.json")),
+        serde_json::to_vec_pretty(&approval).expect("approval json"),
+    )
+    .expect("write approval");
+    write_approval_audit(&state_dir, &approval);
+
+    let _guard = cwd_lock().lock().expect("cwd lock");
+    let old_state = std::env::var_os("RUNWARDEN_STATE_DIR");
+    let old_sandbox = std::env::var_os("RUNWARDEN_SANDBOX_ROOT");
+    unsafe {
+        std::env::set_var("RUNWARDEN_STATE_DIR", &state_dir);
+        std::env::set_var("RUNWARDEN_SANDBOX_ROOT", &sandbox_root);
+    }
+
+    const CALLERS: usize = 16;
+    let barrier = Arc::new(Barrier::new(CALLERS));
+    let mut handles = Vec::new();
+    for caller in 0..CALLERS {
+        let barrier = barrier.clone();
+        let arguments = arguments.clone();
+        handles.push(std::thread::spawn(move || {
+            barrier.wait();
+            call_tool(10_000 + caller as u64, "runwarden.provider.call", arguments)
+        }));
+    }
+    let responses: Vec<_> = handles
+        .into_iter()
+        .map(|handle| handle.join().expect("provider call thread"))
+        .collect();
+
+    restore_env("RUNWARDEN_STATE_DIR", old_state);
+    restore_env("RUNWARDEN_SANDBOX_ROOT", old_sandbox);
+
+    let successful_calls = responses
+        .iter()
+        .filter(|response| response["result"]["isError"] == false)
+        .count();
+    assert_eq!(successful_calls, 1, "only one caller may consume approval");
+    let mailbox = fs::read_to_string(sandbox_root.join("mailbox.mbox")).expect("mailbox");
+    assert_eq!(
+        mailbox.lines().count(),
+        1,
+        "the approved side effect must execute exactly once"
+    );
+    let saved: ApprovalRecord = serde_json::from_slice(
+        &fs::read(approvals_dir.join(format!("{approval_id}.json"))).expect("consumed approval"),
+    )
+    .expect("consumed approval json");
+    assert_eq!(saved.state, ApprovalState::Consumed);
+    assert_eq!(
+        fs::read_dir(state_dir.join("approval-claims"))
+            .expect("approval claims")
+            .count(),
+        1
+    );
+    assert_eq!(
+        fs::read_dir(state_dir.join("execution-reservations"))
+            .expect("execution reservations")
+            .count(),
+        1
+    );
+
+    fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[test]
+fn execution_reservation_write_failure_prevents_external_side_effect() {
+    let dir = temp_state_dir("reservation-write-failure");
+    let state_dir = dir.join("state");
+    let sandbox_root = dir.join("sandbox");
+    let arguments = json!({
+        "provider": "external.email.send",
+        "to": "ops@example.com",
+        "subject": "must not be sent"
+    });
+    let approval_id = "approval-email-reservation-failure";
+    let mut approval = ApprovalRecord::new(
+        approval_id,
+        ApprovalBinding {
+            session_id: current_mcp_session_id(),
+            provider: "external.email.send".to_string(),
+            action: "send".to_string(),
+            argument_hash: hex_sha256(&serde_json::to_vec(&arguments).expect("arguments")),
+            authz_id: None,
+            actor_id: Some("mcp-agent".to_string()),
+        },
+    );
+    approval
+        .approve("reviewer-alice", "reservation must be durable")
+        .expect("approve");
+    let approvals_dir = state_dir.join("approvals");
+    fs::create_dir_all(&approvals_dir).expect("approvals dir");
+    fs::write(
+        approvals_dir.join(format!("{approval_id}.json")),
+        serde_json::to_vec_pretty(&approval).expect("approval json"),
+    )
+    .expect("write approval");
+    write_approval_audit(&state_dir, &approval);
+    fs::write(state_dir.join("execution-reservations"), b"not a directory")
+        .expect("reservation failure marker");
+
+    let _guard = cwd_lock().lock().expect("cwd lock");
+    let old_state = std::env::var_os("RUNWARDEN_STATE_DIR");
+    let old_sandbox = std::env::var_os("RUNWARDEN_SANDBOX_ROOT");
+    unsafe {
+        std::env::set_var("RUNWARDEN_STATE_DIR", &state_dir);
+        std::env::set_var("RUNWARDEN_SANDBOX_ROOT", &sandbox_root);
+    }
+    let response = call_tool(10_100, "runwarden.provider.call", arguments);
+    restore_env("RUNWARDEN_STATE_DIR", old_state);
+    restore_env("RUNWARDEN_SANDBOX_ROOT", old_sandbox);
+
+    assert_eq!(response["result"]["isError"], true);
+    let payload = tool_payload(&response);
+    assert_eq!(payload["error_kind"], "trace_write_failed");
+    assert_eq!(payload["side_effect_executed"], false);
+    assert_eq!(payload["envelope"]["gate_id"], "execution_reservation");
+    assert!(
+        !sandbox_root.join("mailbox.mbox").exists(),
+        "reservation failure must prevent the email side effect"
+    );
+    let saved: ApprovalRecord = serde_json::from_slice(
+        &fs::read(approvals_dir.join(format!("{approval_id}.json"))).expect("claimed approval"),
+    )
+    .expect("claimed approval json");
+    assert_eq!(
+        saved.state,
+        ApprovalState::Consumed,
+        "approval claim must be durable before any attempted execution"
+    );
+
+    fs::remove_dir_all(dir).expect("cleanup");
 }
 
 #[test]
@@ -511,6 +809,7 @@ fn provider_call_after_consumed_webui_approval_creates_new_pending_review() {
         serde_json::to_string_pretty(&approval).expect("approved json"),
     )
     .expect("write approved approval");
+    write_approval_audit(&dir.join(".runwarden"), &approval);
 
     let allowed = call_tool(218, "runwarden.provider.call", arguments.clone());
     assert_eq!(allowed["result"]["isError"], false);
@@ -550,9 +849,9 @@ fn provider_call_with_denied_disk_approval_still_requires_review() {
     let mut approval = ApprovalRecord::new(
         "approval-email-denied",
         ApprovalBinding {
-            session_id: "mcp-inline".to_string(),
+            session_id: current_mcp_session_id(),
             provider: "external.email.send".to_string(),
-            action: "call".to_string(),
+            action: "send".to_string(),
             argument_hash: hex_sha256(&serde_json::to_vec(&arguments).expect("arguments")),
             authz_id: None,
             actor_id: Some("mcp-agent".to_string()),
@@ -566,6 +865,7 @@ fn provider_call_with_denied_disk_approval_still_requires_review() {
         serde_json::to_string_pretty(&approval).expect("approval json"),
     )
     .expect("write approval");
+    write_approval_audit(&dir.join(".runwarden"), &approval);
 
     let _guard = cwd_lock().lock().expect("cwd lock");
     let cwd = std::env::current_dir().expect("cwd");
@@ -611,9 +911,9 @@ fn provider_call_denies_approved_external_api_to_non_allowlisted_host() {
     let mut approval = ApprovalRecord::new(
         "approval-api-1",
         ApprovalBinding {
-            session_id: "mcp-inline".to_string(),
+            session_id: current_mcp_session_id(),
             provider: "external.api.request".to_string(),
-            action: "call".to_string(),
+            action: "request".to_string(),
             argument_hash: hex_sha256(&serde_json::to_vec(&arguments).expect("arguments")),
             authz_id: None,
             actor_id: Some("mcp-agent".to_string()),
@@ -629,6 +929,7 @@ fn provider_call_denies_approved_external_api_to_non_allowlisted_host() {
         serde_json::to_string_pretty(&approval).expect("approval json"),
     )
     .expect("write approval");
+    write_approval_audit(&dir.join(".runwarden"), &approval);
 
     let _guard = cwd_lock().lock().expect("cwd lock");
     let cwd = std::env::current_dir().expect("cwd");
@@ -656,9 +957,9 @@ fn provider_call_uses_server_owned_sandbox_root_for_filesystem_scope() {
     let mut approval = ApprovalRecord::new(
         "approval-file-read-1",
         ApprovalBinding {
-            session_id: "mcp-inline".to_string(),
+            session_id: current_mcp_session_id(),
             provider: "external.mcp.filesystem.read_file".to_string(),
-            action: "call".to_string(),
+            action: "read_file".to_string(),
             argument_hash: hex_sha256(&serde_json::to_vec(&arguments).expect("arguments")),
             authz_id: None,
             actor_id: Some("mcp-agent".to_string()),
@@ -674,6 +975,7 @@ fn provider_call_uses_server_owned_sandbox_root_for_filesystem_scope() {
         serde_json::to_string_pretty(&approval).expect("approval json"),
     )
     .expect("write approval");
+    write_approval_audit(&dir.join(".runwarden"), &approval);
 
     let _guard = cwd_lock().lock().expect("cwd lock");
     let cwd = std::env::current_dir().expect("cwd");
@@ -691,6 +993,16 @@ fn provider_call_uses_server_owned_sandbox_root_for_filesystem_scope() {
 
 #[test]
 fn provider_call_denies_oversized_arguments_before_execution() {
+    let dir = temp_state_dir("oversized-arguments");
+    let state_dir = dir.join("state");
+    let sandbox_root = dir.join("sandbox");
+    let _guard = cwd_lock().lock().expect("cwd lock");
+    let old_state = std::env::var_os("RUNWARDEN_STATE_DIR");
+    let old_sandbox = std::env::var_os("RUNWARDEN_SANDBOX_ROOT");
+    unsafe {
+        std::env::set_var("RUNWARDEN_STATE_DIR", &state_dir);
+        std::env::set_var("RUNWARDEN_SANDBOX_ROOT", &sandbox_root);
+    }
     let response = call_tool(
         121,
         "runwarden.provider.call",
@@ -699,12 +1011,15 @@ fn provider_call_denies_oversized_arguments_before_execution() {
             "input_text": "x".repeat(300 * 1024)
         }),
     );
+    restore_env("RUNWARDEN_STATE_DIR", old_state);
+    restore_env("RUNWARDEN_SANDBOX_ROOT", old_sandbox);
 
     assert_eq!(response["result"]["isError"], true);
     let payload = tool_payload(&response);
     assert_eq!(payload["decision"], "denied");
     assert_eq!(payload["envelope"]["error_kind"], "budget_exceeded");
     assert_eq!(payload["side_effect_executed"], false);
+    fs::remove_dir_all(dir).expect("cleanup");
 }
 
 #[test]

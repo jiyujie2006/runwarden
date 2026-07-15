@@ -1,35 +1,25 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "enabled_providers": ["runwarden-proxy"],
+  "model": "runwarden-proxy/big-pickle",
   "provider": {
     "runwarden-proxy": {
       "npm": "@ai-sdk/openai-compatible",
       "name": "Runwarden Proxied LLM",
       "options": {
-        "baseURL": "http://127.0.0.1:8787/v1"
+        "baseURL": "http://127.0.0.1:8787/v1",
+        "apiKey": "{env:RUNWARDEN_PROXY_CLIENT_TOKEN}"
       },
       "models": {
         "big-pickle": {
-          "name": "Runwarden-proxied (set RUNWARDEN_LLM_API_KEY; model is forwarded to --upstream)"
+          "name": "Runwarden-proxied (client capability from RUNWARDEN_PROXY_CLIENT_TOKEN; upstream key stays server-side)"
         }
       }
     }
   },
   "tools": {
-    "apply_patch": false,
-    "bash": false,
-    "edit": false,
-    "glob": false,
-    "grep": false,
-    "list": false,
-    "lsp": false,
-    "question": false,
-    "read": false,
-    "skill": false,
-    "todoread": false,
-    "todowrite": false,
-    "webfetch": false,
-    "websearch": false,
-    "write": false
+    "*": false,
+    "runwarden_*": true
   },
   "mcp": {
     "runwarden": {

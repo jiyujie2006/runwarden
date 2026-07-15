@@ -15,7 +15,9 @@ path = "src/main.rs"
 anyhow.workspace = true
 axum = "0.8"
 clap.workspace = true
+getrandom = "0.4"
 runwarden-assurance = { path = "../runwarden-assurance" }
+runwarden-anomaly = { path = "../runwarden-anomaly" }
 runwarden-kernel = { path = "../runwarden-kernel" }
 runwarden-llm-proxy = { path = "../runwarden-llm-proxy" }
 runwarden-providers = { path = "../runwarden-providers" }

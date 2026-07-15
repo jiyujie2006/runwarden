@@ -276,7 +276,9 @@ impl KernelEnforcer {
 
         let mut paths = Vec::new();
         collect_argument_strings(&call.arguments, &mut |key, value| {
-            if key.ends_with("path") || key == "path" {
+            if key.ends_with("path")
+                || matches!(key, "path" | "file" | "filename" | "working_directory")
+            {
                 paths.push(value.to_string());
             }
         });
@@ -308,7 +310,10 @@ impl KernelEnforcer {
     fn validate_egress(&self, call: &ProviderCall) -> Option<ProviderOutcome> {
         let mut urls = Vec::new();
         collect_argument_strings(&call.arguments, &mut |key, value| {
-            if key.contains("url") && value.contains("://") {
+            if (key.contains("url")
+                || matches!(key, "uri" | "endpoint" | "origin" | "webhook" | "callback"))
+                && value.contains("://")
+            {
                 urls.push(value.to_string());
             }
         });
@@ -332,9 +337,16 @@ impl KernelEnforcer {
                 ));
             }
 
-            if !self.policy.allowed_egress_hosts.is_empty()
-                && !self.policy.allowed_egress_hosts.contains(&host)
-            {
+            if self.policy.allowed_egress_hosts.is_empty() {
+                return Some(deny(
+                    call,
+                    "egress",
+                    ErrorKind::EgressDenied,
+                    "network egress is denied because the session has no host allowlist",
+                ));
+            }
+
+            if !self.policy.allowed_egress_hosts.contains(&host) {
                 return Some(deny(
                     call,
                     "egress",

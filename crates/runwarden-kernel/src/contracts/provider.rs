@@ -1,6 +1,11 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::{
+    OnceLock,
+    atomic::{AtomicU64, Ordering},
+};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::ErrorKind;
 use crate::evidence::hex_sha256;
@@ -378,7 +383,7 @@ fn trace_event_for_decision(decision: &PolicyDecision) -> &'static str {
 }
 
 fn observation_id_for_before_side_effect(input: &BeforeSideEffect, trace_event: &str) -> String {
-    let material = serde_json::json!({
+    let intent_material = serde_json::json!({
         "trace_event": trace_event,
         "decision": &input.decision,
         "session_id": &input.session_id,
@@ -392,12 +397,33 @@ fn observation_id_for_before_side_effect(input: &BeforeSideEffect, trace_event: 
         "actor_id": &input.actor_id,
         "approval_id": &input.approval_id
     });
-    format!(
-        "obs_{}",
-        &hex_sha256(
-            &serde_json::to_vec(&material).expect("provider outcome trace material serializes")
-        )[..16]
-    )
+    let intent_digest = hex_sha256(
+        &serde_json::to_vec(&intent_material).expect("provider outcome trace material serializes"),
+    );
+    let invocation_sequence = OBSERVATION_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    // Keeping the sequence explicit (instead of truncating a hash of it)
+    // guarantees uniqueness within this server process. The epoch prefix
+    // separates observations produced by distinct server processes.
+    let invocation_key = format!(
+        "{}{:016x}",
+        &observation_process_epoch()[..16],
+        invocation_sequence
+    );
+    format!("obs_{}_{}", &intent_digest[..16], invocation_key)
+}
+
+static OBSERVATION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+fn observation_process_epoch() -> &'static str {
+    static PROCESS_EPOCH: OnceLock<String> = OnceLock::new();
+    PROCESS_EPOCH.get_or_init(|| {
+        let started_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let material = format!("{}:{started_at}", std::process::id());
+        hex_sha256(material.as_bytes())
+    })
 }
 
 struct BeforeSideEffect {

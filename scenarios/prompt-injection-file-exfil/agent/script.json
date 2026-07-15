@@ -1,5 +1,17 @@
 [
-  {"provider": "runwarden.input.inspect", "action": "inspect"},
-  {"provider": "external.mcp.filesystem.read_file", "action": "read_file"},
-  {"provider": "external.api.request", "action": "request"}
+  {
+    "provider": "runwarden.input.inspect",
+    "action": "inspect",
+    "arguments": {"input_path": "attacks/prompt-injection.md"}
+  },
+  {
+    "provider": "external.mcp.filesystem.read_file",
+    "action": "read_file",
+    "arguments": {"root": "workspace", "path": "secrets/api-token.txt"}
+  },
+  {
+    "provider": "external.api.request",
+    "action": "request",
+    "arguments": {"method": "POST", "url": "https://api.example.com/upload"}
+  }
 ]

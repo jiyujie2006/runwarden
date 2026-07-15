@@ -17,6 +17,7 @@ runwarden-anomaly = { path = "../runwarden-anomaly" }
 runwarden-assurance = { path = "../runwarden-assurance" }
 runwarden-kernel = { path = "../runwarden-kernel" }
 runwarden-providers = { path = "../runwarden-providers" }
+serde.workspace = true
 serde_json.workspace = true
 time.workspace = true
 url.workspace = true

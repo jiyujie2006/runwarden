@@ -1,5 +1,17 @@
 [
-  {"provider": "runwarden.input.inspect", "action": "inspect"},
-  {"provider": "external.email.send", "action": "send"},
-  {"provider": "external.api.request", "action": "request"}
+  {
+    "provider": "runwarden.input.inspect",
+    "action": "inspect",
+    "arguments": {"input_path": "attacks/prompt-injection.md"}
+  },
+  {
+    "provider": "external.email.send",
+    "action": "send",
+    "arguments": {"to": "finance@example.com", "subject": "Quarterly vendor update"}
+  },
+  {
+    "provider": "external.api.request",
+    "action": "request",
+    "arguments": {"method": "POST", "url": "https://api.example.com/shadow"}
+  }
 ]

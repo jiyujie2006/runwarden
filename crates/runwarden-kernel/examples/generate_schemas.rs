@@ -72,13 +72,16 @@ fn write_report_schema(path: impl AsRef<Path>) -> Result<(), Box<dyn std::error:
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "ReportDraft",
         "type": "object",
+        "additionalProperties": false,
         "required": ["claims"],
         "properties": {
             "claims": {
                 "type": "array",
+                "minItems": 1,
                 "items": {
                     "type": "object",
-                    "required": ["id", "text", "obs_refs"],
+                    "additionalProperties": false,
+                    "required": ["id", "text", "obs_refs", "support"],
                     "properties": {
                         "id": {"type": "string"},
                         "text": {"type": "string"},
@@ -89,11 +92,13 @@ fn write_report_schema(path: impl AsRef<Path>) -> Result<(), Box<dyn std::error:
                         },
                         "support": {
                             "type": "object",
+                            "additionalProperties": false,
+                            "required": ["provider", "event_type", "decision", "execution_status", "side_effect_executed"],
                             "properties": {
-                                "provider": {"type": "string"},
-                                "event_type": {"type": "string"},
-                                "decision": {"type": "string"},
-                                "execution_status": {"type": "string"},
+                                "provider": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"},
+                                "event_type": {"type": "string", "enum": ["provider_completed", "provider_policy_evaluated", "provider_denied", "provider_approval_pending", "provider_requires_review", "provider_simulated_replay", "provider_failed"]},
+                                "decision": {"type": "string", "enum": ["allowed", "denied", "requires_review"]},
+                                "execution_status": {"type": "string", "enum": ["not_executed", "running", "completed", "failed", "incomplete", "simulated"]},
                                 "side_effect_executed": {"type": "boolean"},
                                 "simulated": {"type": "boolean"}
                             }

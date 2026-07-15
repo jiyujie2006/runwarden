@@ -42,6 +42,35 @@ fn trace_verify_tool_verifies_inline_hash_chain() {
 }
 
 #[test]
+fn trace_verify_rejects_missing_malformed_and_empty_evidence() {
+    let cases = [
+        (json!({}), "trace_invalid"),
+        (
+            json!({"trace_events": {"not": "an array"}}),
+            "trace_invalid",
+        ),
+        (
+            json!({"trace_events": [{"obs_id": "incomplete"}]}),
+            "trace_invalid",
+        ),
+        (json!({"trace_events": []}), "trace_empty"),
+    ];
+    for (offset, (arguments, expected_kind)) in cases.into_iter().enumerate() {
+        let response = call_tool(
+            100 + u64::try_from(offset).expect("test offset"),
+            "runwarden.trace.verify",
+            arguments,
+        );
+        let payload = tool_payload(&response);
+        assert_eq!(response["result"]["isError"], true);
+        assert_eq!(payload["verified"], false);
+        assert_eq!(payload["event_count"], 0);
+        assert_eq!(payload["error"]["kind"], expected_kind);
+        assert_eq!(payload["side_effect_executed"], false);
+    }
+}
+
+#[test]
 fn trace_export_tool_pages_filtered_verified_events() {
     let response = call_tool(
         31,
@@ -79,6 +108,22 @@ fn trace_export_tool_denies_tampered_inline_trace_without_exporting() {
     assert_eq!(payload["verified"], false);
     assert_eq!(payload["verification"]["error"]["kind"], "trace_tampered");
     assert_eq!(payload["side_effect_executed"], false);
+}
+
+#[test]
+fn trace_export_rejects_malformed_and_empty_evidence() {
+    for (id, arguments, expected_kind) in [
+        (200, json!({"trace_events": "malformed"}), "trace_invalid"),
+        (201, json!({"trace_events": []}), "trace_empty"),
+    ] {
+        let response = call_tool(id, "runwarden.trace.export", arguments);
+        let payload = tool_payload(&response);
+        assert_eq!(response["result"]["isError"], true);
+        assert_eq!(payload["exported"], false);
+        assert_eq!(payload["verified"], false);
+        assert_eq!(payload["verification"]["error"]["kind"], expected_kind);
+        assert_eq!(payload["side_effect_executed"], false);
+    }
 }
 
 fn call_tool(id: u64, name: &str, arguments: Value) -> Value {

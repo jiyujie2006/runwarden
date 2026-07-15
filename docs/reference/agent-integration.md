@@ -11,10 +11,14 @@ The Rust MCP crate validates the checked-in safe and unsafe examples: empty
 
 For OpenCode, the checked config must use `type: "local"`, `command:
 ["runwarden-mcp"]`, must not set `enabled: false`, and must include a top-level
-`tools` object whose built-in tools are all set to `false`.
+`tools` object exactly equal to `{"*": false, "runwarden_*": true}`. OpenCode
+uses last-match-wins tool patterns, so future built-ins/plugins remain denied
+while only the sole `runwarden` MCP prefix is enabled.
 The checked config also defines `runwarden-proxy/big-pickle` as the
 OpenAI-compatible model entry that routes model calls through the local LLM
-proxy at `http://127.0.0.1:8787/v1`.
+proxy at `http://127.0.0.1:8787/v1`, with `options.apiKey` sourced only from
+`{env:RUNWARDEN_PROXY_CLIENT_TOKEN}`. This capability is independent of the
+server-side upstream key.
 
 OpenCode also reads user-level configuration. For a strict Runwarden-only demo,
 run OpenCode with clean `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`,
@@ -31,7 +35,7 @@ authority/session path and runtime configuration, not agent-controlled JSON.
 
 Checked-in examples:
 
-- `examples/agent-configs/claude.runwarden-only.json`
+- `examples/agent-configs/claude.mcp-only-fragment.json`（仅演示 MCP 接线；它不会禁用 Claude Code 内置工具，因此 validator 明确拒绝把它视为 Runwarden-only 安全配置）
 - `examples/agent-configs/opencode.runwarden-only.json`
 - `examples/agent-configs/opencode.tools-list-transcript.json`
 - `examples/agent-configs/opencode.provider-call-denied-transcript.json`

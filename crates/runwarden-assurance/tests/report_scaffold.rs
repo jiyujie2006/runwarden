@@ -7,7 +7,12 @@ fn trace(obs_id: &str, event_type: &str) -> TraceEvent {
         obs_id.to_string(),
         event_type.to_string(),
         Some("runwarden.input.inspect".to_string()),
-        json!({"ok": true}),
+        json!({
+            "ok": true,
+            "decision": "allowed",
+            "execution_status": if event_type == "provider_completed" { "completed" } else { "not_executed" },
+            "side_effect_executed": false
+        }),
         None,
     )
 }
@@ -23,6 +28,7 @@ fn report_scaffold_cites_every_generated_claim_to_trace_observation() {
     assert_eq!(report.claims[0].obs_refs, vec!["obs_1"]);
     assert_eq!(report.claims[1].obs_refs, vec!["obs_2"]);
     assert!(report.claims[0].text.contains("provider_policy_evaluated"));
+    assert!(report.claims.iter().all(|claim| claim.support.is_some()));
 }
 
 #[test]

@@ -46,12 +46,17 @@ Unknown tools, raw tools, and removed tools such as `runwarden.session.create_fr
   come from external provider manifests, and argument bytes are capped before
   side effects. MCP does not derive provider allowlists, active-assessment
   state, roots, authz, approvals, or budgets from agent-supplied arguments.
+- Every provider id has one canonical action taken from its manifest/tool
+  identity. A caller-supplied mismatching action is rejected before policy,
+  reservation, or dispatch, so a write provider cannot be disguised as read.
 - For review-blocked calls, MCP writes a pending approval record and a
   provider-call event under `RUNWARDEN_STATE_DIR` when set, otherwise
   `.runwarden` under the MCP process working directory. On retry, MCP loads
-  matching approved records from `.runwarden/approvals`, attaches the approval
-  id before kernel evaluation, and persists the consumed state after allow.
-  Denied approval records do not allow the call.
+  matching approved records, verifies the unique sealed reviewer-decision
+  audit plus current record/binding digests, attaches the approval id before
+  kernel evaluation, and persists a one-use claim and consumed state before
+  execution. Denied, unaudited, hand-edited, expired, or already-consumed
+  records do not allow the call.
 - Allowed API and browser outcomes
   are replay-simulated and return `event_type=provider_simulated_replay`,
   `execution_status=simulated`, `simulated=true`, and
@@ -59,16 +64,23 @@ Unknown tools, raw tools, and removed tools such as `runwarden.session.create_fr
   memory, and knowledge providers report truthful local execution status and
   side-effect flags after kernel policy permits them. Denied and
   review-blocked calls always return `side_effect_executed=false`.
+- `external.code.execute` runs a bounded `runwarden-expression-v1` AST as a
+  pure in-process VM. Program bytes, node count, depth and output are capped;
+  filesystem, network, environment and process-spawn capabilities do not
+  exist in the VM. It remains approval-gated because code execution is high
+  risk.
 - Provider-call results include `obs_ref` plus a sealed `trace_event` payload
-  whose `obs_id` starts with `obs_*`. Provider-call events appended to
+  whose `obs_id` starts with `obs_*`. Live ids combine a stable intent digest
+  with a server-owned process epoch and monotonic sequence, so identical
+  calls are distinct observations while retaining content correlation.
+  Provider-call events appended to
   `.runwarden/events.jsonl` chain each `trace_event.previous_hash` to the prior
   provider event hash so the WebUI can verify the provider-call trace.
-- External provider-call results with scoreable arguments include `anomaly:
-  { score, is_anomalous, reasons }`, produced by `runwarden-anomaly` from
-  provider sequence, argument size, and URL host. The same anomaly metadata is
-  sealed into `trace_event.payload` for allowed and review-blocked evidence.
-  This is evidence metadata only; it does not change allow, deny, or approval
-  policy.
+- External provider calls receive an explainable 0–100 anomaly report from
+  bounded, per-session durable history. A critical/deny recommendation blocks
+  before side effects; a require-review recommendation creates a five-minute
+  challenge bound to profile version, signals, score, history generation and
+  the exact provider call. This layer can only tighten the kernel decision.
 
 ## Trace And Report Tools
 
@@ -81,6 +93,10 @@ against the server-owned MCP provider-call trace store at
 `RUNWARDEN_STATE_DIR/events.jsonl` when that environment variable is set, or
 `.runwarden/events.jsonl` relative to the MCP process otherwise. It ignores
 agent-supplied inline `trace_events` for report evidence.
+Lint rejects empty reports/traces and duplicate observation ids. Every claim
+support predicate must fully specify and exactly match provider, event type,
+decision, execution status, and side-effect state; free-text wording is never
+used to infer evidence semantics.
 `runwarden.report.render` is review-blocked in the MCP inline path before
 rendering; agents should use lint through MCP and a reviewer-approved non-agent
 path for rendering.

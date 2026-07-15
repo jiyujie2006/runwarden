@@ -8,7 +8,7 @@
     "obs_ref": "obs_local_web_inspect",
     "reason": "environment and URL prompt was inspected",
     "arguments": {
-      "input_path": "benign/request.md"
+      "input_path": "attacks/prompt-injection.md"
     }
   },
   {
@@ -21,7 +21,7 @@
     "error_kind": "egress_denied",
     "reason": "localhost browser egress is denied",
     "arguments": {
-      "url": "http://localhost:3000/admin"
+      "url": "http://127.0.0.1:8080/admin"
     }
   },
   {

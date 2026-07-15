@@ -27,6 +27,7 @@ poisoning, report fabrication, audit tampering, and false compliance claims.
 - `external.memory.write`
 - `external.knowledge.read`
 - `external.knowledge.write`
+- `external.code.execute`
 
 High-risk, network-active, file-writing, credential, destructive, report-claim, and artifact-writing providers require approval before trusted side effects.
 
@@ -43,6 +44,15 @@ allow the call. Those outcomes report `simulated=false`,
 `execution_status=completed`, and `side_effect_executed=true` only when the
 local effect actually happened. Review-blocked and denied external providers
 always report `side_effect_executed=false`.
+
+`external.code.execute` is a high-risk, approval-gated pure computation
+provider. It accepts only the `runwarden-expression-v1` typed AST and enforces
+16 KiB input, 256 nodes, 32 levels of nesting, and 64 KiB output. Its VM has no
+filesystem, network, environment, shell, or process primitives. Successful
+calls report `code_executed=true`, `simulated=false`, resource usage, and
+`side_effect_executed=false`; the provider wrapper and output digest are bound
+into the sealed completion evidence. It is a controlled-code prototype, not a
+general-purpose OS sandbox.
 
 Reviewable local-business evidence is kept in the scenario fixtures:
 `tool-hijack-email-api` shows email review and API denial,

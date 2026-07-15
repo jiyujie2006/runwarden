@@ -4,10 +4,12 @@
     "event_type": "provider_completed",
     "provider": "runwarden.input.inspect",
     "payload": {
-      "decision": "allowed"
+      "decision": "allowed",
+      "execution_status": "completed",
+      "side_effect_executed": false
     },
     "previous_hash": null,
-    "event_hash": "62fe421c4b05d85d51c9b0457d78777f547b4589870de85f11422e4da5037622"
+    "event_hash": "a4c3a56345b01f7194e8fe0fa869086f5122c00bdf86156e3a1dd71fefdfe357"
   },
   {
     "obs_id": "obs_eval_2",
@@ -15,10 +17,11 @@
     "provider": "external.mcp.browser.open_page",
     "payload": {
       "decision": "denied",
+      "execution_status": "not_executed",
       "reason": "blocked localhost/private network egress",
       "side_effect_executed": false
     },
-    "previous_hash": "62fe421c4b05d85d51c9b0457d78777f547b4589870de85f11422e4da5037622",
-    "event_hash": "afd3bf289cdee4eeddf01c46b725cdb8c4dbf46d96c27cc57349927b63eaca8d"
+    "previous_hash": "a4c3a56345b01f7194e8fe0fa869086f5122c00bdf86156e3a1dd71fefdfe357",
+    "event_hash": "27ec07c7fe75434ef9a559040a7404681be5ff2a5320d441f0ae9f5d603f438e"
   }
 ]

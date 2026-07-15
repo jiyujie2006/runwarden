@@ -147,6 +147,49 @@ fn provider_policy_observation_id_changes_with_session_and_arguments() {
 }
 
 #[test]
+fn repeated_provider_intent_gets_unique_observation_id_with_stable_intent_digest() {
+    let provider_id = "runwarden.input.inspect";
+    let registry = registry_with(provider(
+        provider_id,
+        ProviderRisk::Low,
+        vec![SideEffectKind::FileRead],
+    ));
+    let policy = base_policy(provider_id);
+    let mut enforcer = KernelEnforcer::new(registry, policy);
+    let repeated_call = call(
+        provider_id,
+        json!({"root":"evidence","target_path":"/srv/runwarden/evidence/input.txt"}),
+    );
+
+    let first = enforcer.evaluate_call(&repeated_call);
+    let second = enforcer.evaluate_call(&repeated_call);
+    let first_parts = first
+        .observation_id
+        .strip_prefix("obs_")
+        .expect("obs prefix")
+        .split('_')
+        .collect::<Vec<_>>();
+    let second_parts = second
+        .observation_id
+        .strip_prefix("obs_")
+        .expect("obs prefix")
+        .split('_')
+        .collect::<Vec<_>>();
+
+    assert_eq!(first_parts.len(), 2);
+    assert_eq!(second_parts.len(), 2);
+    assert_eq!(
+        first_parts[0], second_parts[0],
+        "intent digest must be stable"
+    );
+    assert_ne!(
+        first_parts[1], second_parts[1],
+        "invocation nonce must be unique"
+    );
+    assert_ne!(first.observation_id, second.observation_id);
+}
+
+#[test]
 fn authz_bound_to_session_actor_rejects_different_actor() {
     let assessment = AssessmentManifest::from_toml_str(
         r#"
@@ -203,6 +246,29 @@ fn network_side_effect_requires_reviewer_approval_even_for_low_risk_provider() {
         outcome.envelope.error_kind,
         Some(ErrorKind::ApprovalInvalid)
     );
+    assert!(!outcome.envelope.side_effect_executed);
+}
+
+#[test]
+fn public_egress_is_fail_closed_when_no_hosts_are_allowlisted() {
+    let provider_id = "external.low_risk_network";
+    let registry = registry_with(provider(
+        provider_id,
+        ProviderRisk::Low,
+        vec![SideEffectKind::Network],
+    ));
+    let mut policy = KernelPolicy::default();
+    policy.allow_provider(provider_id);
+    policy.active_assessment = true;
+    let mut enforcer = KernelEnforcer::new(registry, policy);
+
+    let outcome = enforcer.evaluate_call(&call(
+        provider_id,
+        json!({"endpoint":"https://public.example/v1"}),
+    ));
+
+    assert_eq!(outcome.decision, PolicyDecision::Denied);
+    assert_eq!(outcome.envelope.error_kind, Some(ErrorKind::EgressDenied));
     assert!(!outcome.envelope.side_effect_executed);
 }
 

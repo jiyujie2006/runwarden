@@ -8,7 +8,7 @@
     "obs_ref": "obs_path_escape_inspect",
     "reason": "file request was inspected",
     "arguments": {
-      "input_path": "benign/request.md"
+      "input_path": "attacks/path-escape.md"
     }
   },
   {

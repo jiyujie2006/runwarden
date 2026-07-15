@@ -24,14 +24,21 @@ runwarden check --strict --json
 
 `runwarden demo` starts the Rust console at `http://127.0.0.1:8088` and the
 LLM proxy at `http://127.0.0.1:8787/v1`. The browser console streams sealed
-model-call JSONL and MCP provider-call events. Approval buttons update
-`.runwarden/approvals/*.json`; MCP retries load matching approved records and
-consume them once.
+model-call JSONL and MCP provider-call events. It first atomically reserves
+8787; an occupied port aborts startup. Each run gets a fresh
+`.runwarden/runs/demo-*` directory. Approval POSTs require the capability in
+the printed `Reviewer:` URL, exact Host/Origin, and append a sealed decision
+audit before MCP can claim and consume a matching record once.
 
 When running an agent from a different working directory, set:
 
 ```bash
-export RUNWARDEN_STATE_DIR="$PWD/.runwarden"
+# Copy both values from the server startup output.
+export RUNWARDEN_STATE_DIR="/absolute/repo/.runwarden/runs/demo-..."
+export RUNWARDEN_PROXY_CLIENT_TOKEN="<64-hex>"
+export RUNWARDEN_SESSION_ID="demo-$(date +%s%N)-$$"
+export RUNWARDEN_ACTOR_ID=opencode-demo-agent
+unset RUNWARDEN_LLM_API_KEY  # upstream key remains only in the proxy process
 export XDG_CONFIG_HOME=/tmp/oc-runwarden/xdg/config
 export XDG_DATA_HOME=/tmp/oc-runwarden/xdg/data
 export XDG_CACHE_HOME=/tmp/oc-runwarden/xdg/cache

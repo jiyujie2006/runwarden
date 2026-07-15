@@ -2,33 +2,37 @@
 
 Every meaningful Runwarden decision should be traceable to an observation id.
 Contest reports are accepted only when claims cite references that start with
-`obs_`, exist in the verified trace, and support the claim semantics.
+`obs_`, exist exactly once in a non-empty verified trace, and match a complete
+typed support predicate. Empty reports, empty traces, duplicate observation
+ids, and partial predicates fail closed.
 
 ## Claim Support
 
-Report claims may include structured support:
+Every report claim must include structured support. The following five fields
+are required and must match the cited `TraceEvent` exactly:
 
 - `provider`
 - `event_type`
 - `decision`
 - `execution_status`
 - `side_effect_executed`
-- `simulated`
+- `simulated` (required when the event is simulated)
 
-When present, lint validates those fields against the cited trace event. Claims
-without structured support use text semantics only for clearly completed,
-allowed, denied, blocked, rejected, or review-blocked behavior. A plain
-`completed` claim requires the cited trace payload to state
-`execution_status=completed`; the event type alone is not sufficient. An
-`allowed` claim can be supported by an allowed/completed decision.
+Lint does not infer security semantics from words such as `allowed`, `blocked`,
+or `completed` in free-form prose. Prose is presentation only; the typed
+predicate is the machine-verifiable claim. `decision` and `execution_status`
+must use the supported enum values, and impossible combinations (for example a
+denied decision with an executed side effect) are rejected. A provider name by
+itself can never support a safety conclusion. Simulated replay observations
+must state `simulated=true`, `execution_status=simulated`, and
+`side_effect_executed=false`.
 
-Denied, blocked, rejected, and review-blocked text claims without structured
-support pass only when the cited trace payload states
-`side_effect_executed=false`. If a claim needs different semantics, it must use
-structured support that explicitly matches the trace fields.
-Simulated replay observations must state `simulated=true` in structured
-support; they do not support plain completed or allowed claims for trusted
-external side effects.
+Live kernel observations use an id of the form
+`obs_<intent-digest>_<invocation-key>`. The first component remains stable for
+equivalent decision content, while the second concatenates a process-epoch
+digest with a server-owned monotonic sequence so repeated calls cannot collapse
+into one observation. Hand-authored deterministic scenario fixtures may keep
+their stable `obs_*` ids, provided each id occurs only once in the sealed chain.
 
 Scenario replay trace payloads include the provider call arguments that led to
 the cited decision so judges can inspect the attempted target without executing

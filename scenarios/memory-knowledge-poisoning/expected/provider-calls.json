@@ -8,7 +8,7 @@
     "obs_ref": "obs_memory_poison_inspect",
     "reason": "retrieved knowledge was inspected",
     "arguments": {
-      "input_path": "benign/request.md"
+      "input_path": "attacks/prompt-injection.md"
     }
   },
   {

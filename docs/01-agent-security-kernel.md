@@ -42,10 +42,11 @@ same authz id. Reviewer decisions are represented as Rust-owned
 Trace events are append-only and hash-chain verified. Trace export supports
 provider, event type, `obs_*` prefix, offset/limit, and byte-budget filters.
 
-Reports cannot render successfully unless every claim cites known `obs_*`
-references that support the claim semantics. Claims may use structured support
-fields for exact provider, event type, decision, execution status, and
-side-effect assertions.
+Reports cannot render successfully unless every claim cites a unique, known
+`obs_*` reference and declares a complete typed predicate for provider, event
+type, decision, execution status, and side-effect state. Those fields must
+match the sealed event exactly; lint never infers authority from free-form
+claim wording.
 
 ## External Providers
 
