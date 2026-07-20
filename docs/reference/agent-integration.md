@@ -21,6 +21,23 @@ loopback port before it activates a durable demo or prints trusted launcher
 values. If another process owns the port, startup fails closed instead of
 directing model traffic to that process.
 
+The reserved listener does not accept model requests until the embedded proxy
+has initialized its journal sink against the exact active story, session, and
+instance-token hash. A standalone proxy validates the same trusted inherited
+context before binding. The launcher canonicalizes the configured LLM upstream
+origin and freezes it into the session's provider-specific network authority;
+neither an agent request nor agent configuration can replace that origin,
+state directory, token, or model budget.
+
+For every accepted model call, the proxy commits the active-context, origin,
+input-filter, and model call/input-byte budget transition to SQLite before any
+upstream connection. It commits the response/filter and output-byte evidence
+before releasing response bytes. A journal failure before forwarding reaches
+no upstream; a failure after upstream contact withholds the completion, marks
+evidence invalid when possible, and returns `503`. Raw prompts, completions,
+filter evidence, tool arguments, API keys, and instance tokens are not written
+to the story journal or a parallel live JSONL trace.
+
 OpenCode also reads user-level configuration. For a strict Runwarden-only demo,
 run OpenCode with clean `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`,
 and `XDG_STATE_HOME` directories, place the Runwarden config at

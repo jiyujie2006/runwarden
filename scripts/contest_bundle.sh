@@ -39,7 +39,6 @@ mkdir -p "$BUNDLE"
 cp README.md "$BUNDLE/README.md"
 cp SUBMISSION.md "$BUNDLE/SUBMISSION.md"
 cp -R docs "$BUNDLE/docs"
-rm -rf "$BUNDLE/docs/superpowers"
 cp -R redteam "$BUNDLE/redteam"
 find "$BUNDLE/redteam" \( -type d -name "__pycache__" -o -type f -name "*.pyc" \) -prune -exec rm -rf {} +
 cp -R schemas "$BUNDLE/schemas"

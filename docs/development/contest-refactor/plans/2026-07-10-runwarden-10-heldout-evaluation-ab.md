@@ -1,7 +1,5 @@
 # Held-Out Evaluation And A/B Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Goal:** Replace fixture self-consistency metrics with a frozen, provenance-tracked development/held-out evaluation that reports security, benign utility, approval correctness, evidence truth, and matched monitor-only versus enforced outcomes.
 
 **Architecture:** Dataset manifests group every original and mutation by `lineage_id` before splitting. AgentDojo and InjecAgent material are pinned and attributed under MIT; held-out raw inputs remain private by evaluation policy, not by a false license claim. A dedicated materialization process separates and signs a label-free input set plus label sidecar, then exits. A different label-blind proposal process reads only the input set and creates a signed, side-effect-free proposal set. Evaluation forks those exact templates into pristine counterfactual and enforced arms; only a later scoring process opens the sealed labels after both arms are terminal. Rust assurance reports descriptive sample counts and release intervals at the independent lineage-cluster level from Plan 6 signed evidence artifacts.

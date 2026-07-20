@@ -22,9 +22,9 @@ an event count and final event hash, not copied historical events.
 `StateStore::append_event` appends standalone observations only while a native
 story's evidence state is `Pending`, through one SQLite immediate transaction.
 Legacy-derived, incomplete, invalid, and verified stories are immutable through
-this entry point. Its public payload allowlist is `ModelCall`,
-`ToolProposal`, `InputConsumed`, `SandboxDecision`, and `MonitorObservation`.
-Operation proposal, causal link, policy decision, approval lifecycle, provider
+this entry point. Its public payload allowlist is `InputConsumed`,
+`SandboxDecision`, and `MonitorObservation`. Model call, tool proposal,
+operation proposal, causal link, policy decision, approval lifecycle, provider
 execution, and evidence-verification events are domain-owned and are rejected
 by the public append API; their Rust state transitions append them through the
 crate-private transactional helper instead.
@@ -46,6 +46,22 @@ operation relationship together.
 `CausalLink`; only the proposal-aware operation transaction establishes and
 verifies the reciprocal proposal-to-operation relationship or its explicit
 gap.
+
+Live model-call observations use domain-owned begin and completion
+transactions rather than the public standalone append path. Begin atomically
+binds the exact active instance, token hash, story/session, canonical upstream
+origin, model call/input-byte budget, model row, and typed request/filter
+events and frames before forwarding is possible. Completion atomically binds
+the response hash, typed output-filter result, output-byte accounting, and its
+events and frames before response bytes are released. A row without its
+required sealed observations, or observations without the matching row and
+budget transition, are not valid model lifecycle evidence.
+
+When an upstream response has been received but the completion transaction
+cannot commit, Runwarden does not expose that response. It attempts a
+domain-owned transition to `EvidenceInvalid` and the proxy returns a bounded
+`503`; it does not fabricate a completed model observation from the upstream
+status or from a proxy log.
 
 Before a public append, Runwarden verifies the complete current story evidence.
 The shared helper then allocates the next story-local sequence, seals the event,
@@ -77,6 +93,13 @@ completion. Tool-proposal rows contain a canonical typed safe argument view
 and the complete argument hash, never raw tool arguments. Raw prompts,
 completions, tool arguments, authorization headers, and API keys do not enter
 model/proposal rows or operation-proposed/causal-link event payloads.
+
+Model events likewise contain only bounded identifiers, endpoint/model and
+filter/risk codes, hashes, sizes, counts, and release booleans. Filter
+inspection evidence may contain excerpts of inspected text and therefore
+never enters model rows, events, frames, compatibility output, or error logs.
+The inherited instance token and its raw value are also absent; only its
+SHA-256 digest participates in the trusted active-context check.
 
 Legacy resources use `ResourceClaim::OpaqueLegacy`, which is display-only and
 is not an executable claim. The adapter does not create approvals, policy

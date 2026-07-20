@@ -992,9 +992,14 @@ dependencies = [
  "clap",
  "runwarden-kernel",
  "runwarden-providers",
+ "runwarden-state",
  "serde_json",
  "tempfile",
+ "time",
  "ureq",
+ "url",
+ "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -1066,6 +1071,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "time",
+ "url",
  "uuid",
 ]
 

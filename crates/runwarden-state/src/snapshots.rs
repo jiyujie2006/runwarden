@@ -17,7 +17,7 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use crate::operations::{
     InvocationBindingMaterial, invocation_binding_hash, load_frozen_proposal_tx,
 };
-use crate::proposals::verify_operation_causal_link_tx;
+use crate::proposals::{verify_model_lifecycle_tx, verify_operation_causal_link_tx};
 use crate::sessions::load_session_record;
 use crate::stories::load_story_record;
 use crate::{
@@ -144,6 +144,7 @@ impl StateStore {
         let snapshot = load_story_snapshot_tx(&transaction, story_id)?;
         verify_snapshot_anchor_tx(&transaction, &snapshot)?;
         verify_story_operation_causal_links_tx(&transaction, &snapshot.operations)?;
+        verify_model_lifecycle_tx(&transaction, story_id, snapshot.authority.session_id)?;
         let operation = snapshot
             .operations
             .into_iter()
@@ -185,6 +186,7 @@ impl StateStore {
         let snapshot = load_story_snapshot_tx(&transaction, story_id)?;
         verify_snapshot_anchor_tx(&transaction, &snapshot)?;
         verify_story_operation_causal_links_tx(&transaction, &snapshot.operations)?;
+        verify_model_lifecycle_tx(&transaction, story_id, snapshot.authority.session_id)?;
         transaction.commit()?;
         Ok(snapshot)
     }
@@ -267,6 +269,7 @@ pub(crate) fn load_story_evidence_tx(
             "stored story evidence failed verification: {error}"
         ))
     })?;
+    verify_model_lifecycle_tx(connection, story_id, evidence.story.authority.session_id)?;
     Ok(evidence)
 }
 

@@ -1,7 +1,5 @@
 # Linux Sandbox And Code Scenario Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Goal:** Add one bounded Python code provider whose legitimate example runs inside certified Linux isolation and whose filesystem, network, child-process, and resource escape attempts are blocked and evidenced in the sixth formal scenario.
 
 **Architecture:** A dedicated `runwarden-sandbox-worker` accepts a narrow versioned request, installs mandatory isolation, and replaces itself with one fixed interpreter via `execveat`. It does not attempt to return after exec. The provider supervisor owns process output/exit collection and constructs the typed result. It launches pinned bubblewrap with user/mount/pid/network namespaces, a manifest-pinned read-only Python runtime closure, workspace-only write access, cleared environment, process cleanup, and seccomp/Landlock enforcement. Delegated cgroup v2 plus wall/output limits enforce resources. Unsupported or degraded isolation fails closed; no unsandboxed fallback exists.

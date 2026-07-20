@@ -28,7 +28,40 @@ the server invalidates the old reviewer nonce. The reviewer listener, reviewer
 state, and fixed loopback LLM proxy listener are prepared before durable demo
 activation. If either port is occupied or reviewer setup fails, no active
 instance is committed and no trusted token or OpenCode instructions are
-printed.
+printed. The reserved proxy listener does not accept traffic at that point;
+after activation, its journal sink must validate the exact active instance,
+story, session, and token hash before the accept loop starts. A standalone LLM
+proxy performs the same trusted inherited-context validation before binding.
+
+The launcher canonicalizes the configured LLM upstream origin and freezes it
+in the session's provider-specific network authority. An empty authority or an
+origin mismatch is a denial. Neither an agent request nor the reviewer browser
+can replace the origin, state directory, instance token, or model budget.
+
+## LLM proxy journal boundary
+
+For each supported model endpoint, the proxy first runs one immediate SQLite
+begin transaction. It re-reads the singleton active instance, exact startup
+token hash, Native/Pending story, active unexpired session, and frozen
+provider/origin authority; CAS-accounts one model call and the normalized input
+bytes; and commits the redacted model row plus typed request/filter events and
+replay frames. Only a successful return permits an upstream request. A cached
+startup snapshot is not forwarding authority, and a journal failure returns a
+bounded `503` without contacting the upstream.
+
+After an upstream response is inspected, the completion transaction records
+its hash, typed filter/risk codes, release decision, bounded output size,
+output-byte accounting, and corresponding events/frames. It commits before
+response bytes are released. If that commit fails, the completion is withheld,
+the proxy attempts to transition the story to invalid evidence, and the caller
+receives `503`. Diagnostics include only a bounded model-call id and error
+category.
+
+Raw prompts, completions, filter evidence snippets, tool arguments,
+authorization headers, API keys, and instance tokens never enter model rows,
+story events, replay frames, logs, or a second live JSONL chain. The deprecated
+`trace_export` option can request only compatibility output derived from a
+verified SQLite snapshot; it is not a live evidence writer.
 
 ## Read routes
 
@@ -184,4 +217,7 @@ JSON errors use a bounded envelope:
 Journal details and private provider input are never included. Provider
 completion is reported only after its terminal journal commit. Once execution
 has started, an unprovable result becomes `outcome_unknown`; neither HTTP,
-SSE, status, nor resume silently repeats the side effect.
+SSE, status, nor resume silently repeats the side effect. Model completion is
+likewise released only after its completion evidence commits; a post-upstream
+journal failure invalidates evidence when possible and returns `503`, never an
+untraced model body.

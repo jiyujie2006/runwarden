@@ -1,7 +1,5 @@
 # Story Contracts And Legacy Adapter Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Goal:** Freeze a Rust-owned Security Story v1 contract and convert the five existing demo artifacts into honest, explicitly incomplete story snapshots.
 
 **Architecture:** Add new story, operation, resource, session, and event types beside the legacy provider contracts. The new event envelope hashes only redacted payloads and argument commitments. A Rust `LegacyStoryAdapter` converts current `webui.json` files without claiming that fixture-derived causal evidence is fully verified.

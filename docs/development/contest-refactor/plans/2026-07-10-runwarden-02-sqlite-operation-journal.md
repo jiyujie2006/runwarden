@@ -1,7 +1,5 @@
 # SQLite Operation Journal Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Goal:** Replace file-backed approval and multi-writer JSONL authority with a local SQLite WAL journal that atomically persists stories, operations, approvals, and ordered evidence.
 
 **Architecture:** A new `runwarden-state` crate depends on `runwarden-kernel` contracts and opens a short-lived SQLite connection per operation. `BEGIN IMMEDIATE` transactions serialize story sequence allocation and approval leases across processes. Private arguments are stored separately from redacted, hash-chained events and are never returned by snapshot/export APIs.

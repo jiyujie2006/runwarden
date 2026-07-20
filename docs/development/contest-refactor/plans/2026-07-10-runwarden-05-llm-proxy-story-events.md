@@ -1,7 +1,5 @@
 # LLM Proxy Story Events Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Goal:** Put model requests, filter decisions, responses, and proposed tool calls into the same authoritative story and causally link proposals to durable provider operations.
 
 **Architecture:** The LLM proxy loads the single active demo context from `runwarden-state` at startup. Before forwarding, it commits a redacted model-call intent. After response inspection, it commits response and tool-proposal events. A small causal-link table stores provider/action/canonical-argument commitments; the runtime links by upstream tool-call id first, then by a unique exact commitment, and otherwise emits an explicit unresolved event. Time proximity is never authoritative.

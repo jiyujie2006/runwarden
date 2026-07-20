@@ -1,7 +1,5 @@
 # Reviewer WebUI Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Goal:** Replace the single-file console with a Chinese-first security-story workbench that makes attack, authority, policy, approval, execution, and evidence understandable in ten seconds and uses the same React components for live and verified replay.
 
 **Architecture:** A Vite-built React app consumes only generated Rust story contracts. `useSyncExternalStore` subscribes to interchangeable embedded, replay, and live story sources. Rust serves assets, computes all security states, verifies replay bundles, protects approval APIs, and generates CSP-hashed self-contained offline HTML. The frontend owns layout, selection, playback, and form delivery only.

@@ -1,7 +1,5 @@
 # Signed Story Bundles Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Goal:** Export one portable, redacted story snapshot whose files, event chain, report claims, provenance, and signing key identity are verified by Rust before replay.
 
 **Architecture:** The exporter reads one versioned terminal story snapshot, verifies event/report semantics, writes only an allowlisted relative-path bundle, signs canonical `manifest.json` with an owner-only workspace Ed25519 key, and writes detached `manifest.sig`. The verifier rejects path tricks, missing/extra files, checksum changes, signature changes, chain failures, unsupported schemas, and unsupported report claims before returning a replay model.

@@ -171,6 +171,7 @@ fn demo_scenario_writes_real_trace_report_webui_and_story_json() {
     assert_eq!(story.authority.authz_id, "legacy-not-configured");
     assert_eq!(story.authority.authz_state, "not_configured");
     assert!(story.authority.files.is_empty());
+    assert!(story.authority.networks.is_empty());
     assert_eq!(
         story.authority.allowed_providers,
         [
@@ -661,6 +662,15 @@ fn demo_interactive_approves_and_completes_one_original_provider_call() {
             .contains(&instance_token)
     );
     assert_eq!(story.operations.len(), 1);
+    assert_eq!(story.authority.networks.len(), 1);
+    assert_eq!(
+        story.authority.networks[0].provider,
+        runwarden_llm_proxy::MODEL_EGRESS_PROVIDER
+    );
+    assert_eq!(
+        story.authority.networks[0].allowed_origins,
+        ["https://api.opencode.ai".to_owned()]
+    );
     assert_eq!(story.operations[0].operation_id.to_string(), operation_id);
     assert_eq!(
         story.operations[0].approval.as_ref().unwrap().state,
@@ -780,35 +790,34 @@ fn interactive_demo_proxy_bind_failure_never_activates_state() {
 }
 
 #[test]
-fn interactive_demo_preserves_stale_trace_and_never_activates_state() {
+fn interactive_demo_ignores_and_preserves_legacy_trace_file() {
     let _guard = demo_lock().lock().expect("demo lock");
     let temp = tempfile::tempdir().unwrap();
     let state_dir = temp.path().join("state");
     fs::create_dir_all(&state_dir).unwrap();
     let trace_path = state_dir.join("llm-proxy-trace.jsonl");
     fs::write(&trace_path, b"prior-evidence\n").unwrap();
-    let child = Command::new(env!("CARGO_BIN_EXE_runwarden"))
-        .current_dir(workspace_root())
-        .args(["demo", "--port", "0", "--json"])
-        .env("RUNWARDEN_STATE_DIR", &state_dir)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn stale-trace failure demo");
-
-    let stderr = wait_for_failed_child(child, "stale-trace failure demo");
-    assert!(
-        stderr.contains("LLM proxy trace path already exists"),
-        "stderr: {stderr}"
+    let mut child = ChildGuard::new(
+        Command::new(env!("CARGO_BIN_EXE_runwarden"))
+            .current_dir(workspace_root())
+            .args(["demo", "--port", "0", "--json"])
+            .env("RUNWARDEN_STATE_DIR", &state_dir)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn demo with legacy trace"),
     );
+    let startup = read_startup_json(&mut child);
+    assert_eq!(startup["mode"], "interactive_demo");
     assert_eq!(fs::read(&trace_path).unwrap(), b"prior-evidence\n");
     assert!(
         StateStore::open(&state_dir)
             .unwrap()
             .active_demo()
             .unwrap()
-            .is_none()
+            .is_some()
     );
+    child.stop();
 }
 
 #[cfg(unix)]

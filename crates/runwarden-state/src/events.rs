@@ -123,7 +123,7 @@ pub(crate) fn append_event_and_frame_tx(
     append_verified_event_and_frame_tx(transaction, input)
 }
 
-fn append_verified_event_and_frame_tx(
+pub(crate) fn append_verified_event_and_frame_tx(
     transaction: &Transaction<'_>,
     input: NewStoryEvent,
 ) -> Result<CommittedStoryEvent, JournalError> {
@@ -365,9 +365,7 @@ fn append_verified_event_and_frame_tx(
 fn is_standalone_payload(payload: &StoryEventPayload) -> bool {
     matches!(
         payload,
-        StoryEventPayload::ModelCall { .. }
-            | StoryEventPayload::ToolProposal { .. }
-            | StoryEventPayload::InputConsumed { .. }
+        StoryEventPayload::InputConsumed { .. }
             | StoryEventPayload::SandboxDecision { .. }
             | StoryEventPayload::MonitorObservation { .. }
     )

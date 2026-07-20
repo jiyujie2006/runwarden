@@ -111,6 +111,31 @@ or repeated start creates no partial state or orphan event. Approval lifecycle
 events carry the operation id, so their `obs_*` ids appear in that operation's
 ordered observation references.
 
+## Native Model Lifecycle Evidence
+
+SQLite is also the sole live authority for model-call evidence. Before an
+upstream request is sent, one immediate begin transaction verifies the exact
+active instance-token hash, story/session and unexpired authority, and the
+provider-specific canonical upstream origin. It CAS-accounts the model call
+and normalized input bytes, writes the redacted model commitment, and appends
+the typed request/filter observations plus replay frames. Only the sealed
+events receive citeable `obs_*` ids; a low-level model row alone is not report
+evidence.
+
+After the upstream response is inspected, one completion transaction records
+the response hash, typed filter/risk codes, release decision, bounded output
+size, output-byte accounting, and the corresponding events and frames. The
+transaction must commit before response bytes are released. If it cannot
+commit after upstream contact, the response is withheld, Runwarden attempts
+to mark the story evidence invalid, and the proxy returns a bounded `503`.
+Logs may identify only the bounded model-call id and an error category.
+
+Prompt and completion text, filter evidence snippets, raw tool arguments,
+authorization headers, API keys, and the inherited instance token never enter
+model rows, sealed events, replay frames, compatibility output, or journal
+errors. Their evidence representations are typed stable codes, sizes,
+booleans, and SHA-256 commitments.
+
 Proposal-aware operation creation applies the same atomic evidence rule. It
 commits `operation_proposed` followed by exactly one `causal_link` event in the
 same transaction as the operation/resource rows and proposal claim. Resolved
@@ -132,12 +157,12 @@ credentials, or arbitrary JSON.
 Standalone native observations use the same atomic event/frame helper through
 `StateStore::append_event` while evidence is `Pending`; non-native or
 non-pending stories are rejected so a verified chain head cannot drift. The
-public method admits only model-call,
-tool-proposal, input-consumed, sandbox-decision, and monitor-observation
-payloads; state-owning operation, causal-link, policy, approval, execution, and
-evidence-verification payloads must accompany their dedicated Rust
-transaction. Duplicate event or observation ids conflict without opening a
-sequence gap, and timestamps cannot move the story clock backwards.
+public method admits only input-consumed, sandbox-decision, and
+monitor-observation payloads. Model-call, tool-proposal, operation,
+causal-link, policy, approval, execution, and evidence-verification payloads
+must accompany their dedicated Rust transaction. Duplicate event or
+observation ids conflict without opening a sequence gap, and timestamps cannot
+move the story clock backwards.
 Stores targeting the same journal coordinate full-chain append verification
 inside one process, while SQLite `BEGIN IMMEDIATE` plus a bounded pre-input
 retry remains the cross-process serialization authority. No transaction,
@@ -166,9 +191,12 @@ Scenario replay trace payloads include the provider call arguments that led to
 the cited decision so judges can inspect the attempted target without executing
 the provider.
 
-LLM proxy model-call traces are written as sealed JSONL `TraceEvent` records.
-Each line includes `previous_hash` and `event_hash`; CLI trace verification
-accepts this JSONL form and rejects malformed or unsigned legacy lines.
+The LLM proxy no longer appends a second live JSONL trace. Its deprecated
+`trace_export` compatibility option is not an evidence writer; any output
+requested through it must be derived from a verified SQLite story snapshot and
+cannot advance or repair the authoritative event chain. The native journal
+commit succeeds or fails independently of that optional derived output;
+publication remains a separate compatibility step.
 
 MCP report lint temporarily uses the legacy provider-call trace store as a
 read-only compatibility evidence source, not inline trace events supplied by

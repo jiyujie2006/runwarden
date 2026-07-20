@@ -1,7 +1,5 @@
 # Non-Circular Scenario Runner Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Goal:** Make formal scenarios consume real task, attack, environment, and agent-driver inputs, generate operations through the production runtime, and evaluate independent security properties after execution.
 
 **Architecture:** A Rust scenario loader separates `ScenarioInputs` from `ScenarioAssertions` at the type and call boundaries. Deterministic and OpenCode drivers receive only inputs plus a runtime handle. After the driver completes, assurance loads assertions separately and evaluates generated story events. The current five golden fixtures migrate one by one; `expected/provider-calls.json` never enters the new runner.

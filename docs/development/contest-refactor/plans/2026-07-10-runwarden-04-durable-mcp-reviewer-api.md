@@ -1,7 +1,5 @@
 # Durable MCP And Reviewer API Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Goal:** Make one agent tool request survive review, approval, execution, disconnect, and status lookup as one durable operation with no manual parameter retry.
 
 **Architecture:** A new Rust `runwarden-runtime` crate coordinates the Plan 1 kernel contracts, Plan 2 journal, and Plan 3 executor. MCP parses only provider inputs, resolves the active server-owned session, and delegates to the runtime. The runtime persists proposal and policy before review, waits on SQLite, acquires/consumes a one-shot lease before execution, and returns the same operation on status/resume. Axum reviewer APIs use nonce, origin, expiry, and entity-version checks; SSE replays committed events by sequence.

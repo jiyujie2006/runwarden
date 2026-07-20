@@ -10,7 +10,7 @@ use common::{ApiFixture, ExpiredReaderFixture, REVIEWER_ADDR, SseFixture, json_b
 use runwarden_cli::web_server::{ReviewerApiState, reviewer_router};
 use runwarden_kernel::{
     story::StoryId,
-    trace::{EventCode, Sha256Digest, StoryEvent, StoryEventPayload},
+    trace::{EventCode, StoryEvent},
 };
 use runwarden_state::StateStore;
 use serde_json::Value;
@@ -284,23 +284,11 @@ async fn oversized_event_closes_sse_but_remains_available_from_json_api() {
     let risk_codes = (0..3_000)
         .map(|index| EventCode::try_from(format!("risk-{index:04}-{}", "x".repeat(110))).unwrap())
         .collect();
-    let oversized = fixture.append_payload(
-        3,
-        StoryEventPayload::ModelCall {
-            model_call_id: EventCode::try_from("oversized-model-call".to_owned()).unwrap(),
-            phase: EventCode::try_from("response".to_owned()).unwrap(),
-            model_id: None,
-            content_hash: Sha256Digest::from_bytes(b"oversized-model-call"),
-            filter_state: None,
-            risk_codes,
-            forwarded: Some(false),
-            content_bytes: 0,
-            proposal_count: None,
-        },
-    );
+    let oversized = fixture.append_oversized_model_filter(risk_codes);
+    assert_eq!(oversized.sequence, 4);
     assert!(serde_json::to_vec(&oversized).unwrap().len() > 256 * 1_024);
 
-    let response = open_sse(&fixture, sse_request(story_id, 2)).await;
+    let response = open_sse(&fixture, sse_request(story_id, 3)).await;
     assert_eq!(response.status(), StatusCode::OK);
     let mut stream = response.into_body().into_data_stream();
     let next = timeout(Duration::from_secs(3), stream.next())
@@ -311,7 +299,7 @@ async fn oversized_event_closes_sse_but_remains_available_from_json_api() {
     let response = send(
         &fixture.app,
         Request::builder()
-            .uri(format!("/api/stories/{story_id}/events?after_seq=2"))
+            .uri(format!("/api/stories/{story_id}/events?after_seq=3"))
             .body(Body::empty())
             .unwrap(),
     )
@@ -319,7 +307,7 @@ async fn oversized_event_closes_sse_but_remains_available_from_json_api() {
     assert_eq!(response.status(), StatusCode::OK);
     let events = json_body(response).await;
     assert_eq!(events.as_array().unwrap().len(), 1);
-    assert_eq!(events[0]["sequence"], 3);
+    assert_eq!(events[0]["sequence"], 4);
     assert_eq!(
         events[0]["payload"]["risk_codes"].as_array().unwrap().len(),
         3_000

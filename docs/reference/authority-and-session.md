@@ -62,14 +62,33 @@ data: provider, file, network, email, store, code, input, evidence, and artifact
 authority are separate fields rather than caller-defined JSON. Native snapshot
 views reject unknown fields. `max_argument_bytes` and `max_wall_time_ms` are
 per-operation ceilings; call, file-byte, and network-byte budgets are cumulative
-session counters; model call/input/output budgets are reserved separately by
-the model proxy.
+session counters; model call/input/output budgets are accounted separately by
+the model proxy through checked, versioned SQLite updates.
 
 SQLite schema v2 creates exactly one zeroed `model_usage` row for every new or
 migrated session. A redacted `model_calls` or `tool_proposals` row is evidence
 input only: recording it does not reserve budget, authorize network egress, or
 permit model forwarding. Those decisions remain bound to the active session
 and the proxy's per-call Rust transaction.
+
+The trusted interactive launcher canonicalizes the configured LLM upstream
+and freezes its exact origin in a provider-specific `NetworkAuthority` before
+the story and session are activated. The origin is not supplied by an agent
+request and an empty network-authority set is a denial, not a default allow.
+Every model-call begin transaction re-reads that immutable authority and
+requires the exact provider/origin together with the active instance id,
+startup instance-token hash, story/session binding, active authz state, and
+session expiry. A startup snapshot alone cannot authorize a later forward.
+
+That same immediate transaction performs checked CAS accounting for one model
+call and the complete normalized input bytes before committing the model row
+and request/filter evidence. The completion transaction performs the checked
+output-byte accounting and commits the response/filter evidence before the
+response may be released. Exhaustion, arithmetic overflow, stale usage
+version, authority mismatch, deactivation, token replacement, or expiry leaves
+the upstream untouched when detected before forwarding. Raw token, API key,
+prompt, completion, filter evidence, and tool arguments never become authority
+or budget material.
 
 Proposal linkage is provenance, not authority. Resolver predicates and
 composite foreign keys constrain candidates to the operation's exact story and

@@ -1,7 +1,5 @@
 # Release And Submission Hardening Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Goal:** Deliver a clean-room-verifiable contest package that starts the live hero demo or a signed replay in minutes, contains no repository-relative assumptions, and presents one coherent eight-minute security narrative.
 
 **Architecture:** Release mode builds pinned Rust binaries and deterministic WebUI assets, verifies six native stories plus evaluation/performance evidence, exports a Plan 6 `EvidenceArtifactKind::ContestSubmission`, and copies an explicit whitelist into a staging directory. Preflight validates live dependencies and the fallback bundle before presentation. Clean-room tests unpack the final replay archive outside the repository, clear ambient configuration, semantically verify every nested artifact, and run replay using included files only.

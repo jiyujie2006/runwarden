@@ -1,7 +1,5 @@
 # Typed Claims And ProviderExecutor Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Goal:** Replace argument-key guessing and direct tool dispatch with provider-specific resource extraction, pure Rust policy evaluation, and one execution interface that requires a frozen permit.
 
 **Architecture:** `runwarden-providers` extracts one canonical `ResourceClaim` from each supported provider request. A new kernel `PolicyEngine` evaluates that claim against a server-owned `SessionContext` without consuming approval state. `DefaultProviderExecutor` is the only public side-effect entry point; it accepts an `ExecutionPermit` whose hashes must match the frozen request. A separate monitor-only observer records hypothetical effects, never implements the executor trait, and cannot delegate.

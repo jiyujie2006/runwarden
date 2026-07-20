@@ -1,7 +1,5 @@
 # Performance Evidence Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Goal:** Quantify Runwarden's kernel, journal, filter, verification, SSE, and end-to-end overhead with reproducible workloads without turning shared-runner noise into false release claims.
 
 **Architecture:** Criterion microbenchmarks isolate pure components. A Rust end-to-end harness uses fixed payloads, a deterministic delayed upstream, temporary SQLite state, and concurrency 1/16/64. It records HDR histograms, throughput, CPU/RSS where supported, toolchain/hardware metadata, and workload digests. PRs compile and smoke benchmarks; only an approved fixed runner enforces performance budgets.

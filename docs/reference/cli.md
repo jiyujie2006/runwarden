@@ -23,21 +23,42 @@ runwarden check --strict --json
 ## Demo
 
 `runwarden demo` starts the Rust console at `http://127.0.0.1:8088` and the
-LLM proxy at `http://127.0.0.1:8787/v1`. Startup first pre-binds both loopback
+LLM proxy at `http://127.0.0.1:8787/v1`. Startup first reserves both loopback
 listeners and constructs reviewer state, then creates one Native, Live,
 Enforced story/session and claims the state directory's singleton active
-instance. A bind or reviewer setup failure leaves no active instance and emits
-no trusted launcher values. The browser console reads native snapshots,
-resumes committed story events over SSE, and submits
-nonce/origin/version-protected decisions.
+instance. A bind or reviewer setup failure before activation leaves no active
+instance and emits no trusted launcher values. The reserved proxy listener
+does not accept requests until its SQLite journal sink has validated the exact
+active story, session, and instance-token hash. A standalone
+`runwarden-llm-proxy` performs that validation before it binds. The browser
+console reads native snapshots, resumes committed story events over SSE, and
+submits nonce/origin/version-protected decisions.
 
 Launcher paths must be UTF-8 and free of terminal control characters. The
 derived `sandbox` and `runtime` roots must be real direct child directories of
 the canonical state directory; file leaves, symlinks, and escapes fail before
-activation. LLM proxy bind, upstream, API-key environment name, and trace
-values also reject empty or control-character text before they can be logged.
+activation. LLM proxy bind, upstream, API-key environment name, state, and
+deprecated trace-export values also reject empty or control-character text
+before they can be logged. The launcher parses the upstream, freezes its exact
+canonical origin into provider-specific session network authority, and never
+accepts an origin, state directory, or instance token from an agent request.
 An approved original MCP call continues as the same operation and produces at
 most one provider receipt; the operator does not resend provider arguments.
+
+Each model request commits its exact active binding, origin check, input-filter
+decision, and model call/input-byte budget to the native SQLite story before
+the upstream connection. Response/filter evidence and output-byte accounting
+commit before response bytes are released. Pre-forward journal failure reaches
+no upstream. If evidence cannot commit after upstream contact, the completion
+is withheld, the proxy attempts to invalidate story evidence, and it returns a
+bounded `503` without model content or journal details.
+
+There is no direct live LLM JSONL writer. The optional `trace_export` setting
+is deprecated compatibility metadata; it cannot append a parallel chain, and
+any compatibility output requested through it must be derived from a verified
+journal snapshot. Raw prompt/completion text, filter evidence, tool arguments,
+API keys, and instance tokens are not persisted by that path. Supplying the
+option does not itself assert that a compatibility file has been published.
 
 Use a fresh private state directory for each live launch; a second launch on an
 already active directory fails closed. Startup prints the exact trusted values

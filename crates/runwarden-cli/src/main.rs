@@ -21,6 +21,7 @@ use runwarden_kernel::manifest::{AssessmentManifest, AuthzManifestState, Session
 use runwarden_kernel::resource::DataClass;
 use runwarden_kernel::session::{
     AuthoritySnapshot, BudgetSnapshot, EmailAuthority, EvidenceAuthority, InputAuthority,
+    NetworkAuthority,
 };
 use runwarden_kernel::story::{
     EnforcementMode, EvidenceStatus, RunMode, SchemaVersion, SecurityStory, SessionId, StoryId,
@@ -435,12 +436,15 @@ fn run_demo_interactive(
         .unwrap_or_else(|| root.join(".runwarden"));
     let state_dir = preflight_interactive_state_dir(&requested_state_dir)?;
     let prepared_console = server::prepare_console_server("127.0.0.1", port, &state_dir)?;
-    let trace_path = state_dir.join("llm-proxy-trace.jsonl");
-    let prepared_proxy = prepare_llm_proxy(upstream, trace_path.clone())?;
-    require_fresh_llm_trace_path(&trace_path)?;
-    let launch = prepare_interactive_demo(&state_dir)?;
+    let prepared_proxy = prepare_llm_proxy(upstream, &state_dir)?;
+    let launch = prepare_interactive_demo(&state_dir, &prepared_proxy.canonical_origin)?;
+    let proxy_sink = runwarden_llm_proxy::JournalStoryEventSink::from_trusted_token(
+        &prepared_proxy.cli,
+        launch.instance_token.as_str(),
+    )
+    .context("initialize interactive demo LLM proxy journal sink")?;
 
-    spawn_llm_proxy_thread(prepared_proxy);
+    spawn_llm_proxy_thread(prepared_proxy, proxy_sink);
     server::run_console_server(prepared_console, launch, json_output)
 }
 
@@ -468,16 +472,6 @@ fn validate_launcher_path(path: &Path, label: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn require_fresh_llm_trace_path(trace_path: &Path) -> anyhow::Result<()> {
-    match fs::symlink_metadata(trace_path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error).context("inspect interactive LLM proxy trace path"),
-        Ok(_) => anyhow::bail!(
-            "interactive LLM proxy trace path already exists; use a fresh state directory"
-        ),
-    }
-}
-
 fn prepare_trusted_demo_root(state_dir: &Path, leaf: &str, label: &str) -> anyhow::Result<PathBuf> {
     let path = state_dir.join(leaf);
     match fs::create_dir(&path) {
@@ -501,7 +495,10 @@ fn prepare_trusted_demo_root(state_dir: &Path, leaf: &str, label: &str) -> anyho
     Ok(canonical)
 }
 
-fn prepare_interactive_demo(state_dir: &Path) -> anyhow::Result<server::DemoLaunchInfo> {
+fn prepare_interactive_demo(
+    state_dir: &Path,
+    llm_upstream_origin: &str,
+) -> anyhow::Result<server::DemoLaunchInfo> {
     let store = StateStore::open(state_dir).context("open interactive demo state")?;
     let state_dir = state_dir
         .canonicalize()
@@ -562,7 +559,11 @@ fn prepare_interactive_demo(state_dir: &Path) -> anyhow::Result<server::DemoLaun
                 "external.email.send".to_owned(),
             ],
             files: Vec::new(),
-            networks: Vec::new(),
+            networks: vec![NetworkAuthority {
+                provider: runwarden_llm_proxy::MODEL_EGRESS_PROVIDER.to_owned(),
+                allowed_origins: vec![llm_upstream_origin.to_owned()],
+                maximum_classification: DataClass::Internal,
+            }],
             email: Some(EmailAuthority {
                 allowed_recipients: vec![
                     "judge@example.test".to_owned(),
@@ -657,32 +658,43 @@ fn prepare_interactive_demo(state_dir: &Path) -> anyhow::Result<server::DemoLaun
 struct PreparedLlmProxy {
     cli: runwarden_llm_proxy::Cli,
     listener: TcpListener,
+    canonical_origin: String,
 }
 
 fn prepare_llm_proxy(
     upstream: Option<String>,
-    trace_path: PathBuf,
+    state_dir: &Path,
 ) -> anyhow::Result<PreparedLlmProxy> {
-    let trace = trace_path
-        .to_str()
-        .context("interactive LLM proxy trace path is not UTF-8")?
-        .to_owned();
+    let upstream = upstream.unwrap_or_else(|| "https://api.opencode.ai/v1".to_string());
+    let canonical_origin = runwarden_llm_proxy::canonical_upstream_origin(&upstream)
+        .context("validate interactive demo LLM proxy upstream")?;
     let cli = runwarden_llm_proxy::Cli {
         bind: "127.0.0.1".to_string(),
         port: 8787,
-        upstream: upstream.unwrap_or_else(|| "https://api.opencode.ai/v1".to_string()),
+        upstream,
         api_key_env: "RUNWARDEN_LLM_API_KEY".to_string(),
-        trace,
+        state_dir: state_dir.to_path_buf(),
+        trace_export: None,
         max_body_bytes: 8 * 1024 * 1024,
+        max_response_bytes: 8 * 1024 * 1024,
     };
     let listener =
         runwarden_llm_proxy::bind_listener(&cli).context("preflight interactive demo LLM proxy")?;
-    Ok(PreparedLlmProxy { cli, listener })
+    Ok(PreparedLlmProxy {
+        cli,
+        listener,
+        canonical_origin,
+    })
 }
 
-fn spawn_llm_proxy_thread(prepared: PreparedLlmProxy) {
+fn spawn_llm_proxy_thread(
+    prepared: PreparedLlmProxy,
+    sink: runwarden_llm_proxy::JournalStoryEventSink,
+) {
     std::thread::spawn(move || {
-        if let Err(err) = runwarden_llm_proxy::serve_on_listener(prepared.cli, prepared.listener) {
+        if let Err(err) =
+            runwarden_llm_proxy::serve_prepared_on_listener(prepared.cli, prepared.listener, sink)
+        {
             eprintln!("llm proxy error: {err}");
         }
     });

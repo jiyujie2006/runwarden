@@ -88,6 +88,32 @@ do not enter these tables. The low-level `record_model_call` and
 `record_tool_proposal` methods do not forward a request, reserve model budget,
 or independently claim that a model/tool story event occurred.
 
+The live proxy uses a higher-level journal sink for the authoritative model
+lifecycle; it does not compose those low-level methods with standalone event
+appends. Its begin transaction re-reads the singleton active instance and
+requires the exact startup instance-token hash, story, session, Native/Pending
+evidence, active unexpired authority, and provider-specific canonical LLM
+origin. In that same immediate transaction it uses checked CAS accounting for
+one model call plus the normalized input bytes, inserts the model-call
+commitment, and appends the typed request/filter events and replay frames. A
+cached startup snapshot is not forwarding authority. Any failed check, counter
+update, row, event, or frame rolls back, and the upstream request is not sent.
+
+The completion transaction records only the response commitment, typed output
+filter and risk codes, release decision, bounded output byte count, and the
+corresponding model events and replay frames while CAS-accounting output-byte
+usage. It commits before response bytes may be released to the agent. If an
+upstream response exists but completion evidence cannot commit, the proxy
+attempts the journal's evidence-invalid transition and returns a bounded `503`
+instead of returning an untraced completion. Diagnostics contain only the
+bounded model-call id and an error category, never model content or journal
+details.
+
+The raw instance token, prompt, completion, filter evidence snippets, tool
+arguments, authorization headers, and API keys are neither model-table values
+nor event/frame fields. Only typed identifiers, stable codes, sizes, booleans,
+and SHA-256 commitments cross the model journal boundary.
+
 `create_operation_with_proposal` is the authoritative proposal-to-operation
 link boundary. The caller must leave both operation causal ids empty, and the
 link query must exactly match the operation's story, session, provider,
@@ -127,6 +153,12 @@ At runtime startup, active instance, verified story, and live session are
 loaded from one deferred SQLite snapshot using only the SHA-256 hash of the
 inherited process token. The raw token is neither serialized nor retained in
 the runtime context.
+
+The standalone LLM proxy performs that exact active-context validation before
+binding its listener. The embedded interactive launcher may reserve its fixed
+loopback listener before activation so a port conflict cannot strand an active
+demo, but it does not accept a model request until activation has completed
+and the exact journal sink has validated the active binding.
 
 ## Authorization and execution boundaries
 
@@ -271,3 +303,10 @@ also compatibility data and is no longer used by the live reviewer console or
 production MCP. Neither filesystem surface acquires native journal authority
 merely because a native compatibility export exists. The live boundary is
 specified in [Reviewer HTTP and SSE API](reviewer-http-sse-api.md).
+
+The LLM proxy has no direct live JSONL writer. Its deprecated `trace_export`
+option cannot create a second evidence chain or append alongside SQLite; any
+compatibility output requested through that option must be derived from a
+verified native journal snapshot. The authoritative commit never depends on
+that optional derived output, and the option does not itself promise that a
+file has been published.

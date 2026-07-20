@@ -13,7 +13,9 @@ use runwarden_kernel::{
     operation::{OperationState, PolicyCheck, PolicyCheckStatus, SafeArgumentView},
     resource::{DataClass, ResourceClaim},
     resource_binding::resource_proposal_commitment_from_hashes,
-    session::{AuthoritySnapshot, BudgetCharge, BudgetSnapshot, EvidenceAuthority},
+    session::{
+        AuthoritySnapshot, BudgetCharge, BudgetSnapshot, EvidenceAuthority, NetworkAuthority,
+    },
     story::{
         ApprovalId, EnforcementMode, EventId, EvidenceStatus, InvocationKey, ObservationId,
         OperationId, RunMode, SchemaVersion, SecurityStory, SessionId, StoryId, StoryIdentity,
@@ -22,9 +24,9 @@ use runwarden_kernel::{
     trace::{EventCode, Sha256Digest, StoryEvent, StoryEventPayload, canonical_json_v1},
 };
 use runwarden_state::{
-    ApprovalRecordV1, DemoActivation, DurableApprovalBinding, FrozenProposalBinding, NewApproval,
-    NewOperation, NewStoryEvent, PrivateOperationMaterial, RecordPolicyInput, SessionRecord,
-    StateStore,
+    ApprovalRecordV1, DemoActivation, DurableApprovalBinding, FilterDecisionEvent,
+    FrozenProposalBinding, ModelCallIntent, NewApproval, NewOperation, NewStoryEvent,
+    PrivateOperationMaterial, RecordPolicyInput, SessionRecord, StateStore,
 };
 use serde_json::{Value, json};
 use time::{Duration, OffsetDateTime};
@@ -33,6 +35,9 @@ use tower::ServiceExt;
 pub const PRIVATE_MARKER: &str = "reviewer-api-private-marker";
 pub const REVIEWER_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 18_088);
 pub const REVIEWER_ORIGIN: &str = "http://127.0.0.1:18088";
+const SSE_MODEL_PROVIDER: &str = "runwarden.llm.proxy";
+const SSE_MODEL_ORIGIN: &str = "https://api.example.test";
+const SSE_INSTANCE_TOKEN: &[u8] = b"reviewer-sse-instance-token";
 
 pub struct SeededStore {
     pub _temp: tempfile::TempDir,
@@ -217,7 +222,12 @@ impl SseFixture {
     pub fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
         let store = StateStore::open(temp.path().join("state")).unwrap();
-        let story = story_fixture("1.0.0", "reviewer-sse");
+        let mut story = story_fixture("1.0.0", "reviewer-sse");
+        story.authority.networks.push(NetworkAuthority {
+            provider: SSE_MODEL_PROVIDER.to_owned(),
+            allowed_origins: vec![SSE_MODEL_ORIGIN.to_owned()],
+            maximum_classification: DataClass::Internal,
+        });
         persist_story_and_session(&store, &story);
         store
             .activate_demo(&DemoActivation {
@@ -226,7 +236,7 @@ impl SseFixture {
                 session_id: story.authority.session_id,
                 process_id: std::process::id().max(1),
                 host_id: "reviewer-sse-test-host".to_owned(),
-                instance_token_hash: Sha256Digest::from_bytes(b"reviewer-sse-instance-token")
+                instance_token_hash: Sha256Digest::from_bytes(SSE_INSTANCE_TOKEN)
                     .as_str()
                     .to_owned(),
                 now: OffsetDateTime::now_utc(),
@@ -270,6 +280,44 @@ impl SseFixture {
             })
             .unwrap()
             .event
+    }
+
+    pub fn append_oversized_model_filter(&self, risk_codes: Vec<EventCode>) -> StoryEvent {
+        let token_hash = Sha256Digest::from_bytes(SSE_INSTANCE_TOKEN);
+        let binding = self
+            .store
+            .bind_model_journal(
+                token_hash.as_str(),
+                SSE_MODEL_PROVIDER,
+                SSE_MODEL_ORIGIN,
+                self.event_epoch + Duration::seconds(3),
+            )
+            .unwrap();
+        self.store
+            .begin_model_call(
+                &binding,
+                ModelCallIntent {
+                    model_call_id: "oversized-model-call".to_owned(),
+                    story_id: self.story.story_id,
+                    session_id: self.story.authority.session_id,
+                    endpoint_kind: "responses".to_owned(),
+                    model_id: "oversized-model".to_owned(),
+                    prompt_hash: Sha256Digest::from_bytes(b"oversized-model-call"),
+                },
+                FilterDecisionEvent {
+                    filter_state: EventCode::try_from("flagged".to_owned()).unwrap(),
+                    risk_codes,
+                    content_bytes: 0,
+                    recorded_at: self.event_epoch + Duration::seconds(3),
+                },
+            )
+            .unwrap();
+        self.store
+            .events_after(self.story.story_id, 3, 1)
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap()
     }
 }
 

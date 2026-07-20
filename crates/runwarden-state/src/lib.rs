@@ -27,8 +27,8 @@ pub use operations::{
     RecordPolicyInput,
 };
 pub use proposals::{
-    CausalGapReason, CausalLinkResult, CreateOperationWithProposalOutcome, ModelCallIntent,
-    ProposalLinkQuery, ProposedToolCall,
+    CausalGapReason, CausalLinkResult, CreateOperationWithProposalOutcome, FilterDecisionEvent,
+    ModelCallCompletion, ModelCallIntent, ModelJournalBinding, ProposalLinkQuery, ProposedToolCall,
 };
 pub use recovery::RecoveryCandidate;
 pub use sessions::SessionRecord;
